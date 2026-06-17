@@ -1,0 +1,23 @@
+#version 300 es
+layout(local_size_x = 16, local_size_y = 1, local_size_z = 1) in;
+
+// In WebGL2 compute shaders are simulated or run via compute extension context
+// We map the texture storage registers
+layout(std430, binding = 0) buffer PriceDepthBuffer {
+    float depth[];
+};
+
+layout(std430, binding = 1) buffer HeatmapOutputBuffer {
+    vec4 colors[];
+};
+
+uniform float max_depth;
+
+void main() {
+    uint idx = gl_GlobalInvocationID.x;
+    float norm_depth = depth[idx] / max_depth;
+    
+    // Convert depth density to color gradient (Blue to Red heatmap)
+    vec4 color = vec4(norm_depth, 0.2, 1.0 - norm_depth, 0.9);
+    colors[idx] = color;
+}

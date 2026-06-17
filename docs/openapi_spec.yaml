@@ -1,0 +1,90 @@
+openapi: 3.0.3
+info:
+  title: Quantum Terminal Institutional API Gateway
+  description: Public API access to matching engine, order routing, and portfolio analytics (Goldman Sachs Marquee Standard).
+  version: 1.0.0
+servers:
+  - url: https://api.quantum-terminal.internal/v1
+paths:
+  /orders:
+    post:
+      summary: Submit a new order
+      description: Routes orders directly to low-latency matching engine and fast compliance checks.
+      parameters:
+        - name: X-Tenant-ID
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Client tenant identification code.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - symbol
+                - side
+                - price
+                - qty
+              properties:
+                symbol:
+                  type: string
+                  example: "BTCUSD"
+                side:
+                  type: string
+                  enum: [BUY, SELL]
+                  example: "BUY"
+                price:
+                  type: number
+                  format: float
+                  example: 50250.00
+                qty:
+                  type: number
+                  format: float
+                  example: 1.5
+      responses:
+        '201':
+          description: Order accepted and placed in execution queue.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orderId:
+                    type: string
+                    example: "ORD-98242"
+                  status:
+                    type: string
+                    example: "PLACED"
+
+  /portfolio/pnl:
+    get:
+      summary: Fetch real-time factor-attributed P&L
+      responses:
+        '200':
+          description: Successful retrieval of multi-asset portfolio exposures.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  totalPnL:
+                    type: number
+                    example: 2500.50
+                  marketAlpha:
+                    type: number
+                    example: 125.10
+                  factorAttributions:
+                    type: object
+                    properties:
+                      market:
+                        type: number
+                        example: 1150.00
+                      size:
+                        type: number
+                        example: 450.00
+                      value:
+                        type: number
+                        example: -120.00
