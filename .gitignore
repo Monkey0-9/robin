@@ -56,4 +56,5 @@ obj/
 
 # Ignored repository items
 .trunk/
+.vscode/
 ROBIN_INSTITUTIONAL_ASSESSMENT_REPORT.pdf
