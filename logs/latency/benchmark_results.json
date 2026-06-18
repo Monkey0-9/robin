@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-06-18T05:52:59Z",
+  "benchmark": {
+    "iterations": 1000000,
+    "warmup": 100000,
+    "batch_size": 64
+  },
+  "system": {
+    "hostname": "DESKTOP-3TMME41",
+    "kernel": "6.6.87.2-microsoft-standard-WSL2",
+    "cpu": "13th Gen Intel(R) Core(TM) i7-13650HX",
+    "cores": 20,
+    "memory_gb": 7
+  }
+}

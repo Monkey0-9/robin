@@ -1,11 +1,9 @@
-// services/execution-core/src/memory_pool.hpp
-// Pre-allocated cache-aligned static memory pool to completely avoid heap usage in hot execution paths.
-
 #pragma once
 
 #include <cstddef>
 #include <new>
 #include <utility>
+#include <cstdlib>
 
 namespace quantum {
 namespace execution {
@@ -14,32 +12,42 @@ template <typename T, size_t BlockCount>
 class MemoryPool {
 public:
     MemoryPool() {
-        // Initialize free list linked index stack
-        for (size_t i = 0; i < BlockCount; ++i) {
-            free_stack_[i] = i;
-        }
+#if defined(_WIN32)
+        storage_ = static_cast<StorageBlock*>(_aligned_malloc(BlockCount * sizeof(StorageBlock), alignof(StorageBlock)));
+#else
+        if (posix_memalign(reinterpret_cast<void**>(&storage_), alignof(StorageBlock), BlockCount * sizeof(StorageBlock)) != 0)
+            storage_ = nullptr;
+#endif
+        free_stack_ = new size_t[BlockCount];
+        for (size_t i = 0; i < BlockCount; ++i) free_stack_[i] = i;
         free_index_ = BlockCount;
     }
 
-    ~MemoryPool() = default;
+    ~MemoryPool() {
+#if defined(_WIN32)
+        if (storage_) _aligned_free(storage_);
+#else
+        std::free(storage_);
+#endif
+        delete[] free_stack_;
+    }
 
-    // Allocate memory block
+    MemoryPool(const MemoryPool&) = delete;
+    MemoryPool& operator=(const MemoryPool&) = delete;
+    MemoryPool(MemoryPool&&) = delete;
+    MemoryPool& operator=(MemoryPool&&) = delete;
+
     T* allocate() {
-        if (free_index_ == 0) {
-            return nullptr; // Pool exhausted
-        }
+        if (free_index_ == 0 || !storage_) return nullptr;
         size_t block_idx = free_stack_[--free_index_];
         return reinterpret_cast<T*>(&storage_[block_idx]);
     }
 
-    // Deallocate memory block
     void deallocate(T* ptr) {
-        if (!ptr) return;
-        
-        size_t block_idx = (reinterpret_cast<char*>(ptr) - reinterpret_cast<char*>(storage_)) / sizeof(StorageBlock);
-        if (block_idx < BlockCount) {
-            free_stack_[free_index_++] = block_idx;
-        }
+        if (!ptr || !storage_) return;
+        size_t block_idx = static_cast<size_t>(
+            reinterpret_cast<char*>(ptr) - reinterpret_cast<char*>(storage_)) / sizeof(StorageBlock);
+        if (block_idx < BlockCount) free_stack_[free_index_++] = block_idx;
     }
 
 private:
@@ -47,8 +55,8 @@ private:
         char data[sizeof(T)];
     };
 
-    StorageBlock storage_[BlockCount];
-    size_t free_stack_[BlockCount];
+    StorageBlock* storage_;
+    size_t* free_stack_;
     size_t free_index_;
 };
 

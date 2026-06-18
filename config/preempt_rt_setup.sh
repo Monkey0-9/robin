@@ -1,45 +1,105 @@
 #!/bin/bash
-# config/preempt_rt_setup.sh
-# Real-time Linux kernel optimizations for PREEMPT_RT-enabled hosts.
-# Minimizes kernel scheduling latency and process jitter for trading execution paths.
+set -euo pipefail
 
-echo "===================================================================="
-echo "Configuring Real-Time PREEMPT_RT System Jitter Controls"
-echo "===================================================================="
+log() { echo "[$(date '+%Y-%m-%dT%H:%M:%S%z')] $*"; }
 
-# 1. Set real-time thread priority limits for the execution group
-echo "Applying real-time limits to /etc/security/limits.d/99-realtime.conf..."
-sudo tee /etc/security/limits.d/99-realtime.conf > /dev/null <<EOF
-@trading         soft    rtprio          99
-@trading         hard    rtprio          99
-@trading         soft    memlock         unlimited
-@trading         hard    memlock         unlimited
-EOF
+configure_grub() {
+    log "=== GRUB Configuration ==="
 
-# 2. Adjust kernel scheduler parameters to disable autogrouping and scheduling latency
-echo "Configuring kernel sysctl parameters..."
-sudo sysctl -w kernel.sched_rt_runtime_us=-1      # Dedicate 100% of CPU time to real-time threads
-sudo sysctl -w kernel.sched_rt_period_us=1000000
-sudo sysctl -w kernel.numa_balancing=0            # Disable NUMA balance migration jitter
-sudo sysctl -w vm.stat_interval=120               # Reduce background kernel VM statistics checks
-sudo sysctl -w vm.swappiness=0                    # Never swap to disk
+    local cmdline="isolcpus=2-15 nohz_full=2-15 rcu_nocbs=2-15"
+    cmdline+=" intel_idle.max_cstate=0 processor.max_cstate=0"
+    cmdline+=" intel_pstate=disable mce=off"
+    cmdline+=" skew_tick=1 rcutree.kthread_prio=99"
+    cmdline+=" nmi_watchdog=0 audit=0 nosoftlockup"
+    cmdline+=" tsc=reliable clocksource=tsc"
+    cmdline+=" transparent_hugepage=never"
 
-# 3. Shield CPUs for dedicated execution threads
-# Assuming 8 core CPU: cores 4-7 are isolated for low-latency matching engine and risk gate
-echo "Isolating CPU cores 4-7 for trading execution paths..."
-if [ -f "/sys/devices/system/cpu/isolated" ]; then
-    echo "Current isolated CPUs: $(cat /sys/devices/system/cpu/isolated)"
-    echo "To permanently isolate, add 'isolcpus=4-7 nohz_full=4-7 rcu_nocbs=4-7' to GRUB_CMDLINE_LINUX"
-else
-    echo "Isolation interfaces not supported or virtual environment detected. System running under standard preemptive mode."
-fi
-
-# 4. Bind hardware interrupts (IRQ) to CPU 0 (leaving 4-7 shielded)
-echo "Re-routing network hardware interrupts away from shielded cores..."
-for irq in $(ls /proc/irq/); do
-    if [[ "$irq" =~ ^[0-9]+$ ]]; then
-        echo "01" | sudo tee /proc/irq/$irq/smp_affinity > /dev/null 2>&1
+    if [ -f /etc/default/grub ]; then
+        sed -i "s/GRUB_CMDLINE_LINUX_DEFAULT=\".*\"/GRUB_CMDLINE_LINUX_DEFAULT=\"${cmdline}\"/" /etc/default/grub
+        update-grub
+        log "[OK] GRUB updated with RT parameters"
+    else
+        log "[WARN] /etc/default/grub not found"
     fi
-done
+}
 
-echo "PREEMPT_RT low-latency profiles loaded successfully."
+set_kernel_params() {
+    log "=== Runtime Kernel Parameters ==="
+
+    sysctl -w kernel.numa_balancing=0
+    sysctl -w kernel.sched_rt_runtime_us=-1
+    sysctl -w kernel.sched_rr_timeslice_ms=1
+    sysctl -w kernel.sched_min_granularity_ns=1000000
+    sysctl -w kernel.sched_wakeup_granularity_ns=2000000
+    sysctl -w kernel.sched_migration_cost_ns=500000
+    sysctl -w kernel.sched_autogroup_enabled=0
+
+    sysctl -w vm.swappiness=1
+    sysctl -w vm.dirty_ratio=5
+    sysctl -w vm.dirty_background_ratio=2
+    sysctl -w vm.page-cluster=0
+    sysctl -w vm.stat_interval=10
+
+    sysctl -w net.core.rmem_max=134217728
+    sysctl -w net.core.wmem_max=134217728
+    sysctl -w net.core.netdev_budget=600
+    sysctl -w net.core.netdev_budget_usecs=2000
+    sysctl -w net.ipv4.tcp_fastopen=3
+
+    log "[OK] Kernel parameters set"
+}
+
+disable_irqbalance() {
+    log "=== IRQ Balance ==="
+    systemctl stop irqbalance 2>/dev/null || true
+    systemctl disable irqbalance 2>/dev/null || true
+    log "[OK] irqbalance disabled"
+}
+
+setup_ksoftirqd() {
+    log "=== ksoftirqd Configuration ==="
+    for pid in $(pgrep ksoftirqd); do
+        chrt -f -p 99 "${pid}" 2>/dev/null || true
+    done
+    log "[OK] ksoftirqd set to FIFO priority 99"
+}
+
+disable_power_savings() {
+    log "=== Power Savings ==="
+    for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+        echo performance > "${cpu}" 2>/dev/null || true
+    done
+
+    echo 0 > /sys/devices/system/cpu/intel_pstate/no_turbo 2>/dev/null || true
+    echo 0 > /sys/devices/system/cpu/cpuidle/current_driver 2>/dev/null || true
+
+    log "[OK] Power savings disabled"
+}
+
+log "=== PREEMPT_RT Setup ==="
+echo "Target: Real-time Linux kernel for trading"
+uname -r
+
+case "${1:-all}" in
+    all)
+        set_kernel_params
+        disable_irqbalance
+        setup_ksoftirqd
+        disable_power_savings
+        configure_grub
+        ;;
+    runtime)
+        set_kernel_params
+        disable_irqbalance
+        setup_ksoftirqd
+        disable_power_savings
+        ;;
+    grub)
+        configure_grub
+        ;;
+    *)
+        echo "Usage: $0 [all|runtime|grub]"
+        ;;
+esac
+
+log "[OK] PREEMPT_RT setup complete. Reboot recommended."

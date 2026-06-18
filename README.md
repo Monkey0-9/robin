@@ -1,74 +1,99 @@
-# Robin: Ultra-Low Latency Quantitative Trading Platform
+# Robin Trading Platform
 
-Welcome to **Robin**, a production-grade, state-of-the-art ultra-low latency quantitative trading platform and HFT execution ecosystem. 
+Production-grade, ultra-low latency quantitative trading system.
 
-Designed for sub-microsecond pre-trade risk checks, order matching, and high-frequency market data parsing, Robin combines the performance of bare-metal C++ and FPGA hardware emulators with the safety of Rust risk engines and the analytical power of OCaml and Python-based AI models.
-
----
-
-## 🚀 Key Performance Indicators (KPIs)
-* **Pre-Trade Risk Checks:** `320 ns` average latency.
-* **Order Matching Crossing (SPSC):** `280 ns` average latency.
-* **Network RX (Kernel Bypass):** `140 ns` average latency.
-* **End-to-End Tick-to-Trade Roundtrip:** `< 740 ns`.
-* **Zero-Heap-Allocation Policy:** Custom-aligned pre-allocated memory pools on the hot execution paths.
-
----
-
-## 🛠️ Architecture & Technology Stack
-
-The platform is split into a low-latency execution and analysis backend (`quantum-terminal`) and a modern desktop visualization UI:
-
-```mermaid
-graph TD
-    Client[Tauri Desktop App] <-->|WS / HTTP| Gateway[API Gateway]
-    Gateway <--> Execution[Execution Core C++]
-    Gateway <--> Risk[Rust Risk Analytics]
-    Execution <--> Ingestion[Kernel Bypass Ingestion C++]
-    Execution <--> FPGA[FPGA Hardware Emulator]
-    Execution <--> KDB[KDB+ Time Series Database]
-    KDB <--> AI[AI Engine ONNX & Python ML]
-```
-
-### 1. Ultra-Low Latency Execution Backend (`quantum-terminal`)
-Located in the [quantum-terminal](./quantum-terminal) submodule:
-* **Execution Core (C++):** Core order matching engine, lock-free SPSC ring buffers, and custom memory pools.
-* **Risk Gate (Rust):** SEC 15c3-5 compliant pre-trade risk gateway featuring price collars and fat-finger checks operating in `< 320 ns`.
-* **Network Bridge (C++):** Solarflare kernel-bypass multicast network parser for sub-microsecond ingestion.
-* **Hardware FPGA (C++):** Emulator for Xilinx Alveo FPGA-accelerated execution paths.
-* **KDB+ Storage (Q):** High-speed time-series database for tick capture, correlation matrices, and real-time market data analytics.
-* **AI Engine (C++ / Python):** ONNX runtime-powered inference module for real-time alpha signals and predictive execution routing.
-
-### 2. Analytical & Management UI
-* **Frontend (Next.js / Vite / Tailwind):** A premium desktop interface running inside **Tauri** for sub-millisecond tick-to-screen rendering using WebGL/Rust rendering bridges.
-* **State Management (OCaml):** High-reliability functional pipeline for signal processing, factor analysis, and portfolio optimization.
-
----
-
-## 📂 Project Structure
+## Architecture
 
 ```
-├── quantum-terminal/
-│   ├── services/
-│   │   ├── execution-core/     # C++ Orderbook & SPSC Ring Buffers
-│   │   ├── risk-analytics/     # Rust Pre-Trade Risk Gateway
-│   │   ├── hardware-fpga/      # FPGA emulation libraries
-│   │   ├── network-bridge/     # C++ Kernel-bypass networking
-│   │   ├── ai-engine/          # C++ ONNX inference & Verification Oracles
-│   │   ├── kdb-storage/        # Q scripts for KDB+ storage & analytics
-│   │   ├── pricing/            # C++ Monte Carlo option pricer
-│   │   └── strategy-engine/    # Python backtesting harness
-│   ├── frontend/               # Next.js/Vite dashboard & Tauri container
-│   ├── config/                 # PTP synchronization & RT OS configs
-│   ├── docs/                   # Performance & Regulatory Compliance specs
-│   └── scripts/                # Low-latency testing & chaos harness
+[Market Data Feeds] --> [DPDK/ef_vi Kernel Bypass] --> [Lock-Free SPSC Queue]
+                                                             |
+                                                             v
+                                                     [C++20 Order Matching]
+                                                        (AVX-512 FPGA)
+                                                             |
+                                                             v
+                                                     [Rust Risk Gate]
+                                                    (SEC 15c3-5 Hard Blocks)
+                                                             |
+                                                             v
+                                                     [KDB+ Tick DB] [Aeron IPC]
 ```
 
----
+## Performance Targets
 
-## 📑 Documentation Index
-Detailed technical specification documents are located in `quantum-terminal/docs`:
-* [System Performance & Latency Profile](quantum-terminal/docs/PERFORMANCE.md)
-* [Regulatory Compliance & SEC 15c3-5 Rules](quantum-terminal/docs/COMPLIANCE.md)
-* [Security Policies & Hardening](quantum-terminal/docs/SECURITY.md)
-* [Quant Desk Scaling & Capital Raising Blueprint](quantum-terminal/business/CAPITAL_RAISE_AND_TEAM.md)
+| Metric | Target | Current |
+|--------|--------|---------|
+| Tick-to-Trade (p50) | <200ns | [MEASURED] |
+| Tick-to-Trade (p99) | <500ns | [MEASURED] |
+| Risk Gate (hard blocks) | <100ns | [MEASURED] |
+| Market Data RX | <50ns | [MEASURED] |
+| Throughput | 1M+ orders/sec | [MEASURED] |
+| Availability | 99.999% | [MEASURED] |
+
+## Stack
+
+| Layer | Language | Technology |
+|-------|----------|------------|
+| Order Matching | C++20 | Lock-free SPSC, AVX-512, FPGA (Alveo) |
+| Network RX | C++20 | DPDK / Solarflare ef_vi |
+| Risk Gate | Rust | Zero-allocation, shared memory IPC |
+| IPF | C++ | Shared memory (mmap) |
+| Network | C++ | Aeron UDP multicast |
+| Portfolio Opt | OCaml | Functional, pre-computed signals |
+| Tick DB | Q/KDB+ | Partitioned, compressed |
+| Analytics | R | GARCH, VaR, regulatory reports |
+| Orchestration | Go | Health checks, hot-reload config |
+| ML Research | Python | PyTorch, backtesting |
+| UI | TypeScript/Rust | Next.js, Tauri, WebGL2, WASM |
+
+## Build & Run
+
+```bash
+# Full build
+make all
+
+# Run latency benchmark
+make benchmark
+
+# Run chaos engineering
+make chaos
+
+# Start services (production)
+sudo ./scripts/start_native.sh
+```
+
+## Hardware Requirements
+
+- **CPU**: Intel Xeon Scalable 8480+ (Sapphire Rapids) or AMD EPYC 9654
+- **NIC**: Intel E810-CQDA2 (100GbE) or Solarflare XtremeScale X2522
+- **FPGA**: Xilinx Alveo U50 (8GB HBM2) or U200
+- **PTP**: Oscilloquartz OSA 5430 with atomic clock holdover
+- **Memory**: 512GB DDR5-4800, NUMA-aware
+- **Storage**: NVMe Samsung PM1733 3.84TB
+
+## Compliance
+
+- SEC Rule 15c3-5: Pre-trade risk controls (hard + soft blocks)
+- MiFID II RTS 25: Clock synchronization (<100ns to UTC)
+- SEC CAT: Automated reporting via R pipeline
+- SOC 2 Type II: Vendor due diligence
+- ISO 27001: Information security management
+
+## Directory Structure
+
+```
+services/
+├── execution-core/     # C++20 matching engine, lock-free queues
+├── network-bridge/     # DPDK/Solarflare kernel bypass
+├── ingestion/          # ITCH/OUCH parser
+├── hardware-fpga/      # Xilinx Alveo (Vitis HLS kernel)
+├── risk-analytics/     # Rust SEC 15c3-5 risk gate
+├── gateway/            # Go orchestrator
+├── compliance/         # OCaml + Rust compliance rules
+├── portfolio/          # OCaml portfolio optimization
+├── strategy-engine/    # Python backtesting, R analytics
+├── pricing/            # Monte Carlo (C++)
+├── ai-engine/          # ONNX inference (C++)
+├── kdb-storage/        # Q/KDB+ tick database
+└── kernel/             # GPIO kill switch kernel module
+```

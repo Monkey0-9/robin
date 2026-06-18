@@ -3,19 +3,28 @@
 This document outlines the automated systems, rules, and procedures implemented to satisfy SEC, FINRA, and MiFID II requirements.
 
 ## 1. Pre-Trade Risk Gate Controls (SEC 15c3-5)
-The pre-trade risk engine (`services/risk-analytics/src/gate.rs`) validates the following metrics before forwarding any order to the market:
-* **Fat-Finger Checks:** Maximum size (50,000 shares) and maximum value ($1M) are verified inline.
-* **Price Collar Checks:** Bids and asks are matched against a reference price band (5% deviation limit).
+
+Pre-trade checks are written directly in C++ (`services/execution-core/src/risk_engine.hpp`) for sub-microsecond inline execution:
+
+* **Fat-Finger Checks:** Maximum order size (50,000 shares) and maximum order value ($1,000,000) are hard-blocked at the CPU socket layer.
+* **Price Collar Checks:** Buy and sell orders are validated against the reference NBO/NBB price. Orders deviating by more than 5% are dropped.
+* **Direct & Exclusive Control**: Limits are configured securely and can only be modified by CCO and authorized Risk Desk operators.
+* **Compliance Templates**: Detailed design and CEO verification workflows are defined in:
+  * [SEC 15c3-5 Compliance Template](file:///c:/Robin/compliance/SEC_15c3_5_COMPLIANCE_TEMPLATE.md)
+  * [CEO Certification Template](file:///c:/Robin/compliance/CEO_CERTIFICATION_TEMPLATE.md)
 
 ---
 
 ## 2. Market Abuse Monitoring
-* **Spoofing & Layering Detection:** Real-time analysis of the order flow (`spoofing_detector.rs`) logs warnings if large orders are entered and canceled rapidly within 1000ms to impact prices.
-* **Wash Trade Prevention:** Cross-account transactions are prevented at the order book level using Unique Client Identification keys.
+
+* **Spoofing & Layering Detection**: Real-time analysis of order book changes.
+* **Wash Trade Prevention**: Prevent self-matching using Unique Client Identification keys.
 
 ---
 
 ## 3. CAT (Consolidated Audit Trail) & OATS Reporting
-* **WORM Log Serialization:** Every order state transition is logged in a Write-Once-Read-Many format (`services/compliance/audit_logger.rs`) with SHA256 chain hashes.
-* **Timestamp Precision:** Timestamps are synchronized down to single-digit nanoseconds using GPSDO PTP clocks (`ptp_sync.sh`).
-* **Daily Export:** Log files are bundled and uploaded to FINRA CAT endpoints nightly (T+1).
+
+* **WORM Log Serialization**: Every order state transition is logged in a Write-Once-Read-Many format with SHA256 hashes.
+* **Timestamp Precision**: synchronized to under 10ns using PTP Grandmaster clocks (`ptp_sync.sh`).
+* **Daily Export**: Bundled and uploaded to FINRA CAT endpoints nightly (T+1).
+

@@ -1,49 +1,91 @@
+---
+firm: Robin Trading Systems LLC
+filing_type: SEC Form BD
+filing_date: [DATE]
+status: [PENDING | APPROVED | AMENDED]
+---
+
 # SEC Form BD - Broker-Dealer Application
 
-*Filed with the Securities and Exchange Commission (SEC)*
+## 1. Firm Information
 
----
+| Field | Value |
+|-------|-------|
+| Legal Name | Robin Trading Systems LLC |
+| CRD Number | 394028 |
+| SEC Number | 8-74820 |
+| Business Address | [ADDRESS] |
+| Phone | [PHONE] |
+| Email | compliance@robintrading.com |
+| Website | [URL] |
+| Fiscal Year End | December 31 |
 
-## Part I: Firm General Registration
-* **Applicant Name:** Quantum Terminal Systems LLC
-* **SEC File Number:** 8-74820
-* **CRD Number:** 394028
-* **Legal Status:** Limited Liability Company (Delaware)
-* **Date of Formation:** January 15, 2026
-* **Principal Place of Business:** 100 Wall Street, Floor 22, New York, NY 10005
+## 2. Ownership & Control
 
----
+| Name | Title | Ownership | CRD |
+|------|-------|-----------|-----|
+| [CEO Name] | CEO | [%] | [CRD#] |
+| [CRO Name] | CRO | [%] | [CRD#] |
+| [CTO Name] | CTO | [%] | [CRD#] |
 
-## Part II: Executive Officers and Personnel
-* **Chief Executive Officer (CEO):** Praveen P (CRD# 790482)
-* **Chief Compliance Officer (CCO):** Robert Vance (CRD# 482094)
-* **Financial and Operations Principal (FinOP):** Sarah Jenkins (CRD# 650284)
+## 3. Business Activities
 
----
+| Activity | Yes/No | Description |
+|----------|--------|-------------|
+| Market Making | Yes | Electronic market making via proprietary algorithms |
+| Proprietary Trading | Yes | Quantitative strategies across equities, options, crypto |
+| Agency Execution | No | |
+| Investment Advisory | No | |
+| Clearing | No | Using [CLEARING FIRM] as clearing broker |
+| Custody | No | |
 
-## Part III: Business Operations and Markets
-### Item 1: Business Profile
-* [X] Retailing corporate equity securities over-the-counter
-* [X] Trading securities for own account (proprietary/market-making)
-* [X] Making inter-dealer markets in corporate equities
+## 4. Regulatory Compliance
 
-### Item 2: Clearance & Settlements
-* All customer and proprietary transactions are cleared through **Apex Clearing Corporation** (SEC# 8-23452, CRD# 13071) on a fully disclosed basis.
+### 4.1 SEC Rule 15c3-1 (Net Capital)
+- **Method**: Aggregate debit/credit computation
+- **Minimum net capital**: $1,000,000 (Category A)
+- **Current net capital**: [AMOUNT]
 
----
+### 4.2 SEC Rule 15c3-3 (Customer Protection)
+- **Customer accounts**: Not held (direct electronic access only)
+- **PAB accounts**: Not applicable
+- **Reserve formula**: Not applicable
 
-## Part IV: Automated Regulatory Surveillance (SEC Rule 15c3-5)
-The firm enforces pre-trade risk controls and system safeguards using custom binaries:
-1. **Fat-Finger Protection:** Implemented in Rust pre-trade modules (`services/risk-analytics/src/pre_trade.rs`), rejecting any single order over $1,000,000 or 50,000 shares.
-2. **Price Collar Safeguards:** Orders exceeding 5% from reference price are instantly dropped.
-3. **Spoofing & Wash Trading Protection:** Real-time trade prevention and pattern checks (`services/compliance/spoofing_detector.rs`).
-4. **CAT/OATS Auditing:** Automated daily export logging via immutable state tracking (`services/compliance/audit_logger.rs`).
+### 4.3 SEC Rule 15c3-5 (Market Access)
+- **Pre-trade risk controls**: Implemented (see SEC_15c3_5_COMPLIANCE_TEMPLATE.md)
+- **Annual certification**: Filed [DATE]
+- **Third-party review**: Completed [DATE] by [FIRM]
 
----
+### 4.4 FINRA Membership
+- **FINRA Number**: [FINRA#]
+- **Status**: [MEMBER | PENDING]
+- **Exam Cycle**: Annual
+- **Last Exam**: [DATE]
 
-## Part V: EXECUTION & NOTARIZATION
-I, the undersigned, certify under penalty of perjury that all information herein is true and correct.
+## 5. Registration History
 
-* **Authorized Signature:** *Praveen P*
-* **Title:** Chief Executive Officer
-* **Execution Date:** June 17, 2026
+| Jurisdiction | Status | Date |
+|-------------|--------|------|
+| SEC | [STATUS] | [DATE] |
+| FINRA | [STATUS] | [DATE] |
+| [STATE] | [STATUS] | [DATE] |
+
+## 6. Compliance Contacts
+
+| Role | Name | Email | Phone |
+|------|------|-------|-------|
+| CCO | [Name] | cco@robintrading.com | [Phone] |
+| AML Officer | [Name] | aml@robintrading.com | [Phone] |
+| CRO | [Name] | cro@robintrading.com | [Phone] |
+
+## 7. Attachments
+
+- [ ] Form BD (SEC)
+- [ ] Form U4 (each associated person)
+- [ ] FINRA Membership Agreement
+- [ ] Written Supervisory Procedures (WSPs)
+- [ ] AML Program
+- [ ] Business Continuity Plan (BCP)
+- [ ] Cybersecurity Policy
+- [ ] SEC Rule 15c3-5 Documentation
+- [ ] Insurance Certificates (E&O, Fidelity Bond)

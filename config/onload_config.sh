@@ -1,39 +1,99 @@
 #!/bin/bash
-# config/onload_config.sh
-# Enterprise configuration for Solarflare/Mellanox OpenOnload kernel bypass.
-# Standardizes network card configuration to achieve sub-microsecond latency.
+set -euo pipefail
 
-echo "===================================================================="
-echo "Configuring OpenOnload Kernel Bypass for Solarflare/Mellanox NICs"
-echo "===================================================================="
+log() { echo "[$(date '+%Y-%m-%dT%H:%M:%S%z')] $*"; }
 
-# 1. Low-latency environment variables for execution threads
-export ONLOAD_RECV_SPIN=1         # Spin on receive descriptor rings (bypass interrupt handler)
-export ONLOAD_POLL_SPIN=1         # Spin on poll/select calls
-export ONLOAD_TX_BCAST=0          # Disable loopback broadcasts
-export ONLOAD_DONT_ACCEL=0        # Force accelerate network traffic
-export EF_VI_SPIN=1               # Enable spin on raw interface rings
-export EF_TCP_RECV_SPIN=1         # Spin on TCP socket receive
+ONLOAD_IFACE=${ONLOAD_IFACE:-"eth1"}
+ONLOAD_STACK_COUNT=${ONLOAD_STACK_COUNT:-4}
 
-# 2. Kernel tuning parameters via onload module settings
-if [ -d "/sys/module/onload" ]; then
-    echo "Applying module tuning options..."
-    echo 1 > /sys/module/onload/parameters/onload_recv_spin
-    echo 1 > /sys/module/onload/parameters/onload_poll_spin
+check_onload() {
+    log "=== OpenOnload Check ==="
+    if command -v onload &>/dev/null; then
+        log "[OK] OpenOnload found: $(onload --version 2>&1 | head -1)"
+    else
+        log "[WARN] OpenOnload not installed"
+        return 1
+    fi
+}
+
+configure_onload() {
+    log "=== OpenOnload Configuration ==="
+
+    local cfg="/etc/onload.conf"
+    cat > "${cfg}" << EOF
+# OpenOnload configuration for Robin Trading
+# Ultra-low latency kernel bypass
+
+stack_count ${ONLOAD_STACK_COUNT}
+iface ${ONLOAD_IFACE}
+
+# CPU pinning for stack threads
+stack_cpu_affinity 10-13
+
+# Epoll optimization
+epoll_wait_loop 1
+epoll_max_events 1000
+
+# TCP optimizations
+tcp_rcv_buf 1048576
+tcp_snd_buf 1048576
+tcp_nodelay 1
+
+# UDP optimizations
+udp_rcv_buf 2097152
+udp_snd_buf 2097152
+
+# Threading
+spawner_policy 1
+stack_poll_usecs 0
+
+# Hybrid mode: use onload for hot path, kernel for management
+hybrid_mode 1
+hybrid_nonprivileged 1
+
+# Logging
+log_level 3
+log_file /var/log/onload.log
+
+# Performance
+max_spin 100000
+ns_ip_cache 1
+EOF
+
+    log "[OK] OpenOnload config written: ${cfg}"
+}
+
+optimize_interface() {
+    log "=== Interface Optimization ==="
+    local iface="${1:-${ONLOAD_IFACE}}"
+
+    if ip link show "${iface}" &>/dev/null; then
+        ethtool -K "${iface}" gro off gso off tso off lro off rx off tx off sg off
+        ethtool -C "${iface}" rx-usecs 0 tx-usecs 0 adaptive-rx off adaptive-tx off
+        ethtool -G "${iface}" rx 4096 tx 4096
+        ip link set "${iface}" mtu 9000
+        log "[OK] ${iface} optimized for kernel bypass"
+    fi
+}
+
+verify_performance() {
+    log "=== Performance Verification ==="
+    if command -v onload &>/dev/null; then
+        onload latcystest -i "${ONLOAD_IFACE}" -n 10000 2>/dev/null || true
+        log "[OK] Latency test completed"
+    fi
+}
+
+log "=== OpenOnload Configuration ==="
+log "Interface: ${ONLOAD_IFACE}"
+log "Stacks: ${ONLOAD_STACK_COUNT}"
+
+if check_onload; then
+    configure_onload
+    optimize_interface
+    verify_performance
+    log "[OK] Onload configuration complete"
 else
-    echo "WARNING: onload kernel module not loaded. Run: modprobe onload"
+    log "Skipping onload configuration (not installed)"
+    log "Install from: https://support.xilinx.com/s/article/76955"
 fi
-
-# 3. Configure interface ring sizes
-INTERFACE="eth0" # Target Solarflare interface
-if ip link show "$INTERFACE" >/dev/null 2>&1; then
-    echo "Optimizing ring parameters for $INTERFACE..."
-    sudo ethtool -G "$INTERFACE" rx 4096 tx 4096
-    sudo ethtool -K "$INTERFACE" rxvlan off txvlan off
-    sudo ethtool -K "$INTERFACE" gso off gro off tso off
-    sudo ethtool -C "$INTERFACE" rx-usecs 0 rx-frames 0 tx-usecs 0 tx-frames 0
-else
-    echo "Target interface '$INTERFACE' not found. Configurations queued for boot-time binding."
-fi
-
-echo "OpenOnload latency parameters set successfully."

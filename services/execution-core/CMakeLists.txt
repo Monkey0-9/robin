@@ -1,0 +1,17 @@
+cmake_minimum_required(VERSION 3.25)
+project(robin-execution-core VERSION 1.0.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -mtune=native -flto=auto -fno-exceptions -fno-rtti -fno-stack-protector -fomit-frame-pointer -mno-red-zone -ffast-math -frename-registers -falign-functions=64")
+set(CMAKE_EXE_LINKER_FLAGS_RELEASE "-flto=auto -Wl,--gc-sections")
+
+add_executable(matching_engine src/matching_engine.cpp)
+target_include_directories(matching_engine PRIVATE src)
+target_compile_options(matching_engine PRIVATE -mavx2 -mrdrnd -msse4.2 -mpopcnt)
+target_link_libraries(matching_engine PRIVATE numa)
+
+add_executable(order_book_benchmark bench/order_book_benchmark.cpp)
+target_include_directories(order_book_benchmark PRIVATE src)
+target_compile_options(order_book_benchmark PRIVATE -mavx2)

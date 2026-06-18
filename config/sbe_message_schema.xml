@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- config/sbe_message_schema.xml -->
+<!-- Simple Binary Encoding (SBE) message specification for Aeron transport execution core. -->
+<sbe:messageSchema xmlns:sbe="http://fixprotocol.org/ns/simple/1.0"
+                   package="quantum.sbe"
+                   id="1"
+                   version="0"
+                   semanticVersion="5.2"
+                   byteOrder="littleEndian">
+    <types>
+        <composite name="messageHeader" description="Standard message header">
+            <type name="blockLength" primitiveType="uint16"/>
+            <type name="templateId"  primitiveType="uint16"/>
+            <type name="schemaId"    primitiveType="uint16"/>
+            <type name="version"     primitiveType="uint16"/>
+        </composite>
+        <type name="Price" primitiveType="uint32" description="Scaled price (*10000)"/>
+        <type name="Qty" primitiveType="uint32"/>
+        <type name="Timestamp" primitiveType="uint64" description="Nanosecond timestamp since epoch"/>
+        <enum name="Side" encodingType="char">
+            <validValue name="Buy">B</validValue>
+            <validValue name="Sell">S</validValue>
+        </enum>
+    </types>
+
+    <!-- ITCH/SBE message for order entry or execution event -->
+    <sbe:message name="NewOrderSingle" id="101" description="Aeron binary order Single">
+        <field name="orderId"      id="1" type="uint64"/>
+        <field name="instrumentId" id="2" type="uint32"/>
+        <field name="price"        id="3" type="Price"/>
+        <field name="qty"          id="4" type="Qty"/>
+        <field name="side"         id="5" type="Side"/>
+        <field name="timestamp"    id="6" type="Timestamp"/>
+    </sbe:message>
+
+    <sbe:message name="TradeExecution" id="102" description="Aeron binary Execution Report">
+        <field name="tradeId"      id="1" type="uint64"/>
+        <field name="buyOrderId"   id="2" type="uint64"/>
+        <field name="sellOrderId"  id="3" type="uint64"/>
+        <field name="instrumentId" id="4" type="uint32"/>
+        <field name="price"        id="5" type="Price"/>
+        <field name="qty"          id="6" type="Qty"/>
+        <field name="timestamp"    id="7" type="Timestamp"/>
+    </sbe:message>
+</sbe:messageSchema>

@@ -1,27 +1,52 @@
 #!/bin/bash
-# scripts/stop_native.sh
-# Graceful termination coordinator for low-latency HFT terminals.
-# Safely drains order ring buffers and records last position snapshots.
+set -euo pipefail
 
-echo "===================================================================="
-echo "Initiating Graceful Microservices Shutdown & Position Drain"
-echo "===================================================================="
+LOG_DIR="/var/log/robin"
+PID_DIR="/var/run/robin"
 
-# Send SIGTERM for graceful shutdown
-pkill -15 -f qt_execution_engine || true
-pkill -15 -f qt_risk_analytics || true
-pkill -15 -f "q services/kdb-storage/http_gateway.q" || true
+log() { echo "[$(date '+%Y-%m-%dT%H:%M:%S%z')] $*" | tee -a "${LOG_DIR}/shutdown.log"; }
 
-echo "Sent terminate signals. Draining memory queues (3s)..."
-sleep 3
+log "============================================"
+log "  Robin Trading Platform - Shutdown"
+log "  $(date)"
+log "============================================"
 
-# Force clean up remaining instances
-pkill -9 -f qt_execution_engine || true
-pkill -9 -f qt_risk_analytics || true
-pkill -9 -f "q services/kdb-storage/http_gateway.q" || true
+SERVICES=(
+    "matching-engine"
+    "network-bridge"
+    "ingestion"
+    "risk-gate"
+    "orchestrator"
+    "fpga-emulator"
+)
 
-echo "--------------------------------------------------------------------"
-echo "Reconciling portfolio positions ledger..."
-echo "[Snapshot] Position reconciliation complete. System OFFLINE."
-echo "--------------------------------------------------------------------"
-exit 0
+for svc in "${SERVICES[@]}"; do
+    pid_file="${PID_DIR}/${svc}.pid"
+    if [ -f "${pid_file}" ]; then
+        pid=$(cat "${pid_file}")
+        log "Stopping ${svc} (PID: ${pid})..."
+
+        kill -TERM "${pid}" 2>/dev/null || true
+
+        for i in $(seq 1 10); do
+            if ! kill -0 "${pid}" 2>/dev/null; then
+                break
+            fi
+            sleep 0.1
+        done
+
+        if kill -0 "${pid}" 2>/dev/null; then
+            log "[WARN] ${svc} still running, sending SIGKILL..."
+            kill -KILL "${pid}" 2>/dev/null || true
+        fi
+
+        rm -f "${pid_file}"
+        log "[OK] ${svc} stopped"
+    else
+        log "[INFO] ${svc} not running"
+    fi
+done
+
+rm -f /dev/shm/robin_risk 2>/dev/null || true
+
+log "=== Shutdown complete ==="

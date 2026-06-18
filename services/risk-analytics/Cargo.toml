@@ -1,0 +1,28 @@
+[package]
+name = "robin-risk-analytics"
+version = "1.0.0"
+edition = "2021"
+description = "Pre-trade risk gate with SEC 15c3-5 compliance, zero-allocation hot path"
+
+[lib]
+name = "robin_risk"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { version = "1", default-features = false }
+libc = "0.2"
+memmap2 = "0.9"
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+overflow-checks = false
+
+[features]
+default = []
+serde-support = ["serde", "serde_json"]

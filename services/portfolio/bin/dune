@@ -1,0 +1,4 @@
+(executable
+  (name main)
+  (libraries robin_portfolio)
+  (modules main position ledger goals))

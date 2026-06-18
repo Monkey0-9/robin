@@ -1,5 +1,5 @@
 use wasm_bindgen::prelude::*;
-use web_sys::{WebGl2RenderingContext, WebGlProgram, WebGlBuffer};
+use web_sys::{WebGl2RenderingContext, WebGlBuffer, WebGlProgram};
 
 #[wasm_bindgen]
 pub struct OrderBookVisualizer {
@@ -8,10 +8,14 @@ pub struct OrderBookVisualizer {
 }
 
 impl OrderBookVisualizer {
-    pub fn new(gl: &WebGl2RenderingContext, vert_source: &str, frag_source: &str) -> Result<Self, JsValue> {
+    pub fn new(
+        gl: &WebGl2RenderingContext,
+        vert_source: &str,
+        frag_source: &str,
+    ) -> Result<Self, JsValue> {
         let program = crate::compile_and_link(gl, vert_source, frag_source)
             .map_err(|e| JsValue::from_str(&e))?;
-            
+
         let vbo = gl.create_buffer();
 
         Ok(OrderBookVisualizer { program, vbo })
@@ -25,10 +29,8 @@ impl OrderBookVisualizer {
 
             // Setup mock bids/asks depth bars: [offset_x, offset_y, size_x, size_y]
             let depth_data: [f32; 16] = [
-                -0.9, -0.8, 0.4, 0.05,
-                -0.9, -0.7, 0.6, 0.05,
-                -0.9, -0.6, 0.2, 0.05,
-                -0.9, -0.5, 0.8, 0.05
+                -0.9, -0.8, 0.4, 0.05, -0.9, -0.7, 0.6, 0.05, -0.9, -0.6, 0.2, 0.05, -0.9, -0.5,
+                0.8, 0.05,
             ];
 
             unsafe {
@@ -36,7 +38,7 @@ impl OrderBookVisualizer {
                 gl.buffer_data_with_array_buffer_view(
                     WebGl2RenderingContext::ARRAY_BUFFER,
                     &view,
-                    WebGl2RenderingContext::STATIC_DRAW
+                    WebGl2RenderingContext::STATIC_DRAW,
                 );
             }
 

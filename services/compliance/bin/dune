@@ -1,0 +1,4 @@
+(executable
+ (name rules)
+ (public_name robin-compliance)
+ (modules rules))

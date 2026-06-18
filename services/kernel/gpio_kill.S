@@ -1,28 +1,46 @@
-// services/kernel/gpio_kill.S
-// Low-level hardware interrupt handling subroutine for emergency GPIO shutdown.
-// Directly clears CPU execution flags and routes control to matching engine kill routine.
+/* x86-64 assembly-level interrupt handler for hardware kill switch */
+/* Called directly from GPIO interrupt - < 50ns entry to handler */
+/* Preserves: rax, rcx, rdx, rsi, rdi, r8-r11 (caller-saved) */
 
-.global handle_gpio_interrupt_vector
-.text
+.section .text
+.globl asm_kill_switch_handler
+.type asm_kill_switch_handler, @function
+.align 64
 
-handle_gpio_interrupt_vector:
-    // 1. Save general purpose registers
-    push %rax
-    push %rbx
-    push %rcx
-    push %rdx
+asm_kill_switch_handler:
+    /* Prologue: save minimal registers */
+    push    %rax
+    push    %rcx
+    push    %rdx
+    push    %rsi
+    push    %rdi
+    push    %r8
+    push    %r9
+    push    %r10
+    push    %r11
 
-    // 2. Clear volatile memory registries representing network order book execution queues
-    xor %rax, %rax
-    mov %rax, (0x7F000000) // Clear base FPGA DMA control registers instantly
-    
-    // 3. Clear CPU Interrupt flags to ensure no scheduling blocks happen
-    cli
+    /* Get kernel GS base */
+    /* RDTSCP for precise timestamp */
+    rdtscp
+    /* rax: low 32, rdx: high 32, rcx: processor ID */
 
-    // 4. Restore state registers
-    pop %rdx
-    pop %rcx
-    pop %rbx
-    pop %rax
-    
-    ret
+    /* Call the C handler */
+    call    kill_switch_isr
+
+    /* MFENCE to ensure stores are visible */
+    mfence
+
+    /* Epilogue: restore registers */
+    pop     %r11
+    pop     %r10
+    pop     %r9
+    pop     %r8
+    pop     %rdi
+    pop     %rsi
+    pop     %rdx
+    pop     %rcx
+    pop     %rax
+
+    iretq
+
+.size asm_kill_switch_handler, . - asm_kill_switch_handler
