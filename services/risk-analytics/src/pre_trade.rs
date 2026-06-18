@@ -69,7 +69,8 @@ mod tests {
 
         let order = Order {
             id: 1, cl_order_id: 1001, instrument_id: 1,
-            price: 50000, qty: 999999, side: OrderSide::Bid,
+            symbol: *b"AAPL    ", price: 50000, qty: 999999, side: OrderSide::Bid,
+            timestamp: 1000, account_id: 1,
             client_id: 42, strategy_id: 1, entry_time_ns: 0,
         };
 
@@ -82,7 +83,8 @@ mod tests {
 
         let order = Order {
             id: 1, cl_order_id: 1001, instrument_id: 1,
-            price: 200000, qty: 100, side: OrderSide::Bid,
+            symbol: *b"AAPL    ", price: 200000, qty: 100, side: OrderSide::Bid,
+            timestamp: 1000, account_id: 1,
             client_id: 42, strategy_id: 1, entry_time_ns: 0,
         };
 

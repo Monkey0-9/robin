@@ -102,19 +102,28 @@ impl RiskGate {
         self.orders_processed.fetch_add(1, Ordering::Relaxed);
 
         // Forward via shared memory if bridge is available
-        if let Some(ref shm) = self.shm {
+        if let Some(ref mut shm) = self.shm {
             let _ = shm.forward_order(order);
         }
 
         Ok(OrderStatus::Approved)
     }
 
-    fn check_duplicate(&self, order: &Order) -> bool {
+    fn check_duplicate(&mut self, order: &Order) -> bool {
         let key = order.id;
         if let Some(last_ts) = self.recent_orders.get(&key) {
             if order.timestamp.wrapping_sub(*last_ts) < self.duplicate_window_ns {
                 return true;
             }
+        }
+        self.recent_orders.insert(key, order.timestamp);
+
+        // Prune recent orders periodically to prevent unbounded memory growth/leaks
+        if self.recent_orders.len() > 10000 {
+            let duplicate_window = self.duplicate_window_ns;
+            self.recent_orders.retain(|_, &mut ts| {
+                order.timestamp.saturating_sub(ts) < duplicate_window
+            });
         }
         false
     }

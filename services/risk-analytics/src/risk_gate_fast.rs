@@ -103,7 +103,8 @@ mod tests {
 
         let valid = Order {
             id: 1, cl_order_id: 1001, instrument_id: 1,
-            price: 51000, qty: 100, side: OrderSide::Bid,
+            symbol: *b"AAPL    ", price: 51000, qty: 100, side: OrderSide::Bid,
+            timestamp: 1000, account_id: 1,
             client_id: 42, strategy_id: 1, entry_time_ns: 0,
         };
 
@@ -111,7 +112,8 @@ mod tests {
 
         let invalid = Order {
             id: 2, cl_order_id: 1002, instrument_id: 1,
-            price: 60000, qty: 100, side: OrderSide::Bid,
+            symbol: *b"AAPL    ", price: 60000, qty: 100, side: OrderSide::Bid,
+            timestamp: 1000, account_id: 1,
             client_id: 42, strategy_id: 1, entry_time_ns: 0,
         };
 
