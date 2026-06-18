@@ -43,6 +43,9 @@ cosim_design
 export_design -format xclbin -output order_match_kernel.xclbin
 
 puts "========================================"
+puts " WARNING: This builds for actual Xilinx Alveo hardware."
+puts " Software simulation is in fpga_emulator.cpp for dev/testing."
+puts "========================================"
 puts " FPGA Order Matching Kernel Build Done"
 puts " Output: order_match_kernel.xclbin"
 puts "========================================"

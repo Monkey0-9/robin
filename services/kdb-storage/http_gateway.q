@@ -3,25 +3,45 @@
 
 \p 5001
 
-/ Load REST and Cache APIs
-\l rest_api.q
-\l redis_cache.q
-
 / Load real-time WebSocket bridge
 \l ws_bridge.q
 
-.z.ph: {[req]
+/ In-memory cache dictionary
+.cache.dict:([path:`symbol$()] value:(); expiry:`timestamp$())
+.cache.get:{[path]
+  if[not null key:.cache.dict[`path]?`$path;
+    if[.cache.dict[key;`expiry] > .z.p;
+      :.cache.dict[key;`value]]];
+  :(::)}
+.cache.set:{[path;val;ttl]
+  .cache.dict[`$path]:`value`expiry!(val;.z.p+ttl*1000000000);
+  val}
+
+/ REST routing table
+.rest.routes:(`symbol$())!()
+.rest.handle:{[req]
+  path: first req;
+  handler:.rest.routes[`$path];
+  if[null handler; :"404 Not Found"];
+  handler[req]}
+
+/ Register default endpoints
+.rest.routes[`/health]:{[req]"{\"status\":\"ok\"}"}
+.rest.routes[`/trades]:{[req]"{\"trades\":[]}"}
+.rest.routes[`/quotes]:{[req]"{\"quotes\":[]}"}
+
+.z.ph:{[req]
     path: req[0];
-    
+
     / Check cache first
-    cachedResp: .redis.get[path];
+    cachedResp: .cache.get[path];
     if[not null cachedResp; :cachedResp];
-    
+
     / Process via REST API
     resp: .rest.handle[req];
-    
+
     / Cache the response
-    .redis.set[path; resp; 60]; / Cache for 60 seconds
-    
+    .cache.set[path; resp; 60]; / Cache for 60 seconds
+
     :resp
  };

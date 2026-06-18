@@ -6,11 +6,11 @@
 esgRatings:([sym:`symbol] environmentalScore:`int; socialScore:`int; governanceScore:`int; esgGrade:`symbol);
 
 / Seed initial ESG datasets for top tickers
-insert[`esgRatings]; (`AAPL; 82; 75; 90; `AA);
-insert[`esgRatings]; (`MSFT; 85; 80; 88; `AAA);
-insert[`esgRatings]; (`TSLA; 95; 60; 70; `A);
-insert[`esgRatings]; (`BTCUSD; 12; 45; 65; `CCC);
-insert[`esgRatings]; (`EURUSD; 70; 75; 80; `A);
+`esgRatings insert (`AAPL; 82; 75; 90; `AA);
+`esgRatings insert (`MSFT; 85; 80; 88; `AAA);
+`esgRatings insert (`TSLA; 95; 60; 70; `A);
+`esgRatings insert (`BTCUSD; 12; 45; 65; `CCC);
+`esgRatings insert (`EURUSD; 70; 75; 80; `A);
 
 / Function to fetch combined ESG scores for a symbol
 getEsgData:{[s]

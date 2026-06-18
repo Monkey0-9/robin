@@ -1,1 +1,0 @@
-/usr/bin/c++ -flto=auto -fno-fat-lto-objects CMakeFiles/order_book_benchmark.dir/bench/order_book_benchmark.cpp.o -o order_book_benchmark 

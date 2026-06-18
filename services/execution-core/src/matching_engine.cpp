@@ -174,6 +174,9 @@ int main() {
     order.instrument_id = 1; order.side = Side::BID;
     order.state = OrderState::NEW;
     engine.submit_order(order);
+    for (int i = 0; i < 1000000 && engine.stats().orders_submitted == 0 && engine.stats().orders_rejected == 0; ++i) {
+        std::this_thread::yield();
+    }
     engine.stop();
     const auto& s = engine.stats();
     std::printf("[ENGINE] Orders=%llu Trades=%llu Rejected=%llu AvgLat=%llu ns\n",

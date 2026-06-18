@@ -1,3 +1,43 @@
+# Build artifacts
+build/
+*.exe
+*.o
+*.obj
+*.lib
+*.dll
+*.so
+*.dylib
+
+# Language build directories
 target/
+_build/
+_build-default/
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+.pytest_cache/
+
+# Node / Frontend
+node_modules/
+.next/
+.cache/
+
+# Coverage
+.coverage
+.coverage.*
+
+# Runtime
+logs/
+pids/
+*.pid
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment (contains secrets)
+.env
+*.local

@@ -14,6 +14,8 @@
 #include <linux/sched.h>
 #include <linux/kthread.h>
 
+extern void asm_kill_switch_handler(void);
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Robin Trading Systems");
 MODULE_DESCRIPTION("GPIO Hardware Kill Switch for Emergency Trading Halt");
@@ -57,6 +59,10 @@ static void kill_switch_activate(void) {
     pr_alert("[KILL_SWITCH] EMERGENCY HALT on GPIO %d\n", gpio_pin);
 }
 
+void kill_switch_isr(void) {
+    kill_switch_activate();
+}
+
 // Threaded IRQ handler - runs in process context, safe to sleep
 static irqreturn_t gpio_irq_handler_thread(int irq, void *dev_id) {
     msleep(debounce_ms);
@@ -86,7 +92,7 @@ static int __init kill_switch_init(void) {
     if (ret) return ret;
     irq_number = gpio_to_irq(gpio_pin);
     if (irq_number < 0) { gpio_free(gpio_pin); return irq_number; }
-    ret = request_threaded_irq(irq_number, NULL, gpio_irq_handler_thread,
+    ret = request_threaded_irq(irq_number, asm_kill_switch_handler, gpio_irq_handler_thread,
                                 IRQF_TRIGGER_RISING | IRQF_ONESHOT, "kill_switch", NULL);
     if (ret) { gpio_free(gpio_pin); return ret; }
     ret = register_netfilter_hook();

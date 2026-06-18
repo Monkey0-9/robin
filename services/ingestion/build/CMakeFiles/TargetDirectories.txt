@@ -1,3 +1,0 @@
-/mnt/c/Robin/services/ingestion/build/CMakeFiles/cpp_ingestion.dir
-/mnt/c/Robin/services/ingestion/build/CMakeFiles/edit_cache.dir
-/mnt/c/Robin/services/ingestion/build/CMakeFiles/rebuild_cache.dir

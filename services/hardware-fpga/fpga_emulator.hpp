@@ -52,6 +52,10 @@ static inline uint64_t rdtscp_fpga() noexcept {
     return (rdx << 32) | rax;
 }
 
+// SOFTWARE SIMULATION — NOT actual FPGA acceleration.
+// This emulator exists for development and testing purposes only.
+// Production deployment requires Xilinx Alveo U50/U200 hardware.
+// Hardware FPGA achieves 10-100x parallel speedup vs this simulation.
 class FPGAEmulator {
 public:
     static constexpr size_t FPGA_SRAM_SIZE = 65536;

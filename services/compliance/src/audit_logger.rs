@@ -70,14 +70,11 @@ impl AuditLogger {
                 let hash_bytes = hex::decode(hash_str.trim())
                     .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
-                if hash_bytes != prev_hash {
-                    return Ok(false);
-                }
-
                 let record_part = line.split("HASH:").next().unwrap_or("");
+                let record_part_with_newline = format!("{}\n", record_part);
                 let mut hasher = Sha256::new();
                 hasher.update(&prev_hash);
-                hasher.update(record_part.as_bytes());
+                hasher.update(record_part_with_newline.as_bytes());
                 let computed = hasher.finalize();
 
                 if computed.as_slice() != hash_bytes {

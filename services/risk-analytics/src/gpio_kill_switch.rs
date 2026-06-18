@@ -1,5 +1,4 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -21,7 +20,6 @@ impl HardwareKillSwitch {
     }
 
     pub fn start_monitoring(&mut self) {
-        let active = Arc::new(&self.active);
         let handle = thread::spawn(move || {
             #[cfg(target_os = "linux")]
             {
@@ -39,7 +37,6 @@ impl HardwareKillSwitch {
 
             #[cfg(not(target_os = "linux"))]
             {
-                let _ = active;
                 thread::sleep(Duration::from_secs(3600));
             }
         });
@@ -71,14 +68,6 @@ impl HardwareKillSwitch {
 
     pub fn get_trigger_count(&self) -> u64 {
         self.trigger_count.load(Ordering::Relaxed)
-    }
-}
-
-impl Drop for HardwareKillSwitch {
-    fn drop(&mut self) {
-        if let Some(handle) = self.monitor_handle.take() {
-            handle.thread().unpark();
-        }
     }
 }
 

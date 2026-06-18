@@ -9,60 +9,30 @@
 #include <vector>
 #include <functional>
 #include <algorithm>
-#include <cstdlib>
+
 
 namespace quantum {
 namespace execution {
 
 class OrderBook {
 public:
-    explicit OrderBook(uint32_t instrument_id) : instrument_id_(instrument_id) {
-        // Aligned allocation for SIMD vectors
-        bid_prices_ = static_cast<uint32_t*>(std::malloc(1024 * sizeof(uint32_t)));
-        ask_prices_ = static_cast<uint32_t*>(std::malloc(1024 * sizeof(uint32_t)));
-        std::fill(bid_prices_, bid_prices_ + 1024, 0);
-        std::fill(ask_prices_, ask_prices_ + 1024, 0xFFFFFFFF);
-    }
-
-    ~OrderBook() {
-        std::free(bid_prices_);
-        std::free(ask_prices_);
-    }
+    explicit OrderBook(uint32_t instrument_id) : instrument_id_(instrument_id) {}
 
     void match_order(Order& order, std::vector<Trade>& trades) {
         if (order.side == Side::BID) {
             match(order, asks_, std::less<uint32_t>(), trades);
             if (order.qty > 0) {
                 bids_[order.price].push_back(order);
-                update_simd_arrays(Side::BID);
             }
         } else {
             match(order, bids_, std::greater<uint32_t>(), trades);
             if (order.qty > 0) {
                 asks_[order.price].push_back(order);
-                update_simd_arrays(Side::ASK);
             }
         }
     }
 
 private:
-    void update_simd_arrays(Side side) {
-        size_t idx = 0;
-        if (side == Side::BID) {
-            for (const auto& [price, queue] : bids_) {
-                if (idx >= 1024) break;
-                bid_prices_[idx++] = price;
-            }
-            std::fill(bid_prices_ + idx, bid_prices_ + 1024, 0);
-        } else {
-            for (const auto& [price, queue] : asks_) {
-                if (idx >= 1024) break;
-                ask_prices_[idx++] = price;
-            }
-            std::fill(ask_prices_ + idx, ask_prices_ + 1024, 0xFFFFFFFF);
-        }
-    }
-
     template <typename BookType, typename Comp>
     void match(Order& order, BookType& opposite_book, Comp comp, std::vector<Trade>& trades) {
         auto it = opposite_book.begin();
@@ -107,8 +77,6 @@ private:
     }
 
     uint32_t instrument_id_;
-    uint32_t* bid_prices_;
-    uint32_t* ask_prices_;
     std::map<uint32_t, std::list<Order>, std::greater<uint32_t>> bids_;
     std::map<uint32_t, std::list<Order>, std::less<uint32_t>> asks_;
 };

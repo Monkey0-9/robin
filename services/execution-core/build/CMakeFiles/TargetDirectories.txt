@@ -1,4 +1,0 @@
-/mnt/c/Robin/services/execution-core/build/CMakeFiles/matching_engine.dir
-/mnt/c/Robin/services/execution-core/build/CMakeFiles/order_book_benchmark.dir
-/mnt/c/Robin/services/execution-core/build/CMakeFiles/edit_cache.dir
-/mnt/c/Robin/services/execution-core/build/CMakeFiles/rebuild_cache.dir

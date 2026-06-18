@@ -1,0 +1,15 @@
+opam-version: "2.0"
+name: "robin_compliance"
+version: "1.0.0"
+synopsis: "Compliance rule engine"
+maintainer: "dev@robin-trading.com"
+authors: "Robin Trading"
+license: "Proprietary"
+build: [
+  ["dune" "subst"] {dev}
+  ["dune" "build" "-p" name "-j" jobs]
+]
+depends: [
+  "dune" {>= "3.8"}
+  "ocaml" {>= "4.14.0"}
+]

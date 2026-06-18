@@ -12,10 +12,16 @@ add_executable(kernel_bypass_ingest
     kernel_bypass_ingest.cpp
 )
 
-target_compile_options(kernel_bypass_ingest PRIVATE -mavx512f -mavx512bw -msse4.2 -mpopcnt)
+target_compile_options(kernel_bypass_ingest PRIVATE -mavx2 -msse4.2 -mpopcnt)
+target_include_directories(kernel_bypass_ingest PRIVATE src)
 
 add_executable(dpdk_ingest
     dpdk_ingest.cpp
 )
 
-target_compile_options(dpdk_ingest PRIVATE -mavx512f -mavx512bw -msse4.2)
+target_compile_options(dpdk_ingest PRIVATE -mavx2 -msse4.2)
+target_include_directories(dpdk_ingest PRIVATE src)
+
+# AVX-512 ITCH parser header (available via src/ include path)
+target_sources(kernel_bypass_ingest PRIVATE src/itch_parser.hpp)
+target_sources(dpdk_ingest PRIVATE src/itch_parser.hpp)

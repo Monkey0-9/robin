@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <atomic>
 #include <thread>
@@ -120,17 +121,14 @@ void producer_thread(LockFreeSPSCQueue<Order, 65536>& queue, uint64_t count) noe
     Order order;
     std::memset(&order, 0, sizeof(order));
     order.id = 1;
-    order.price = 50000000;
+    order.price = 500000;
     order.qty = 100;
     order.instrument_id = 1;
     order.side = Side::BID;
     order.state = OrderState::NEW;
-    order.type = OrderType::LIMIT;
 
     for (uint64_t i = 0; i < count; ++i) {
         order.id = i + 1;
-        order.cl_order_id = 1000 + i;
-        order.entry_time_ns = rdtscp_bench();
 
         while (!queue.push(order)) {
             __asm__ __volatile__("pause" ::: "memory");
@@ -142,11 +140,11 @@ void producer_thread(LockFreeSPSCQueue<Order, 65536>& queue, uint64_t count) noe
     }
 }
 
-void consumer_thread(OrderBook* books, LockFreeSPSCQueue<Order, 65536>& inbound,
+void consumer_thread(OrderBook** books, LockFreeSPSCQueue<Order, 65536>& inbound,
                      LockFreeSPSCQueue<Trade, 65536>& outbound, uint64_t count) noexcept {
     Order order;
-    Trade trades_batch[64];
-    uint32_t trade_count;
+    std::vector<Trade> trades_batch;
+    trades_batch.reserve(64);
 
     for (uint64_t i = 0; i < count; ++i) {
         while (!inbound.pop(order)) {
@@ -154,30 +152,18 @@ void consumer_thread(OrderBook* books, LockFreeSPSCQueue<Order, 65536>& inbound,
         }
 
         const uint64_t start = rdtscp_bench();
-        OrderBook* book = &books[order.instrument_id % 1024];
+        OrderBook* book = books[order.instrument_id % 1024];
 
-        trade_count = 0;
-        book->match_order(order, trades_batch, trade_count);
+        trades_batch.clear();
+        book->match_order(order, trades_batch);
 
         const uint64_t latency = rdtscp_bench() - start;
         match_latency.record_value(latency);
 
-        for (uint32_t j = 0; j < trade_count; ++j) {
-            while (!outbound.push(trades_batch[j])) {
+        for (const auto& trade : trades_batch) {
+            while (!outbound.push(trade)) {
                 __asm__ __volatile__("pause" ::: "memory");
             }
-        }
-
-        if (order.qty > 0) {
-            OrderEntry entry;
-            entry.id = order.id;
-            entry.price = order.price;
-            entry.qty = order.qty;
-            entry.instrument_id = order.instrument_id;
-            entry.side = order.side;
-            entry.state = OrderState::WORKING;
-            entry.entry_time_ns = order.entry_time_ns;
-            book->add_order(entry);
         }
 
         iterations_completed++;
@@ -194,9 +180,10 @@ int main(int argc, char** argv) {
     match_latency.init();
     queue_latency.init();
 
-    ALIGN_PAD_64 OrderBook books[1024] = {
-        OrderBook(0), OrderBook(1), OrderBook(2)
-    };
+    OrderBook* books[1024];
+    for (int i = 0; i < 1024; ++i) {
+        books[i] = new OrderBook(i);
+    }
 
     ALIGN_PAD_64 LockFreeSPSCQueue<Order, 65536> inbound;
     ALIGN_PAD_64 LockFreeSPSCQueue<Trade, 65536> outbound;
@@ -240,6 +227,10 @@ int main(int argc, char** argv) {
             }
         }
         fclose(cpuinfo);
+    }
+
+    for (int i = 0; i < 1024; ++i) {
+        delete books[i];
     }
 
     return 0;

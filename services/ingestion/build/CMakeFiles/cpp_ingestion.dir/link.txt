@@ -1,1 +1,0 @@
-/usr/bin/c++ -flto=auto -fno-fat-lto-objects CMakeFiles/cpp_ingestion.dir/cpp_ingestion.cpp.o -o cpp_ingestion 

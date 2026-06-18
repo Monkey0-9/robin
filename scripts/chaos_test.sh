@@ -3,7 +3,8 @@ set -euo pipefail
 
 log() { echo "[$(date '+%Y-%m-%dT%H:%M:%S%z')] $*"; }
 
-CHAOS_LOGS="/var/log/robin/chaos"
+HAS_SUDO=$(sudo -n true 2>/dev/null && echo "yes" || echo "no")
+CHAOS_LOGS="./logs/chaos"
 RESULTS_FILE="${CHAOS_LOGS}/chaos_results.json"
 DURATION=${DURATION:-300}
 mkdir -p "${CHAOS_LOGS}"
@@ -23,6 +24,11 @@ check_service() {
 test_network_resilience() {
     log "=== Chaos: Network Resilience ==="
     local test_name="network_partition"
+
+    if [ "${HAS_SUDO}" != "yes" ]; then
+        log "[SKIP] Sudo privileges not available for dev lo latency injection"
+        return
+    fi
 
     log "Injecting 100ms latency on lo interface..."
     sudo tc qdisc add dev lo root netem delay 100ms 2>/dev/null || true
@@ -46,6 +52,11 @@ test_network_resilience() {
 test_packet_loss() {
     log "=== Chaos: Packet Loss ==="
     local test_name="packet_loss"
+
+    if [ "${HAS_SUDO}" != "yes" ]; then
+        log "[SKIP] Sudo privileges not available for dev lo packet loss injection"
+        return
+    fi
 
     log "Injecting 5% packet loss on lo..."
     sudo tc qdisc add dev lo root netem loss 5% 2>/dev/null || true
@@ -129,6 +140,11 @@ test_process_kill() {
 test_clock_skew() {
     log "=== Chaos: Clock Skew ==="
     local test_name="clock_skew"
+
+    if [ "${HAS_SUDO}" != "yes" ]; then
+        log "[SKIP] Sudo privileges not available for clock skew simulation"
+        return
+    fi
 
     local current_time
     current_time=$(date +%s)

@@ -164,6 +164,24 @@ impl ShmBridge {
     }
 
     #[inline(always)]
+    pub fn forward_order(&mut self, order: &crate::gate::Order) -> bool {
+        let msg = ShmMessage {
+            msg_type: 1,
+            client_id: order.client_id,
+            instrument_id: order.instrument_id,
+            price: order.price,
+            qty: order.qty,
+            side: order.side as u8,
+            flags: 0,
+            order_id: order.id,
+            cl_order_id: order.cl_order_id,
+            timestamp_ns: order.timestamp,
+            _pad: [0u8; 21],
+        };
+        self.push(&msg)
+    }
+
+    #[inline(always)]
     pub fn available(&self) -> u64 {
         let header = unsafe { &*self.header };
         header.write_idx.load(Ordering::Relaxed) - header.read_idx.load(Ordering::Relaxed)
@@ -215,7 +233,10 @@ mod tests {
         assert!(bridge.push(&msg));
         assert_eq!(bridge.available(), 1);
 
-        let mut received = unsafe { MaybeUninit::zeroed().assume_init() };
+        let mut received = unsafe {
+            let mut m = MaybeUninit::<ShmMessage>::zeroed();
+            m.assume_init()
+        };
         assert!(bridge.pop(&mut received));
         assert_eq!(received.order_id, 1);
         assert_eq!(received.price, 50000);

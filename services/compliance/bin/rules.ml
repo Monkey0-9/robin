@@ -11,7 +11,7 @@ type trade = {
   exchange: string;
 }
 
-type rule_result = Pass | Reject of string | Flag of string
+type rule_result = Pass | Reject of string
 
 type compliance_config = {
   max_crypto_pct: float;
@@ -80,18 +80,12 @@ let evaluate_trade config t current_exposure total_aum recent_sales current_posi
   ] in
 
   let failures = List.filter (function Reject _ -> true | _ -> false) checks in
-  let flags = List.filter (function Flag _ -> true | _ -> false) checks in
 
   match failures with
   | Reject msg :: _ ->
       Printf.printf "[COMPLIANCE] REJECT: %s | Order %s | %s\n%!" t.symbol t.order_id msg;
       `Reject msg
   | _ ->
-      if List.length flags > 0 then begin
-        List.iter (fun f ->
-          match f with Flag msg -> Printf.printf "[COMPLIANCE] FLAG: %s\n%!" msg | _ -> ()
-        ) flags
-      end;
       Printf.printf "[COMPLIANCE] PASS: %s | Order %s\n%!" t.symbol t.order_id;
       `Pass
 

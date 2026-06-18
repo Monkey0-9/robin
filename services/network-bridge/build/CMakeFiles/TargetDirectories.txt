@@ -1,4 +1,0 @@
-/mnt/c/Robin/services/network-bridge/build/CMakeFiles/kernel_bypass_ingest.dir
-/mnt/c/Robin/services/network-bridge/build/CMakeFiles/dpdk_ingest.dir
-/mnt/c/Robin/services/network-bridge/build/CMakeFiles/edit_cache.dir
-/mnt/c/Robin/services/network-bridge/build/CMakeFiles/rebuild_cache.dir

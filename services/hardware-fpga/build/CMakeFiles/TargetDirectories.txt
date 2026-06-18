@@ -1,3 +1,0 @@
-/mnt/c/Robin/services/hardware-fpga/build/CMakeFiles/fpga_emulator.dir
-/mnt/c/Robin/services/hardware-fpga/build/CMakeFiles/edit_cache.dir
-/mnt/c/Robin/services/hardware-fpga/build/CMakeFiles/rebuild_cache.dir
