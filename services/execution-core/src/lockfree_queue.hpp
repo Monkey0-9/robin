@@ -1,11 +1,9 @@
-// services/execution-core/src/lockfree_queue.hpp
-// High-performance lock-free SPSC queue using memory barriers and cache line alignment.
-
 #pragma once
 
 #include <atomic>
 #include <cstddef>
 #include <new>
+#include <limits>
 
 namespace quantum {
 namespace execution {
@@ -22,7 +20,7 @@ public:
         size_t read_idx = read_idx_.load(std::memory_order_acquire);
 
         if ((write_idx - read_idx) == Capacity) {
-            return false; // Queue full
+            return false;
         }
 
         ring_buffer_[write_idx & (Capacity - 1)] = val;
@@ -35,7 +33,7 @@ public:
         size_t write_idx = write_idx_.load(std::memory_order_acquire);
 
         if (read_idx == write_idx) {
-            return false; // Queue empty
+            return false;
         }
 
         val = ring_buffer_[read_idx & (Capacity - 1)];
@@ -48,9 +46,9 @@ public:
     }
 
     size_t size() const {
-        size_t write = write_idx_.load(std::memory_order_relaxed);
-        size_t read = read_idx_.load(std::memory_order_relaxed);
-        return (write >= read) ? (write - read) : (Capacity - (read - write));
+        size_t write = write_idx_.load(std::memory_order_acquire);
+        size_t read = read_idx_.load(std::memory_order_acquire);
+        return write - read;
     }
 
 private:

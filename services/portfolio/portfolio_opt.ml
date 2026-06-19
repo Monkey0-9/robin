@@ -37,48 +37,86 @@ let calculate_portfolio_var positions cov_matrix _confidence_level =
     let cvar_95 = std_dev *. (1.0 /. (1.0 -. 0.95)) *. (exp (-. (z_95 *. z_95) /. 2.0) /. sqrt (2.0 *. 3.141592653589793)) in
     (var_95, var_99, cvar_95)
 
+let project_simplex y =
+  let n = Array.length y in
+  let sorted = Array.copy y in
+  Array.sort (fun a b -> compare b a) sorted;
+  let rec find_theta sum_y j best_theta =
+    if j >= n then best_theta
+    else
+      let sum_y' = sum_y +. sorted.(j) in
+      let theta = (sum_y' -. 1.0) /. float_of_int (j + 1) in
+      if sorted.(j) -. theta > 0.0 then
+        find_theta sum_y' (j + 1) theta
+      else
+        best_theta
+  in
+  let theta = find_theta 0.0 0 0.0 in
+  Array.map (fun yi -> max (yi -. theta) 0.0) y
+
 let optimize_portfolio expected_returns cov_matrix risk_free_rate =
   let n = Array.length expected_returns in
   if n = 0 then failwith "No assets" else
-    let best_sharpe = ref (-1e10) in
-    let best_weights = Array.make n 0.0 in
-    let best_ret = ref 0.0 and best_var = ref 0.0 in
-    let step = 0.02 in
-    let max_w = 1.0 in
+    let weights = Array.make n (1.0 /. float_of_int n) in
+    let max_iter = 1000 in
+    let learning_rate = 0.05 in
+    let converged = ref false in
+    let iter = ref 0 in
 
-    let rec iterate idx weights sum =
-      if idx >= n - 1 then begin
-        let w = 1.0 -. sum in
-        if w >= 0.0 && w <= max_w then begin
-          let ws = Array.copy weights in
-          ws.(n - 1) <- w;
-          let pret = ref 0.0 and pvar = ref 0.0 in
-          for i = 0 to n - 1 do
-            pret := !pret +. ws.(i) *. expected_returns.(i);
-            for j = 0 to n - 1 do
-              pvar := !pvar +. ws.(i) *. ws.(j) *. cov_matrix.(i).(j)
-            done
-          done;
-          let pstd = sqrt !pvar in
-          let sharpe = if pstd > 0.0 then (!pret -. risk_free_rate) /. pstd else 0.0 in
-          if sharpe > !best_sharpe then begin
-            best_sharpe := sharpe;
-            Array.blit ws 0 best_weights 0 n;
-            best_ret := !pret;
-            best_var := !pvar
-          end
-        end
-      end else begin
-        let w = ref 0.0 in
-        while !w <= max_w -. sum do
-          weights.(idx) <- !w;
-          iterate (idx + 1) weights (sum +. !w);
-          w := !w +. step
+    while not !converged && !iter < max_iter do
+      let p_ret = ref 0.0 in
+      let p_var = ref 0.0 in
+      for i = 0 to n - 1 do
+        p_ret := !p_ret +. weights.(i) *. expected_returns.(i);
+        for j = 0 to n - 1 do
+          p_var := !p_var +. weights.(i) *. weights.(j) *. cov_matrix.(i).(j)
         done
+      done;
+      let p_std = sqrt !p_var in
+
+      if p_std < 1e-8 then begin
+        converged := true
+      end else begin
+        let grad = Array.make n 0.0 in
+        for i = 0 to n - 1 do
+          let sigma_grad_i = ref 0.0 in
+          for j = 0 to n - 1 do
+            sigma_grad_i := !sigma_grad_i +. cov_matrix.(i).(j) *. weights.(j)
+          done;
+          let sigma_grad_i = !sigma_grad_i /. p_std in
+          grad.(i) <- (expected_returns.(i) *. p_std -. (!p_ret -. risk_free_rate) *. sigma_grad_i) /. !p_var
+        done;
+
+        let new_weights = Array.make n 0.0 in
+        for i = 0 to n - 1 do
+          new_weights.(i) <- weights.(i) +. learning_rate *. grad.(i)
+        done;
+
+        let projected = project_simplex new_weights in
+        let diff = ref 0.0 in
+        for i = 0 to n - 1 do
+          diff := !diff +. abs_float (projected.(i) -. weights.(i))
+        done;
+
+        if !diff < 1e-6 then
+          converged := true;
+
+        Array.blit projected 0 weights 0 n;
+        incr iter
       end
-    in
-    iterate 0 (Array.make n 0.0) 0.0;
-    (!best_sharpe, best_weights, !best_ret, !best_var)
+    done;
+
+    let p_ret = ref 0.0 in
+    let p_var = ref 0.0 in
+    for i = 0 to n - 1 do
+      p_ret := !p_ret +. weights.(i) *. expected_returns.(i);
+      for j = 0 to n - 1 do
+        p_var := !p_var +. weights.(i) *. weights.(j) *. cov_matrix.(i).(j)
+      done
+    done;
+    let p_std = sqrt !p_var in
+    let final_sharpe = if p_std > 0.0 then (!p_ret -. risk_free_rate) /. p_std else 0.0 in
+    (final_sharpe, weights, !p_ret, !p_var)
 
 let generate_signals market_feeds positions =
   List.map (fun feed ->

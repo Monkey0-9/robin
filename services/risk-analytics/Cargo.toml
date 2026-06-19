@@ -2,7 +2,7 @@
 name = "robin-risk-analytics"
 version = "1.0.0"
 edition = "2021"
-description = "Pre-trade risk gate with SEC 15c3-5 compliance, zero-allocation hot path"
+description = "Pre-trade risk gate research prototype, zero-allocation hot path"
 
 [lib]
 name = "robin_risk"

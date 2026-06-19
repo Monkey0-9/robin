@@ -31,13 +31,15 @@ impl HardwareKillSwitch {
                             break;
                         }
                     }
-                    thread::sleep(Duration::from_millis(1));
+                    thread::sleep(Duration::from_millis(10));
                 }
             }
 
             #[cfg(not(target_os = "linux"))]
             {
-                thread::sleep(Duration::from_secs(3600));
+                loop {
+                    thread::sleep(Duration::from_secs(1));
+                }
             }
         });
         self.monitor_handle = Some(handle);

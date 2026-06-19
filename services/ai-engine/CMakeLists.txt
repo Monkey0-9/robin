@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.25)
-project(robin-ai-engine VERSION 1.0.0 LANGUAGES CXX)
+project(robin-ai-engine VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -flto=auto -fno-exceptions -fno-rtti -ffast-math")
-add_executable(onnx_inference src/onnx_inference.cpp)
+
+# NOTE: ONNX inference is NOT yet implemented.
+# onnx_inference.cpp does not exist in the repository.
+# This is a placeholder for future development.

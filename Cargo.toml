@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "services/risk-analytics",
+    "services/compliance",
+]
+resolver = "2"

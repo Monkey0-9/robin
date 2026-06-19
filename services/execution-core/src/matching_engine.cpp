@@ -13,8 +13,6 @@
 #elif defined(__linux__)
 #include <pthread.h>
 #include <sched.h>
-#include <numa.h>
-#include <numaif.h>
 #endif
 
 #ifndef likely
@@ -52,26 +50,20 @@ public:
     static constexpr size_t OUTBOUND_CAPACITY = 65536;
     static constexpr size_t BOOK_COUNT = 1024;
 
-    MatchingEngine() noexcept : running_(false), numa_node_(0) {
+    MatchingEngine() noexcept : running_(false), numa_node_(0), cpu_core_(2) {
         std::memset(&stats_, 0, sizeof(stats_));
         stats_.min_latency_ns = UINT64_MAX;
-        std::memset(books_, 0, sizeof(books_));
+        for (auto& book : books_) book = nullptr;
     }
 
     ~MatchingEngine() noexcept {
         stop();
-        for (auto& book : books_) {
-            if (book) {
-                book->~OrderBook();
-                std::free(book);
-                book = nullptr;
-            }
-        }
     }
 
-    bool init(uint32_t numa_node = 0) noexcept {
+    bool init(uint32_t numa_node = 0, int cpu_core = 2) noexcept {
         numa_node_ = numa_node;
-        pin_to_numa_node(numa_node);
+        cpu_core_ = cpu_core;
+        pin_to_cpu(cpu_core);
         return true;
     }
 
@@ -99,31 +91,18 @@ public:
     OrderBook* get_or_create_book(uint32_t instrument_id) noexcept {
         const size_t idx = instrument_id % BOOK_COUNT;
         if (unlikely(!books_[idx])) {
-            void* mem = nullptr;
-#if defined(_WIN32)
-            mem = _aligned_malloc(sizeof(OrderBook), CACHE_LINE_SIZE);
-#elif defined(__linux__)
-            mem = std::aligned_alloc(CACHE_LINE_SIZE, sizeof(OrderBook));
-#else
-            if (posix_memalign(&mem, CACHE_LINE_SIZE, sizeof(OrderBook)) != 0) mem = nullptr;
-#endif
-            if (unlikely(!mem)) return nullptr;
-            books_[idx] = new (mem) OrderBook(instrument_id);
+            books_[idx] = new (&book_storage_[idx]) OrderBook(instrument_id);
         }
         return books_[idx];
     }
 
 private:
-    void pin_to_numa_node(int node) noexcept {
+    void pin_to_cpu(int cpu) noexcept {
 #if defined(__linux__)
         cpu_set_t cpuset;
         CPU_ZERO(&cpuset);
-        CPU_SET(2, &cpuset);
+        CPU_SET(cpu, &cpuset);
         pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
-        struct bitmask* numa_mask = numa_allocate_cpumask();
-        if (numa_node_to_cpus(node, numa_mask) == 0)
-            numa_sched_setaffinity(0, numa_mask);
-        numa_free_cpumask(numa_mask);
 #endif
     }
 
@@ -134,10 +113,10 @@ private:
                 const uint64_t start_ns = rdtscp_e();
                 OrderBook* book = get_or_create_book(incoming.instrument_id);
                 if (unlikely(!book)) { stats_.orders_rejected++; continue; }
-                std::vector<Trade> matches;
+                FixedVector<Trade, 64> matches;
                 book->match_order(incoming, matches);
-                for (const auto& trade : matches)
-                    outbound_queue_.push(trade);
+                for (size_t i = 0; i < matches.size(); ++i)
+                    outbound_queue_.push(matches[i]);
                 const uint64_t end_ns = rdtscp_e();
                 const uint64_t latency = end_ns - start_ns;
                 stats_.orders_submitted++;
@@ -154,10 +133,12 @@ private:
 
     ALIGN_PAD_64 std::atomic<bool> running_;
     int numa_node_;
+    int cpu_core_;
     ALIGN_PAD_64 std::thread matching_thread_;
     ALIGN_PAD_64 LockFreeSPSCQueue<Order, INBOUND_CAPACITY> inbound_queue_;
     ALIGN_PAD_64 LockFreeSPSCQueue<Trade, OUTBOUND_CAPACITY> outbound_queue_;
-    ALIGN_PAD_64 OrderBook* books_[BOOK_COUNT];
+    alignas(64) OrderBook book_storage_[BOOK_COUNT];
+    OrderBook* books_[BOOK_COUNT];
     ALIGN_PAD_64 EngineStats stats_;
 };
 
@@ -166,13 +147,14 @@ private:
 int main() {
     using namespace quantum::execution;
     MatchingEngine engine;
-    engine.init(0);
+    engine.init(0, 2);
     engine.start();
     Order order;
     std::memset(&order, 0, sizeof(order));
     order.id = 1; order.price = 500000; order.qty = 100;
     order.instrument_id = 1; order.side = Side::BID;
     order.state = OrderState::NEW;
+    order.type = OrderType::LIMIT;
     engine.submit_order(order);
     for (int i = 0; i < 1000000 && engine.stats().orders_submitted == 0 && engine.stats().orders_rejected == 0; ++i) {
         std::this_thread::yield();

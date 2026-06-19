@@ -1,9 +1,10 @@
 use crate::gate::{Order, OrderSide};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct ComplianceThresholds {
     pub max_order_value: u64,
     pub max_order_qty: u32,
-    pub price_collar_pct: f64,
+    pub price_collar_bps: u32, // e.g., 500 = 5%
     pub reference_price: u32,
     pub restricted_list: [u32; 128],
     pub restricted_count: usize,
@@ -11,55 +12,57 @@ pub struct ComplianceThresholds {
 
 pub struct RiskGateFast {
     thresholds: ComplianceThresholds,
-    failed_checks_count: u64,
-    total_checks_count: u64,
+    failed_checks_count: AtomicU64,
+    total_checks_count: AtomicU64,
 }
 
 impl RiskGateFast {
     pub fn new(thresholds: ComplianceThresholds) -> Self {
         Self {
             thresholds,
-            failed_checks_count: 0,
-            total_checks_count: 0,
+            failed_checks_count: AtomicU64::new(0),
+            total_checks_count: AtomicU64::new(0),
         }
     }
 
     #[inline(always)]
-    pub fn validate_compliance(&mut self, order: &Order) -> bool {
-        self.total_checks_count += 1;
+    pub fn validate_compliance(&self, order: &Order) -> bool {
+        self.total_checks_count.fetch_add(1, Ordering::Relaxed);
 
-        for i in 0..self.thresholds.restricted_count {
+        for i in 0..core::cmp::min(self.thresholds.restricted_count, 128) {
             if self.thresholds.restricted_list[i] == order.instrument_id {
-                self.failed_checks_count += 1;
+                self.failed_checks_count.fetch_add(1, Ordering::Relaxed);
                 return false;
             }
         }
 
         let order_value = (order.price as u64) * (order.qty as u64);
         if order_value > self.thresholds.max_order_value {
-            self.failed_checks_count += 1;
+            self.failed_checks_count.fetch_add(1, Ordering::Relaxed);
             return false;
         }
 
         if order.qty > self.thresholds.max_order_qty {
-            self.failed_checks_count += 1;
+            self.failed_checks_count.fetch_add(1, Ordering::Relaxed);
             return false;
         }
 
-        let ref_p = self.thresholds.reference_price as f64;
-        let order_p = order.price as f64;
-        let collar = self.thresholds.price_collar_pct;
+        let ref_p = self.thresholds.reference_price as u64;
+        let order_p = order.price as u64;
+        let collar_bps = self.thresholds.price_collar_bps as u64;
 
         match order.side {
             OrderSide::Bid => {
-                if order_p > ref_p * (1.0 + collar) {
-                    self.failed_checks_count += 1;
+                let max_allowed = ref_p.saturating_mul(10000 + collar_bps) / 10000;
+                if order_p > max_allowed {
+                    self.failed_checks_count.fetch_add(1, Ordering::Relaxed);
                     return false;
                 }
             }
             OrderSide::Ask => {
-                if order_p < ref_p * (1.0 - collar) {
-                    self.failed_checks_count += 1;
+                let min_allowed = ref_p.saturating_mul(10000 - collar_bps) / 10000;
+                if order_p < min_allowed {
+                    self.failed_checks_count.fetch_add(1, Ordering::Relaxed);
                     return false;
                 }
             }
@@ -69,18 +72,20 @@ impl RiskGateFast {
     }
 
     pub fn get_failed_count(&self) -> u64 {
-        self.failed_checks_count
+        self.failed_checks_count.load(Ordering::Relaxed)
     }
 
     pub fn get_total_count(&self) -> u64 {
-        self.total_checks_count
+        self.total_checks_count.load(Ordering::Relaxed)
     }
 
     pub fn get_pass_rate(&self) -> f64 {
-        if self.total_checks_count == 0 {
+        let total = self.total_checks_count.load(Ordering::Relaxed);
+        let failed = self.failed_checks_count.load(Ordering::Relaxed);
+        if total == 0 {
             return 1.0;
         }
-        1.0 - (self.failed_checks_count as f64 / self.total_checks_count as f64)
+        1.0 - (failed as f64 / total as f64)
     }
 }
 
@@ -93,13 +98,13 @@ mod tests {
         let thresholds = ComplianceThresholds {
             max_order_value: 10_000_000_000,
             max_order_qty: 100000,
-            price_collar_pct: 0.05,
+            price_collar_bps: 500, // 5%
             reference_price: 50000,
             restricted_list: [0u32; 128],
             restricted_count: 0,
         };
 
-        let mut gate = RiskGateFast::new(thresholds);
+        let gate = RiskGateFast::new(thresholds);
 
         let valid = Order {
             id: 1, cl_order_id: 1001, instrument_id: 1,

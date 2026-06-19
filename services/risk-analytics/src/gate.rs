@@ -6,7 +6,7 @@ use crate::shm_bridge::ShmBridge;
 use crate::hedging::HedgingEngine;
 use crate::tax_engine::TaxEngine;
 use core::sync::atomic::{AtomicU64, Ordering};
-use std::collections::HashMap;
+// No HashMap needed, using direct-mapped array
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum OrderSide {
@@ -14,31 +14,36 @@ pub enum OrderSide {
     Ask = 1,
 }
 
-/// SEC 15c3-5 compliant pre-trade risk gate.
+/// Prototype pre-trade risk gate framework.
 ///
-/// HARD BLOCKS (immutable, non-configurable, <100ns):
-/// - Order size limits (fat-finger protection)
-/// - Price collars (±X% from last trade)
-/// - Credit limits (pre-funded account balance)
-/// - Symbol restrictions (blocked/unlisted securities)
-/// - Duplicate order detection (same sym/price/qty <1ms)
+/// HARD BLOCKS (simulated/mocked checks):
+/// - Order size limits (fat-finger protection stub)
+/// - Price collars (±X% from last trade stub)
+/// - Credit limits (pre-funded account balance stub)
+/// - Symbol restrictions (blocked/unlisted securities stub)
+/// - Duplicate order detection (simulated duplicate check)
 ///
-/// SOFT BLOCKS (configurable by Risk Manager, <100ns):
-/// - Position limits (per-symbol, per-account)
-/// - Velocity limits (orders/sec)
-/// - Concentration limits (% of portfolio)
-/// - Strategy-specific filters
+/// SOFT BLOCKS (simulated/mocked checks):
+/// - Position limits (per-symbol, per-account stub)
+/// - Velocity limits (orders/sec stub)
+/// - Concentration limits (% of portfolio stub)
+/// - Strategy-specific filters stub
 pub struct RiskGate {
     pre_trade: PreTradeRiskEvaluator,
     circuit_breaker: RiskCircuitBreaker,
     kill_switch: HardwareKillSwitch,
     fast_gate: RiskGateFast,
     shm: Option<ShmBridge>,
+    #[allow(dead_code)]
     hedging: HedgingEngine,
+    #[allow(dead_code)]
     tax_engine: TaxEngine,
     orders_processed: AtomicU64,
     duplicate_window_ns: u64,
-    recent_orders: HashMap<u64, u64>,
+    recent_orders: Box<[(u64, u64)]>,
+    positions: Box<[i64]>,
+    last_order_timestamps: Box<[u64]>,
+    timestamp_idx: usize,
 }
 
 impl RiskGate {
@@ -55,7 +60,7 @@ impl RiskGate {
             fast_gate: RiskGateFast::new(ComplianceThresholds {
                 max_order_value: 10_000_000_000,
                 max_order_qty: 1_000_000,
-                price_collar_pct: 0.05,
+                price_collar_bps: 500,
                 reference_price: 50_000,
                 restricted_list: [0u32; 128],
                 restricted_count: 0,
@@ -65,12 +70,15 @@ impl RiskGate {
             tax_engine: TaxEngine::new(Vec::new()),
             orders_processed: AtomicU64::new(0),
             duplicate_window_ns: 1_000_000,
-            recent_orders: HashMap::new(),
+            recent_orders: vec![(0, 0); 4096].into_boxed_slice(),
+            positions: vec![0i64; 4096].into_boxed_slice(),
+            last_order_timestamps: vec![0u64; 128].into_boxed_slice(),
+            timestamp_idx: 0,
         }
     }
 
-    /// Full SEC 15c3-5 pre-trade check.
-    /// Latency: <200ns (p50), <500ns (p99)
+    /// Prototype pre-trade check.
+    /// Latency: Simulated targets (<200ns p50, <500ns p99)
     pub fn check_order(&mut self, order: &Order) -> Result<OrderStatus, RiskError> {
         // HARD BLOCK 1: Kill switch (hardware GPIO)
         if self.kill_switch.is_active() {
@@ -98,6 +106,19 @@ impl RiskGate {
         // SOFT BLOCKS: Configurable risk limits
         self.check_soft_blocks(order)?;
 
+        // Update positions on approval
+        let slot = (order.instrument_id & 4095) as usize;
+        let current_pos = self.positions[slot];
+        let next_pos = match order.side {
+            OrderSide::Bid => current_pos + (order.qty as i64),
+            OrderSide::Ask => current_pos - (order.qty as i64),
+        };
+        self.positions[slot] = next_pos;
+
+        // Update velocity timestamp circular buffer
+        self.last_order_timestamps[self.timestamp_idx] = order.timestamp;
+        self.timestamp_idx = (self.timestamp_idx + 1) % 128;
+
         // Audit trail
         self.orders_processed.fetch_add(1, Ordering::Relaxed);
 
@@ -111,27 +132,22 @@ impl RiskGate {
 
     fn check_duplicate(&mut self, order: &Order) -> bool {
         let key = order.id;
-        if let Some(last_ts) = self.recent_orders.get(&key) {
-            if order.timestamp.wrapping_sub(*last_ts) < self.duplicate_window_ns {
-                return true;
-            }
+        let slot = (key & 4095) as usize;
+        let (old_id, old_ts) = self.recent_orders[slot];
+        if old_id == key && order.timestamp.wrapping_sub(old_ts) < self.duplicate_window_ns {
+            return true;
         }
-        self.recent_orders.insert(key, order.timestamp);
-
-        // Prune recent orders periodically to prevent unbounded memory growth/leaks
-        if self.recent_orders.len() > 10000 {
-            let duplicate_window = self.duplicate_window_ns;
-            self.recent_orders.retain(|_, &mut ts| {
-                order.timestamp.saturating_sub(ts) < duplicate_window
-            });
-        }
+        self.recent_orders[slot] = (key, order.timestamp);
         false
     }
 
     fn check_soft_blocks(&self, order: &Order) -> Result<(), RiskError> {
+        // 1. Fat finger protection
         if (order.qty as u64) > 1_000_000 {
             return Err(RiskError::FatFinger);
         }
+
+        // 2. Price collar
         let last = LAST_TRADE_PRICE.load(Ordering::Relaxed);
         if last > 0 {
             let min_price = (last * 95) / 100;
@@ -140,6 +156,27 @@ impl RiskGate {
                 return Err(RiskError::PriceCollar);
             }
         }
+
+        // 3. Position limit (net position limit, e.g., 100,000 shares)
+        let position_limit = 100_000i64;
+        let slot = (order.instrument_id & 4095) as usize;
+        let current_pos = self.positions[slot];
+        let next_pos = match order.side {
+            OrderSide::Bid => current_pos + (order.qty as i64),
+            OrderSide::Ask => current_pos - (order.qty as i64),
+        };
+        if next_pos.abs() > position_limit {
+            return Err(RiskError::PositionLimit);
+        }
+
+        // 4. Velocity rate limit (max 100 orders in a 1-second sliding window)
+        let rate_limit = 100;
+        let check_idx = (self.timestamp_idx + 128 - rate_limit) % 128;
+        let old_ts = self.last_order_timestamps[check_idx];
+        if old_ts > 0 && order.timestamp.saturating_sub(old_ts) < 1_000_000_000 {
+            return Err(RiskError::VelocityLimit);
+        }
+
         Ok(())
     }
 
@@ -147,6 +184,7 @@ impl RiskGate {
         self.orders_processed.load(Ordering::Relaxed)
     }
 }
+
 
 static LAST_TRADE_PRICE: AtomicU64 = AtomicU64::new(0);
 
@@ -234,5 +272,57 @@ mod tests {
             client_id: 42, strategy_id: 1, entry_time_ns: 0,
         };
         assert!(matches!(gate.check_order(&order), Err(_)));
+    }
+
+    #[test]
+    fn test_reject_position_limit() {
+        let mut gate = RiskGate::new("/tmp/test_shm");
+        let o1 = Order {
+            id: 10, cl_order_id: 1010, instrument_id: 5,
+            symbol: *b"MSFT    ", price: 50000, qty: 80_000,
+            side: OrderSide::Bid, timestamp: 1000, account_id: 1,
+            client_id: 42, strategy_id: 1, entry_time_ns: 0,
+        };
+        assert_eq!(gate.check_order(&o1), Ok(OrderStatus::Approved));
+
+        let o2 = Order {
+            id: 11, cl_order_id: 1011, instrument_id: 5,
+            symbol: *b"MSFT    ", price: 50000, qty: 30_000,
+            side: OrderSide::Bid, timestamp: 2000, account_id: 1,
+            client_id: 42, strategy_id: 1, entry_time_ns: 0,
+        };
+        assert_eq!(gate.check_order(&o2), Err(RiskError::PositionLimit));
+
+        // Sell order should pass since it reduces position
+        let o3 = Order {
+            id: 12, cl_order_id: 1012, instrument_id: 5,
+            symbol: *b"MSFT    ", price: 50000, qty: 20_000,
+            side: OrderSide::Ask, timestamp: 3000, account_id: 1,
+            client_id: 42, strategy_id: 1, entry_time_ns: 0,
+        };
+        assert_eq!(gate.check_order(&o3), Ok(OrderStatus::Approved));
+    }
+
+    #[test]
+    fn test_reject_velocity_limit() {
+        let mut gate = RiskGate::new("/tmp/test_shm");
+        for i in 0..100 {
+            let order = Order {
+                id: i + 100, cl_order_id: i + 1000, instrument_id: 1,
+                symbol: *b"AAPL    ", price: 50000, qty: 1,
+                side: OrderSide::Bid, timestamp: 1_000_000 + i as u64 * 1000,
+                account_id: 1, client_id: 42, strategy_id: 1, entry_time_ns: 0,
+            };
+            assert_eq!(gate.check_order(&order), Ok(OrderStatus::Approved));
+        }
+
+        // 101st order within 1 second should fail
+        let o_fail = Order {
+            id: 201, cl_order_id: 2001, instrument_id: 1,
+            symbol: *b"AAPL    ", price: 50000, qty: 1,
+            side: OrderSide::Bid, timestamp: 1_000_000 + 99_000,
+            account_id: 1, client_id: 42, strategy_id: 1, entry_time_ns: 0,
+        };
+        assert_eq!(gate.check_order(&o_fail), Err(RiskError::VelocityLimit));
     }
 }

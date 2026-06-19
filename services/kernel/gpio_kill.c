@@ -1,6 +1,8 @@
-// Kernel module for GPIO-based hardware kill switch
+// Kernel module for GPIO-based hardware kill switch (simulation)
 // Uses threaded IRQ to avoid sleeping in interrupt context
-// On trigger: immediately blocks all outgoing network traffic via netfilter
+// On trigger: blocks ALL outgoing network traffic via netfilter
+// WARNING: This blocks ALL IPv4 traffic, not just trading traffic.
+// A whitelist for management/health-check traffic is NOT implemented.
 
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -14,12 +16,10 @@
 #include <linux/sched.h>
 #include <linux/kthread.h>
 
-extern void asm_kill_switch_handler(void);
-
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Robin Trading Systems");
-MODULE_DESCRIPTION("GPIO Hardware Kill Switch for Emergency Trading Halt");
-MODULE_VERSION("1.0.0");
+MODULE_DESCRIPTION("GPIO Kill Switch (Simulation) - Emergency Trading Halt");
+MODULE_VERSION("1.1.0");
 
 static int gpio_pin = 18;
 module_param(gpio_pin, int, 0644);
@@ -59,10 +59,6 @@ static void kill_switch_activate(void) {
     pr_alert("[KILL_SWITCH] EMERGENCY HALT on GPIO %d\n", gpio_pin);
 }
 
-void kill_switch_isr(void) {
-    kill_switch_activate();
-}
-
 // Threaded IRQ handler - runs in process context, safe to sleep
 static irqreturn_t gpio_irq_handler_thread(int irq, void *dev_id) {
     msleep(debounce_ms);
@@ -92,7 +88,7 @@ static int __init kill_switch_init(void) {
     if (ret) return ret;
     irq_number = gpio_to_irq(gpio_pin);
     if (irq_number < 0) { gpio_free(gpio_pin); return irq_number; }
-    ret = request_threaded_irq(irq_number, asm_kill_switch_handler, gpio_irq_handler_thread,
+    ret = request_threaded_irq(irq_number, NULL, gpio_irq_handler_thread,
                                 IRQF_TRIGGER_RISING | IRQF_ONESHOT, "kill_switch", NULL);
     if (ret) { gpio_free(gpio_pin); return ret; }
     ret = register_netfilter_hook();

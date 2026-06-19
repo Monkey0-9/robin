@@ -1,6 +1,4 @@
-use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::mem::MaybeUninit;
 
 #[repr(C, align(64))]
 pub struct ShmHeader {
@@ -48,7 +46,7 @@ unsafe impl Sync for ShmBridge {}
 
 impl ShmBridge {
     pub fn new(path: &str, create: bool) -> Result<Self, String> {
-        let shm_size = std::mem::size_of::<ShmHeader>() + SHM_CAPACITY * SHM_MSG_SIZE;
+        let _shm_size = std::mem::size_of::<ShmHeader>() + SHM_CAPACITY * SHM_MSG_SIZE;
 
         #[cfg(target_os = "linux")]
         {
@@ -137,7 +135,7 @@ impl ShmBridge {
 
         let slot = (write_idx & (SHM_CAPACITY as u64 - 1)) as usize;
         unsafe {
-            ptr::write_volatile(&mut (*self.ring.add(slot)), *msg);
+            std::ptr::copy_nonoverlapping(msg as *const ShmMessage, self.ring.add(slot), 1);
             std::sync::atomic::fence(Ordering::Release);
             header.write_idx.store(write_idx + 1, Ordering::Release);
         }
@@ -156,7 +154,7 @@ impl ShmBridge {
 
         let slot = (read_idx & (SHM_CAPACITY as u64 - 1)) as usize;
         unsafe {
-            *msg = ptr::read_volatile(&*self.ring.add(slot));
+            std::ptr::copy_nonoverlapping(self.ring.add(slot), msg as *mut ShmMessage, 1);
             std::sync::atomic::fence(Ordering::Acquire);
             header.read_idx.store(read_idx + 1, Ordering::Release);
         }
@@ -187,7 +185,7 @@ impl ShmBridge {
         header.write_idx.load(Ordering::Relaxed) - header.read_idx.load(Ordering::Relaxed)
     }
 
-    pub fn unlink(path: &str) {
+    pub fn unlink(_path: &str) {
         #[cfg(target_os = "linux")]
         {
             let cpath = std::ffi::CString::new(path).unwrap();
@@ -209,9 +207,11 @@ impl Drop for ShmBridge {
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn test_shm_bridge() {
         let path = "/robin_risk_test";
         let mut bridge = ShmBridge::new(path, true).unwrap();

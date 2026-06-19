@@ -1,43 +1,23 @@
-# Build artifacts
 build/
+build_cpp_dir/
+_build/
+target/
 *.exe
 *.o
 *.obj
-*.lib
-*.dll
-*.so
-*.dylib
-
-# Language build directories
-target/
-_build/
-_build-default/
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-.pytest_cache/
-
-# Node / Frontend
-node_modules/
-.next/
-.cache/
-
-# Coverage
-.coverage
-.coverage.*
-
-# Runtime
+*.log
+*.pid
+*.bak
+*.swp
+*~
 logs/
 pids/
-*.pid
-*.log
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Environment (contains secrets)
+.vs/
 .env
-*.local
+build_cpp_dir/
+.vscode/settings.json
+*.user
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile

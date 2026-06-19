@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct RiskCircuitBreaker {
     tripped: AtomicBool,
     daily_drawdown_limit: f64,
-    current_drawdown: f64,
+    current_drawdown: AtomicU64,
     peak_equity: AtomicU64,
     current_equity: AtomicU64,
     trip_time_ns: AtomicU64,
@@ -17,7 +17,7 @@ impl RiskCircuitBreaker {
         Self {
             tripped: AtomicBool::new(false),
             daily_drawdown_limit,
-            current_drawdown: 0.0,
+            current_drawdown: AtomicU64::new(0),
             peak_equity: AtomicU64::new(0),
             current_equity: AtomicU64::new(0),
             trip_time_ns: AtomicU64::new(0),
@@ -27,7 +27,7 @@ impl RiskCircuitBreaker {
     }
 
     #[inline(always)]
-    pub fn check_drawdown(&mut self, peak_equity: f64, current_equity: f64) -> bool {
+    pub fn check_drawdown(&self, peak_equity: f64, current_equity: f64) -> bool {
         if self.tripped.load(Ordering::Relaxed) {
             return true;
         }
@@ -36,8 +36,9 @@ impl RiskCircuitBreaker {
         self.current_equity.store(current_equity.to_bits(), Ordering::Relaxed);
 
         if peak_equity > 0.0 {
-            self.current_drawdown = (peak_equity - current_equity) / peak_equity;
-            if self.current_drawdown >= self.daily_drawdown_limit {
+            let dd_bps = (((peak_equity - current_equity) / peak_equity) * 10000.0) as u64;
+            self.current_drawdown.store(dd_bps, Ordering::Relaxed);
+            if (dd_bps as f64 / 10000.0) >= self.daily_drawdown_limit {
                 self.trip("DAILY_DRAWDOWN_LIMIT_EXCEEDED");
                 return true;
             }
@@ -69,11 +70,11 @@ impl RiskCircuitBreaker {
         self.tripped.load(Ordering::Acquire)
     }
 
-    pub fn get_stats(&self) -> (u64, u64, f64) {
+    pub fn get_stats(&self) -> (u64, u64, u64) {
         (
             self.trip_count.load(Ordering::Relaxed),
             self.reset_count.load(Ordering::Relaxed),
-            self.current_drawdown,
+            self.current_drawdown.load(Ordering::Relaxed),
         )
     }
 }
@@ -84,7 +85,7 @@ mod tests {
 
     #[test]
     fn test_circuit_breaker() {
-        let mut cb = RiskCircuitBreaker::new(0.10);
+        let cb = RiskCircuitBreaker::new(0.10);
 
         assert!(!cb.check_drawdown(1000.0, 950.0));
         assert!(!cb.is_tripped());

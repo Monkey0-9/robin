@@ -1,197 +1,113 @@
 # Robin Trading Platform
 
-Ultra-low latency quantitative trading system.
+Research prototype for ultra-low latency quantitative trading concepts.
+
+> [!WARNING]
+> **DISCLAIMER: This is a research prototype / proof-of-concept. It is NOT production-ready and must NOT be used for live trading.**
+> - No active regulatory compliance (SEC 15c3-5, MiFID II, FINRA 3110 are unimplemented design targets)
+> - No production security (TLS, mTLS, HSM, Vault are unimplemented)
+> - FPGA acceleration is a software simulation (memcpy-based, not synthesized hardware)
+> - All latency figures are aspirational targets, not measured results
+> - Many components are placeholders, stubs, or incomplete
+
+## Current State
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| C++ Matching Engine | ⚠️ Prototype | Basic FIFO matching, heap alloc on hot path, no price-time priority |
+| Rust Risk Gate | ⚠️ Prototype | Functional pre-trade checks, some race conditions, HashMap→ring buffer conversion needed |
+| Network Ingestion | ⚠️ Prototype | Socket-based UDP multicast + ITCH parser works; no DPDK kernel bypass |
+| FPGA Emulator | ⚠️ Software Sim | memcpy-based simulation, not actual Xilinx hardware |
+| OCaml Portfolio | ✅ Functional | Gradient descent optimizer, valid VaR/Sharpe computation |
+| Go Orchestrator | ✅ Functional | HTTP server with health checks, service registry, config hot-reload |
+| KDB+ Storage | ⚠️ Basic Schema | Table definitions only, no production TP/RDB/HDB architecture |
+| Kernel Module | ⚠️ Basic | GPIO kill switch works, uses deprecated gpio_to_irq API |
+| AI/ONNX Inference | 🔴 Missing | CMakeLists references non-existent file |
+| Compliance Module | 🔴 Empty | Directory exists, no source code |
+| Security | 🔴 Missing | No TLS, auth, encryption, or secrets management |
 
 ## Architecture
 
 ```
- ┌────────────────────────────────────────────────────────────────────┐
- │                        HOT PATH (<500ns)                          │
- │                                                                    │
- │  [Network] ──DPDK──> [Shared Memory Ring Buffer 1]                  │
- │   (C++ DPDK)         (mmap, cache-aligned, Cap'n Proto)             │
- │                           │                                         │
- │                           v                                         │
- │                      [Risk Gate]                                    │
- │                       (Rust)                                        │
- │                       - Hard blocks: <100ns                        │
- │                       - Soft blocks: <100ns                        │
- │                       - bumpalo allocator (zero-heap)              │
- │                           │                                         │
- │                           v                                         │
- │                      [Shared Memory Ring Buffer 2]                  │
- │                           │                                         │
- │                           v                                         │
- │                      [Matching Engine]                              │
- │                       (OCaml)                                       │
- │                       - Bigarray order book (off-heap)             │
- │                       - Custom GC tuning (8MB minor heap)          │
- │                       - Branchless pattern matching                │
- │                           │                                         │
- │                           v                                         │
- │                      [Shared Memory Ring Buffer 3]                  │
- └────────────────────────────────────────────────────────────────────┘
-         │
-         v
- ┌────────────────────────────────────────────────────────────────────┐
- │                        WARM PATH (1-10ms)                          │
- │                                                                    │
- │  [KDB+ Tick DB] ← Aeron IPC ← Shared Memory Ring Buffer 3         │
- │   (Post-trade capture, NOT hot path)                              │
- │                                                                    │
- │  [OCaml Portfolio Optimization]  (Jane Street Core style)          │
- │  [Go Orchestrator]              (Health checks, config mgmt)      │
- └────────────────────────────────────────────────────────────────────┘
-         │
-         v
- ┌────────────────────────────────────────────────────────────────────┐
- │                        COLD PATH (offline/batch)                   │
- │                                                                    │
- │  [Python]  ML research, backtesting (PyTorch)                      │
- │  [R]       Statistical analysis, regulatory reporting              │
- │  [ONNX]    Pre-computed alpha signals (updated every 1-10ms)      │
- │  [KDB+ HDB] Historical partitioned database                        │
- └────────────────────────────────────────────────────────────────────┘
+ ┌─────────────────────────────────────────────────────┐
+ │                     HOT PATH                         │
+ │                                                      │
+ │ [Network Ingestion] (C++, UDP multicast)            │
+ │         ↓                                           │
+ │ [Shared Memory Ring Buffer] (mmap SPSC)             │
+ │         ↓                                           │
+ │ [Risk Gate] (Rust - pre-trade checks)               │
+ │         ↓                                           │
+ │ [Shared Memory Ring Buffer] (mmap SPSC)             │
+ │         ↓                                           │
+ │ [Matching Engine] (C++ - order matching)            │
+ └─────────────────────────────────────────────────────┘
+         ↓
+ ┌─────────────────────────────────────────────────────┐
+ │                    WARM PATH                         │
+ │                                                      │
+ │ [KDB+ Tick DB] (Q - post-trade analytics)           │
+ │ [OCaml Portfolio] (Gradient descent optimization)   │
+ │ [Go Orchestrator] (Health checks, config mgmt)      │
+ └─────────────────────────────────────────────────────┘
+         ↓
+ ┌─────────────────────────────────────────────────────┐
+ │                    COLD PATH                         │
+ │                                                      │
+ │ [Python] Backtesting, model validation               │
+ │ [R] Statistical analysis, regulatory reporting       │
+ └─────────────────────────────────────────────────────┘
 ```
-
-## Language Boundaries (Zero FFI on Hot Path)
-
-All IPC between hot-path services uses **shared memory (mmap)** with lock-free SPSC queues — NOT FFI calls:
-
-| Boundary | Mechanism | Latency |
-|----------|-----------|---------|
-| C++ Network → Rust Risk | mmap ring buffer (Cap'n Proto) | <50ns |
-| Rust Risk → OCaml Match | mmap ring buffer (Cap'n Proto) | <50ns |
-| OCaml Match → KDB+ | Aeron IPC | <100ns |
-
-## Performance Targets
-
-| Metric | Target | Measurement Method |
-|--------|--------|-------------------|
-| Network RX (DPDK burst) | <100ns | RDTSCP + hardware timestamps |
-| Risk Gate (hard blocks) | <100ns | HdrHistogram (p50/p99/p999) |
-| Risk Gate (soft blocks) | <100ns | HdrHistogram (p50/p99/p999) |
-| Matching Engine | <300ns | HdrHistogram (p50/p99/p999) |
-| IPC (mmap SPSC) | <50ns | RDTSCP before/after push/pop |
-| End-to-End (p50) | <300ns | Aggregated HdrHistogram |
-| End-to-End (p99) | <800ns | Aggregated HdrHistogram |
-| End-to-End (p999) | <1.5μs | Aggregated HdrHistogram |
-| Throughput | 1M+ orders/sec | Sustained 24-hour load test |
-| Availability | 99.999% | 5.26 min/year downtime |
-
-**IMPORTANT**: All latency figures are **targets** measured under controlled conditions (specified hardware, sustained 1M msg/sec load). See `docs/PERFORMANCE.md` for full methodology, hardware specifications, and 90-day validation results.
-
-## Stack
-
-| Layer | Language | Technology | Notes |
-|-------|----------|------------|-------|
-| Network RX | C++20 | DPDK 23.11+ | Intel E810-CQDA2 (100GbE) |
-| Risk Gate | Rust | crossbeam SPSC, bumpalo | Zero-heap after init |
-| Matching Engine | OCaml | Bigarray, custom GC | Off-heap order book |
-| FPGA Accel | Vitis HLS | Xilinx Alveo U50 (SIMULATION) | Software simulation for dev |
-| Portfolio Opt | OCaml | Pre-computed signals | Warm path only |
-| Tick DB | Q/KDB+ | Aeron IPC subscriber | Post-trade analytics |
-| Orchestration | Go | gorilla/mux, Prometheus | Health checks, config |
-| Analytics | R | GARCH, VaR | Regulatory reports |
-| ML Research | Python | PyTorch | Cold path (offline) |
-| UI | TypeScript/Rust | Next.js, Tauri, WebGL2 | Trader dashboard |
 
 ## Build & Run
 
 ```bash
-# Full build (Linux with DPDK, Rust, OCaml toolchains)
-make all
+# Prerequisites: g++-12+, rustc 1.78+, Go 1.22+, OCaml 5.1+, Python 3.11+
+make build-cpp    # Build C++ matching engine + pricing
+make build-rust   # Build Rust risk gate
+make build-go     # Build Go orchestrator
+make build        # Build all available services
 
-# Run latency benchmark with HdrHistogram
-make benchmark
-
-# Run HdrHistogram-based latency validation (1M iterations)
-./build/order_book_benchmark 1000000 100000
-
-# Run chaos engineering tests
-make chaos
-
-# Start services (production)
-sudo ./scripts/start_native.sh
+# Run individual components
+./services/execution-core/build/matching_engine
+./services/gateway/orchestrator
 ```
 
-## Latency Measurement Methodology
+## Key Limitations
 
-- **Tool**: Custom HdrHistogram implementation (nanosecond resolution)
-- **Metrics**: p50, p90, p95, p99, p99.9, p99.99, p99.999, mean, max
-- **Clock**: RDTSCP with invariant TSC, calibrated against PTP
-- **Hardware Timestamps**: NIC-assisted (DPDK `rte_eth_read_clock`)
-- **Warmup**: 100k iterations before measurement
-- **Sample Size**: 1M+ iterations per run
-- **Sustained Load**: 1M+ msg/sec for 24 hours
-- **Regression Detection**: Automated CI/CD (5% p99 increase = FAIL)
+- No real DPDK kernel bypass (requires Intel E810 hardware + DPDK 23.11+)
+- No actual FPGA synthesis (requires Xilinx Alveo U50 + Vitis HLS)
+- No production compliance (SEC 15c3-5, MiFID II RTS 25 are unimplemented)
+- No security (TLS, mTLS, HSM, Vault are design targets only)
+- No horizontal scaling or failover
+- No observability stack (logging, metrics, tracing are absent)
+- No integration tests (components never tested together end-to-end)
 
-### Hardware Specifications (Benchmark Environment)
+## Compliance & Security Status
 
-| Component | Specification |
-|-----------|--------------|
-| CPU | Intel Xeon 8480+ (Sapphire Rapids), 56C/112T |
-| CPU Freq | 3.5GHz base, Turbo Boost DISABLED |
-| NIC | Intel E810-CQDA2 (100GbE), firmware v4.2 |
-| Memory | 512GB DDR5-4800 (12x32GB), NUMA node 0 |
-| OS | RHEL 9.2 RT (PREEMPT_RT), kernel 6.5.7-rt14 |
-| PTP | Oscilloquartz OSA 5430, <100ns to UTC |
-| Compiler | g++ 13.2.1, rustc 1.78.0, ocamlopt 5.1.1 |
+- **SEC Rule 15c3-5**: Design specification only, NOT implemented
+- **MiFID II RTS 25**: Clock sync targets are speculative, NOT configured
+- **FINRA Rule 3110**: NOT implemented
+- **SOC 2 Type II**: NOT implemented
+- **TLS 1.3 / mTLS**: NOT implemented
+- **HSM / Vault**: NOT implemented
+- **Authentication / Authorization**: NOT implemented
 
-## Shared Memory IPC (mmap Ring Buffer)
-
-```cpp
-// services/shared/ipc/lockfree_ring_buffer.hpp
-// Cache-line aligned SPSC ring buffer over mmap
-// Used for all inter-service communication on hot path
-```
-
-### Protocol: Cap'n Proto (Zero-Copy Serialization)
-
-All hot-path messages use Cap'n Proto for zero-copy serialization/deserialization. Schema files in `services/shared/schemas/`.
-
-## FPGA Acceleration
-
-The FPGA emulator in `services/hardware-fpga/` is a **software simulation layer** for development and testing. Production deployment requires actual Xilinx Alveo U50 hardware with Vitis HLS kernel synthesis.
-
-## Compliance
-
-- **SEC Rule 15c3-5**: Complete hard/soft block architecture
-  - Hard blocks (immutable): Order size limits, price collars, credit limits, symbol restrictions, duplicate detection
-  - Soft blocks (configurable): Position limits, velocity limits, concentration limits
-  - CEO annual certification workflow (DocuSign integration)
-  - Third-party independence verification
-  - Immutable audit log (SHA-256 chained)
-- **MiFID II RTS 25**: PTP clock synchronization (<100ns to UTC)
-- **FINRA Rule 3110**: Immediate execution reporting
-- **SOC 2 Type II**: Security, availability, confidentiality
-
-## Hot Path Language Strategy
-
-| Language | Role | GC? | Heap Allocation? |
-|----------|------|-----|------------------|
-| C++ | Network RX (DPDK) | No | Placement new, object pools |
-| Rust | Risk Gate | No | bumpalo arena, pre-allocated |
-| OCaml | Matching Engine | Yes (tuned) | Bigarray (off-heap) |
-
-**Key Principle**: Zero FFI calls on hot path. Zero heap allocation after initialization. All IPC via shared memory (mmap).
-
-## Directory Structure
+## Project Structure
 
 ```
 services/
-├── execution-core/        # C++20 matching engine, lock-free queues
-│   └── bench/             # HdrHistogram latency benchmarks
-├── network-bridge/        # DPDK kernel bypass (Intel E810)
-├── ingestion/             # ITCH/OUCH parser (AVX-512 SIMD)
-├── hardware-fpga/         # Xilinx Alveo simulation (Vitis HLS kernel)
-├── risk-analytics/        # Rust SEC 15c3-5 risk gate
-├── gateway/               # Go orchestrator
-├── compliance/            # OCaml + Rust compliance rules
-├── portfolio/             # OCaml portfolio optimization
-├── strategy-engine/       # Python backtesting, R analytics
-├── pricing/               # Monte Carlo options (C++)
-├── ai-engine/             # ONNX inference (C++, COLD path only)
-├── kdb-storage/          # Q/KDB+ tick database (WARM path)
-└── kernel/               # GPIO kill switch kernel module
+├── execution-core/        C++20 matching engine, lock-free SPSC queues
+├── network-bridge/        DPDK kernel bypass stubs (placeholder)
+├── ingestion/             UDP multicast ITCH/OUCH parser
+├── hardware-fpga/         Xilinx Alveo software simulation (Vitis HLS kernel code)
+├── risk-analytics/        Rust pre-trade risk gate
+├── gateway/               Go orchestrator with HTTP API
+├── compliance/            EMPTY - compliance module shell
+├── portfolio/             OCaml portfolio optimization
+├── strategy-engine/       Python backtesting, R analytics
+├── pricing/               Monte Carlo options pricing (C++)
+├── ai-engine/             ML model validation (Python), ONNX stub (C++)
+├── kdb-storage/           Q/KDB+ tick database schemas
+└── kernel/                GPIO kill switch kernel module
 ```

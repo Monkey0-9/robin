@@ -1,6 +1,7 @@
 // services/risk-analytics/src/TaxEngine.rs
-// Rust Tax-Loss Harvesting Engine & 1099-B Broker Transaction Log Generator.
-// Reference: Vanguard Digital Advisor (tax-loss harvesting) & Fidelity (1099-B forms).
+// Tax-Loss Harvesting & 1099-B Report Generator
+// NOTE: This is a retail/wealth-management feature, NOT core HFT functionality.
+// Included as a warm-path reporting utility. Not on the hot trading path.
 
 #[derive(Debug, Clone)]
 pub struct Lot {

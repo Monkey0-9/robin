@@ -9,6 +9,7 @@
 #include <thread>
 #include <chrono>
 #include <new>
+#include <memory>
 
 #include "../src/order_book.hpp"
 #include "../src/lockfree_queue.hpp"
@@ -126,6 +127,7 @@ void producer_thread(LockFreeSPSCQueue<Order, 65536>& queue, uint64_t count) noe
     order.instrument_id = 1;
     order.side = Side::BID;
     order.state = OrderState::NEW;
+    order.type = OrderType::LIMIT;
 
     for (uint64_t i = 0; i < count; ++i) {
         order.id = i + 1;
@@ -143,8 +145,7 @@ void producer_thread(LockFreeSPSCQueue<Order, 65536>& queue, uint64_t count) noe
 void consumer_thread(OrderBook** books, LockFreeSPSCQueue<Order, 65536>& inbound,
                      LockFreeSPSCQueue<Trade, 65536>& outbound, uint64_t count) noexcept {
     Order order;
-    std::vector<Trade> trades_batch;
-    trades_batch.reserve(64);
+    FixedVector<Trade, 64> trades_batch;
 
     for (uint64_t i = 0; i < count; ++i) {
         while (!inbound.pop(order)) {
@@ -160,8 +161,8 @@ void consumer_thread(OrderBook** books, LockFreeSPSCQueue<Order, 65536>& inbound
         const uint64_t latency = rdtscp_bench() - start;
         match_latency.record_value(latency);
 
-        for (const auto& trade : trades_batch) {
-            while (!outbound.push(trade)) {
+        for (size_t idx = 0; idx < trades_batch.size(); ++idx) {
+            while (!outbound.push(trades_batch[idx])) {
                 __asm__ __volatile__("pause" ::: "memory");
             }
         }
@@ -185,14 +186,14 @@ int main(int argc, char** argv) {
         books[i] = new OrderBook(i);
     }
 
-    ALIGN_PAD_64 LockFreeSPSCQueue<Order, 65536> inbound;
-    ALIGN_PAD_64 LockFreeSPSCQueue<Trade, 65536> outbound;
+    auto inbound = std::make_unique<LockFreeSPSCQueue<Order, 65536>>();
+    auto outbound = std::make_unique<LockFreeSPSCQueue<Trade, 65536>>();
 
     cpuid_bench();
 
     printf("Warmup: %llu iterations...\n", (unsigned long long)warmup);
-    std::thread prod_warm(producer_thread, std::ref(inbound), warmup);
-    std::thread cons_warm(consumer_thread, books, std::ref(inbound), std::ref(outbound), warmup);
+    std::thread prod_warm(producer_thread, std::ref(*inbound), warmup);
+    std::thread cons_warm(consumer_thread, books, std::ref(*inbound), std::ref(*outbound), warmup);
     prod_warm.join();
     cons_warm.join();
 
@@ -202,8 +203,8 @@ int main(int argc, char** argv) {
     printf("Benchmark: %llu iterations...\n", (unsigned long long)num_orders);
     auto bench_start = std::chrono::high_resolution_clock::now();
 
-    std::thread prod(producer_thread, std::ref(inbound), num_orders);
-    std::thread cons(consumer_thread, books, std::ref(inbound), std::ref(outbound), num_orders);
+    std::thread prod(producer_thread, std::ref(*inbound), num_orders);
+    std::thread cons(consumer_thread, books, std::ref(*inbound), std::ref(*outbound), num_orders);
     prod.join();
     cons.join();
 

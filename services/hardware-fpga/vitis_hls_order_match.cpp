@@ -78,9 +78,9 @@ void order_match_kernel(
     result.sell_order_id = 0;
 
     if (op == 1 && bid_price >= ask_price) {
-        for (depth_t i = 0; i < ask_count; i++) {
+        for (depth_t i = 0; i < MAX_BOOK_DEPTH; i++) {
 #pragma HLS UNROLL
-            if (ask_book[i].active && ask_book[i].price <= bid_price) {
+            if (i < ask_count && ask_book[i].active && ask_book[i].price <= bid_price) {
                 qty_t match_qty = (bid_qty < ask_book[i].qty) ? bid_qty : ask_book[i].qty;
                 result.matched = 1;
                 result.buy_order_id = ord_id;
@@ -95,9 +95,9 @@ void order_match_kernel(
             }
         }
     } else if (op == 2 && ask_price <= bid_price) {
-        for (depth_t i = 0; i < bid_count; i++) {
+        for (depth_t i = 0; i < MAX_BOOK_DEPTH; i++) {
 #pragma HLS UNROLL
-            if (bid_book[i].active && bid_book[i].price >= ask_price) {
+            if (i < bid_count && bid_book[i].active && bid_book[i].price >= ask_price) {
                 qty_t match_qty = (ask_qty < bid_book[i].qty) ? ask_qty : bid_book[i].qty;
                 result.matched = 1;
                 result.buy_order_id = bid_book[i].order_id;

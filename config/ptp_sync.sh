@@ -156,7 +156,7 @@ trap cleanup EXIT
 
 log "============================================"
 log "  PTP Clock Sync (IEEE 1588v2)"
-log "  Target: <100ns to UTC (MiFID II RTS 25)"
+log "  Target: <100ns to UTC (MiFID II RTS 25 Target Specification)"
 log "============================================"
 
 check_hardware

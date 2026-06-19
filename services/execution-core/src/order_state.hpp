@@ -28,6 +28,13 @@ enum class Side : uint8_t {
     ASK = 1
 };
 
+enum class OrderType : uint8_t {
+    LIMIT = 0,
+    MARKET = 1,
+    IOC = 2,
+    FOK = 3
+};
+
 struct Order {
     uint64_t id;
     uint32_t price;       // Scaled (e.g., *10000)
@@ -36,7 +43,9 @@ struct Order {
     uint32_t client_id;
     Side side;
     OrderState state;
+    OrderType type;
 };
+
 
 struct Trade {
     uint64_t trade_id;

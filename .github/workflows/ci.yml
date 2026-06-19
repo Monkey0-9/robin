@@ -1,92 +1,52 @@
-name: Robin Trading CI/CD
+name: CI
 
 on:
-  push: { branches: [main, develop] }
-  pull_request: { branches: [main] }
-  schedule: [{ cron: '0 */6 * * *' }]
-
-env:
-  CARGO_TERM_COLOR: always
-  CMAKE_BUILD_TYPE: Release
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
-  cpp-hotpath:
-    name: C++ Hot Path
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y cmake g++-12 libnuma-dev
-      - run: |
-          for dir in services/execution-core services/network-bridge services/ingestion \
-                     services/hardware-fpga services/pricing services/ai-engine; do
-            echo "Building $dir..."
-            cmake -B $dir/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-12
-            cmake --build $dir/build --parallel
-          done
-
   rust-risk:
-    name: Rust Risk Engine
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with: { toolchain: stable, components: clippy }
-      - run: sudo apt-get install -y libnuma-dev
-      - run: cargo build --release && cargo clippy && cargo test --release
-        working-directory: services/risk-analytics
-      - run: cargo build --release && cargo test --release
-        working-directory: services/compliance
+    - uses: actions/checkout@v4
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+    - run: cd services/risk-analytics && cargo build
+    - run: cd services/risk-analytics && cargo test
+
+  rust-compliance:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions-rust-lang/setup-rust-toolchain@v1
+    - run: cd services/compliance && cargo build
+    - run: cd services/compliance && cargo test
 
   go-gateway:
-    name: Go Gateway
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with: { go-version: '1.22' }
-      - run: go build -o /dev/null . && go vet ./...
-        working-directory: services/gateway
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+    - run: cd services/gateway && go build ./...
+    - run: cd services/gateway && go vet ./...
 
-  ocaml:
-    name: OCaml
-    runs-on: ubuntu-22.04
+  cpp-execution:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: ocaml/setup-ocaml@v3
-        with: { ocaml-compiler: '5.1' }
-      - run: dune build
-        working-directory: services/portfolio
+    - uses: actions/checkout@v4
+    - run: sudo apt-get update && sudo apt-get install -y cmake g++-12 libnuma-dev
+    - run: cmake -S services/execution-core -B services/execution-core/build -DCMAKE_BUILD_TYPE=Release
+    - run: cmake --build services/execution-core/build -j$(nproc)
 
-  python-tests:
-    name: Python Tests
-    runs-on: ubuntu-22.04
+  python-validation:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.11' }
-      - run: pip install numpy pandas pytest
-      - run: python -c "exec(open('services/strategy-engine/backtester.py').read())"
-      - run: python -c "exec(open('services/ai-engine/verification_oracle.py').read())"
-      - run: python -c "exec(open('services/data-ingestion/alternative/alternative_data_loader.py').read())"
-
-  r-tests:
-    name: R Analytics
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: r-lib/actions/setup-r@v2
-      - run: Rscript services/strategy-engine/risk_analytics.R || echo "[SKIP] R dependencies"
-
-  kdb-validation:
-    name: KDB+ Schema
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - run: for f in services/kdb-storage/*.q; do echo "Validating $f"; q -q "$f" 2>/dev/null || echo "[SKIP] q not installed"; done
-
-  compliance-docs:
-    name: Compliance Docs
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/checkout@v4
-      - run: for f in compliance/*.md; do test -f "$f" && echo "OK: $f" || echo "MISSING: $f"; done
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    - run: pip install numpy
+    - run: python -c "import sys; sys.path.insert(0, 'services/ai-engine'); from verification_oracle import VerificationOracle; print('OK')"

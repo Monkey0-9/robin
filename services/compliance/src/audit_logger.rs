@@ -1,5 +1,5 @@
 use sha2::{Sha256, Digest};
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::Write;
 
 #[derive(Debug, Clone)]
@@ -99,7 +99,8 @@ mod tests {
 
     #[test]
     fn test_audit_logging() {
-        let path = "/tmp/robin_audit_test.log";
+        let path = "robin_audit_test.log";
+        fs::remove_file(path).ok();
         let mut logger = AuditLogger::new(path);
 
         let record = AuditRecord {

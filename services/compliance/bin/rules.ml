@@ -110,7 +110,7 @@ let parse_and_check config line =
       Printf.printf "[COMPLIANCE] Invalid format: %s\n%!" line
 
 let () =
-  print_endline "[Pre-Trade Compliance] v1.0.0 | SEC 15c3-5 | MiFID II | Engine Online";
+  print_endline "[Pre-Trade Compliance] v1.0.0 | Prototype | Engine Online";
 
   let config = default_config in
   let total_aum = 36000000.0 in
