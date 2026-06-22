@@ -5,6 +5,8 @@ pub mod risk_gate_fast;
 pub mod hedging;
 pub mod pre_trade;
 pub mod circuit_breaker;
+pub mod config;
+pub mod metrics;
 
 #[path = "TaxEngine.rs"]
 pub mod tax_engine;

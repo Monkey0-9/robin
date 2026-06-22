@@ -1,13 +1,19 @@
 build/
-build_cpp_dir/
 _build/
 target/
+# Backup files (never commit editor backup artifacts)
+*.q~
+*~
+*.orig
+*.bak
+*.swp
+*.swo
+\#*\#
 *.exe
 *.o
 *.obj
 *.log
 *.pid
-*.bak
 *.swp
 *~
 logs/

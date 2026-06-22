@@ -46,7 +46,9 @@ unsafe impl Sync for ShmBridge {}
 
 impl ShmBridge {
     pub fn new(path: &str, create: bool) -> Result<Self, String> {
-        let _shm_size = std::mem::size_of::<ShmHeader>() + SHM_CAPACITY * SHM_MSG_SIZE;
+        let shm_size = std::mem::size_of::<ShmHeader>() + SHM_CAPACITY * SHM_MSG_SIZE;
+        #[cfg(not(target_os = "linux"))]
+        let _ = shm_size; // Used only on Linux for ftruncate
 
         #[cfg(target_os = "linux")]
         {
