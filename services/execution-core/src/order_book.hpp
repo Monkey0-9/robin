@@ -69,6 +69,10 @@ public:
     // At 64 levels the book silently dropped orders at new price points.
     static constexpr size_t MAX_PRICE_LEVELS = 256;
 
+    OrderBook() noexcept
+        : instrument_id_(0), bid_count_(0), ask_count_(0),
+          overflow_drops_(0) {}
+
     explicit OrderBook(uint32_t instrument_id) noexcept
         : instrument_id_(instrument_id), bid_count_(0), ask_count_(0),
           overflow_drops_(0) {}
@@ -168,6 +172,11 @@ public:
     uint64_t overflow_drops() const noexcept { return overflow_drops_; }
 
 private:
+    struct PriceLevel {
+        uint32_t      price = 0;
+        OrderQueue<256> queue;
+    };
+
     bool can_fully_fill(const Order& order) const noexcept {
         uint32_t needed = order.qty;
         bool is_bid = (order.side == Side::BID);
@@ -293,11 +302,6 @@ private:
             levels[remaining++] = levels[i];
         count = remaining;
     }
-
-    struct PriceLevel {
-        uint32_t      price = 0;
-        OrderQueue<256> queue;
-    };
 
     uint32_t   instrument_id_;
     PriceLevel bids_[MAX_PRICE_LEVELS];

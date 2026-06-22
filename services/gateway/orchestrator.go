@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"sync"
 	"sync/atomic"
+	"strings"
 	"syscall"
 	"time"
 
@@ -305,6 +306,19 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// jwtAuthMiddleware enforces a Bearer token for sensitive endpoints
+func jwtAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+			http.Error(w, `{"error":"unauthorized: missing or invalid bearer token"}`, http.StatusUnauthorized)
+			return
+		}
+		// In a production environment, validate the JWT signature here.
+		next.ServeHTTP(w, r)
+	})
+}
+
 // ============================================================================
 // HTTP Server Setup
 // ============================================================================
@@ -333,7 +347,8 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		json.NewEncoder(w).Encode(o.GetConfig())
 	}).Methods("GET")
 
-	r.HandleFunc("/config", func(w http.ResponseWriter, req *http.Request) {
+	// Apply JWT auth middleware only to POST /config
+	r.Handle("/config", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		var body map[string]interface{}
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -348,7 +363,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"status": "reloaded"})
-	}).Methods("POST")
+	}))).Methods("POST")
 
 	r.Handle("/metrics", promhttp.Handler())
 

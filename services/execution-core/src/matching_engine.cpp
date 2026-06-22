@@ -7,6 +7,7 @@
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 
 #if defined(_WIN32)
 #include <malloc.h>
@@ -146,21 +147,21 @@ private:
 
 int main() {
     using namespace quantum::execution;
-    MatchingEngine engine;
-    engine.init(0, 2);
-    engine.start();
+    auto engine = std::make_unique<MatchingEngine>();
+    engine->init(0, 2);
+    engine->start();
     Order order;
     std::memset(&order, 0, sizeof(order));
     order.id = 1; order.price = 500000; order.qty = 100;
     order.instrument_id = 1; order.side = Side::BID;
     order.state = OrderState::NEW;
     order.type = OrderType::LIMIT;
-    engine.submit_order(order);
-    for (int i = 0; i < 1000000 && engine.stats().orders_submitted == 0 && engine.stats().orders_rejected == 0; ++i) {
+    engine->submit_order(order);
+    for (int i = 0; i < 1000000 && engine->stats().orders_submitted == 0 && engine->stats().orders_rejected == 0; ++i) {
         std::this_thread::yield();
     }
-    engine.stop();
-    const auto& s = engine.stats();
+    engine->stop();
+    const auto& s = engine->stats();
     std::printf("[ENGINE] Orders=%llu Trades=%llu Rejected=%llu AvgLat=%llu ns\n",
            (unsigned long long)s.orders_submitted, (unsigned long long)s.trades_executed,
            (unsigned long long)s.orders_rejected,

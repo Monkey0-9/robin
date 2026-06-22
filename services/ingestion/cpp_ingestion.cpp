@@ -386,7 +386,13 @@ int main() {
     }
 
     pipeline.start_ingestion();
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    std::printf("[INGESTION] Pipeline running. Press Ctrl+C to stop.\n");
+
+    // Run indefinitely until interrupted
+    while (true) {
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
     pipeline.stop_ingestion();
 
     const auto& s = pipeline.stats();

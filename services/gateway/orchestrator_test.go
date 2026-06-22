@@ -146,6 +146,7 @@ func TestConfigPostEndpoint(t *testing.T) {
 	body := `{"max_drawdown_limit":0.15,"max_order_rate":2000}`
 	req := httptest.NewRequest("POST", "/config", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer valid-dummy-jwt-token")
 	w := httptest.NewRecorder()
 	srv.Handler.ServeHTTP(w, req)
 
@@ -155,6 +156,20 @@ func TestConfigPostEndpoint(t *testing.T) {
 	cfg := orch.GetConfig()
 	if cfg.MaxDrawdownLimit != 0.15 {
 		t.Errorf("config not updated: expected 0.15, got %f", cfg.MaxDrawdownLimit)
+	}
+}
+
+func TestConfigPostEndpoint_Unauthorized(t *testing.T) {
+	orch := newTestOrch()
+	srv := orch.setupHTTPServer(0)
+	body := `{"max_drawdown_limit":0.15,"max_order_rate":2000}`
+	req := httptest.NewRequest("POST", "/config", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	srv.Handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d\nbody: %s", w.Code, w.Body.String())
 	}
 }
 
