@@ -19,6 +19,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/rs/cors"
 )
 
 // ============================================================================
@@ -387,6 +388,15 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 
 	// Apply middleware chain: requestID → rateLimit → router
 	handler := requestIDMiddleware(rateLimitMiddleware(1000, r))
+
+	// Apply CORS
+	c := cors.New(cors.Options{
+		AllowedOrigins:   []string{"http://localhost:3000"},
+		AllowCredentials: true,
+		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
+		AllowedHeaders:   []string{"*"},
+	})
+	handler = c.Handler(handler)
 
 	return &http.Server{
 		Addr:         fmt.Sprintf(":%d", port),

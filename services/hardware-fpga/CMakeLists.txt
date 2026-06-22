@@ -7,5 +7,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Actual FPGA acceleration requires Xilinx Alveo U50 + Vitis HLS.
 # The fpga_emulator uses memcpy on regular DRAM - NOT hardware.
 
-add_executable(fpga_simulator src/fpga_emulator.cpp)
-target_include_directories(fpga_simulator PRIVATE src)
+add_executable(fpga_simulator fpga_emulator.cpp)
+target_include_directories(fpga_simulator PRIVATE .)
+target_compile_definitions(fpga_simulator PRIVATE FPGA_EMULATOR_MAIN)

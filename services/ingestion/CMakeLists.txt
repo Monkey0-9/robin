@@ -9,3 +9,7 @@ set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -mtune=native -flto=auto -fno-exc
 add_executable(cpp_ingestion
     cpp_ingestion.cpp
 )
+
+if(WIN32)
+    target_link_libraries(cpp_ingestion PRIVATE ws2_32)
+endif()
