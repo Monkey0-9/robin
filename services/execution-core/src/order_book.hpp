@@ -28,26 +28,23 @@ public:
     void clear() noexcept { sz = 0; }
 };
 
-struct alignas(64) OrderQueueEntry {
-    Order order;
-};
-
+template <size_t MaxOrders = 128>
 struct alignas(64) OrderQueue {
-    static constexpr size_t MAX_ORDERS = 128;
-    OrderQueueEntry entries[MAX_ORDERS];
+    static_assert((MaxOrders & (MaxOrders - 1)) == 0, "MaxOrders must be a power of 2");
+    Order entries[MaxOrders];
     size_t head = 0;
     size_t tail = 0;
 
     bool push(const Order& o) noexcept {
-        if (tail - head >= MAX_ORDERS) return false;
-        entries[tail & (MAX_ORDERS - 1)].order = o;
+        if (tail - head >= MaxOrders) return false;
+        entries[tail & (MaxOrders - 1)] = o;
         tail++;
         return true;
     }
 
     Order* front() noexcept {
         if (head >= tail) return nullptr;
-        return &entries[head & (MAX_ORDERS - 1)].order;
+        return &entries[head & (MaxOrders - 1)];
     }
 
     void pop_front() noexcept {
@@ -56,6 +53,7 @@ struct alignas(64) OrderQueue {
 
     bool empty() const noexcept { return head >= tail; }
     size_t size() const noexcept { return tail - head; }
+    void clear() noexcept { head = 0; tail = 0; }
 };
 
 static inline uint32_t price_from_order(const Order& o) noexcept {
@@ -77,8 +75,12 @@ public:
     explicit OrderBook(uint32_t instrument_id) noexcept : instrument_id_(instrument_id) {}
 
     void match_order(Order& order, FixedVector<Trade, 64>& trades) noexcept {
-        if (order.type == OrderType::FOK) {
-            if (!can_fully_fill_fok(order)) {
+        if (order.type == OrderType::FOK || order.type == OrderType::IOC) {
+            if (!can_fully_fill(order)) {
+                order.state = OrderState::CANCELED;
+                return;
+            }
+            if (order.type == OrderType::FOK) {
                 order.state = OrderState::CANCELED;
                 return;
             }
@@ -87,7 +89,7 @@ public:
         if (order.side == Side::BID) {
             match_against_side(order, asks_, ask_count_, trades, false);
             if (order.qty > 0) {
-                if (order.type == OrderType::IOC || order.type == OrderType::MARKET || order.type == OrderType::FOK) {
+                if (order.type == OrderType::IOC || order.type == OrderType::MARKET) {
                     order.state = OrderState::CANCELED;
                 } else {
                     order.state = OrderState::WORKING;
@@ -99,7 +101,7 @@ public:
         } else {
             match_against_side(order, bids_, bid_count_, trades, true);
             if (order.qty > 0) {
-                if (order.type == OrderType::IOC || order.type == OrderType::MARKET || order.type == OrderType::FOK) {
+                if (order.type == OrderType::IOC || order.type == OrderType::MARKET) {
                     order.state = OrderState::CANCELED;
                 } else {
                     order.state = OrderState::WORKING;
@@ -112,87 +114,87 @@ public:
     }
 
 private:
-    bool can_fully_fill_fok(const Order& order) const noexcept {
+    bool can_fully_fill(const Order& order) const noexcept {
         uint32_t needed = order.qty;
-        if (order.side == Side::BID) {
-            for (size_t i = 0; i < ask_count_ && needed > 0; i++) {
-                if (order.price < asks_[i].price) break;
-                auto* q = asks_[i].queue;
-                if (!q) continue;
-                auto* o = q->front();
-                while (o && needed > 0) {
-                    uint32_t fill = std::min(needed, o->qty);
-                    needed -= fill;
-                    q->pop_front();
-                    o = q->front();
-                }
-            }
-        } else {
-            for (size_t i = 0; i < bid_count_ && needed > 0; i++) {
-                if (order.price > bids_[i].price) break;
-                auto* q = bids_[i].queue;
-                if (!q) continue;
-                auto* o = q->front();
-                while (o && needed > 0) {
-                    uint32_t fill = std::min(needed, o->qty);
-                    needed -= fill;
-                    q->pop_front();
-                    o = q->front();
-                }
+        bool is_bid = order.side == Side::BID;
+        const auto& levels = is_bid ? asks_ : bids_;
+        size_t count = is_bid ? ask_count_ : bid_count_;
+
+        for (size_t i = 0; i < count && needed > 0; i++) {
+            bool price_ok = is_bid
+                ? order.price >= levels[i].price
+                : order.price <= levels[i].price;
+            if (!price_ok) break;
+            const auto& q = levels[i].queue;
+            size_t idx = q.head;
+            while (idx < q.tail && needed > 0) {
+                const auto& entry = q.entries[idx & 127];
+                uint32_t fill = std::min(needed, entry.qty);
+                needed -= fill;
+                if (entry.qty == fill) idx++;
+                else break;
             }
         }
         return needed == 0;
     }
 
-    void insert_bid(const Order& order) noexcept {
+    size_t find_insert_pos_bid(uint32_t price) const noexcept {
         size_t pos = bid_count_;
-        while (pos > 0 && bids_[pos - 1].price < order.price) {
-            bids_[pos] = bids_[pos - 1];
-            pos--;
+        while (pos > 0 && bids_[pos - 1].price < price) pos--;
+        return pos;
+    }
+
+    size_t find_insert_pos_ask(uint32_t price) const noexcept {
+        size_t pos = ask_count_;
+        while (pos > 0 && asks_[pos - 1].price > price) pos--;
+        return pos;
+    }
+
+    void insert_bid(const Order& order) noexcept {
+        size_t pos = find_insert_pos_bid(order.price);
+        if (pos < bid_count_ && bids_[pos].price == order.price) {
+            bids_[pos].queue.push(order);
+            return;
         }
+        for (size_t i = bid_count_; i > pos; i--) bids_[i] = bids_[i - 1];
         bids_[pos].price = order.price;
-        bids_[pos].queue = get_queue(order.price, true);
-        bids_[pos].queue->push(order);
-        if (pos == bid_count_) bid_count_++;
+        bids_[pos].queue.clear();
+        bids_[pos].queue.push(order);
+        bid_count_++;
     }
 
     void insert_ask(const Order& order) noexcept {
-        size_t pos = ask_count_;
-        while (pos > 0 && asks_[pos - 1].price > order.price) {
-            asks_[pos] = asks_[pos - 1];
-            pos--;
+        size_t pos = find_insert_pos_ask(order.price);
+        if (pos < ask_count_ && asks_[pos].price == order.price) {
+            asks_[pos].queue.push(order);
+            return;
         }
+        for (size_t i = ask_count_; i > pos; i--) asks_[i] = asks_[i - 1];
         asks_[pos].price = order.price;
-        asks_[pos].queue = get_queue(order.price, false);
-        asks_[pos].queue->push(order);
-        if (pos == ask_count_) ask_count_++;
+        asks_[pos].queue.clear();
+        asks_[pos].queue.push(order);
+        ask_count_++;
     }
 
-    OrderQueue* get_queue(uint32_t price, bool is_bid) noexcept {
-        size_t idx = price % POOL_SIZE;
-        OrderQueue* q = &queue_pool_[idx];
-        return q;
-    }
-
-    template <typename Comp>
+    template <bool IsBid>
     void match_against_side(Order& order, PriceLevel* levels, size_t& count,
-                            FixedVector<Trade, 64>& trades, bool is_bid) noexcept {
-        size_t i = 0;
-        while (i < count && order.qty > 0) {
+                            FixedVector<Trade, 64>& trades) noexcept {
+        size_t write = 0;
+        for (size_t i = 0; i < count && order.qty > 0; i++) {
             if (order.type != OrderType::MARKET) {
-                bool price_ok = is_bid
+                bool price_ok = IsBid
                     ? order.price >= levels[i].price
                     : order.price <= levels[i].price;
-                if (!price_ok) break;
+                if (!price_ok) {
+                    if (write < i) levels[write] = levels[i];
+                    write++;
+                    continue;
+                }
             }
 
-            auto* q = levels[i].queue;
-            if (!q) { i++; continue; }
-
-            while (!q->empty() && order.qty > 0) {
-                auto* resting = q->front();
-                if (!resting) { q->pop_front(); continue; }
-
+            auto& q = levels[i].queue;
+            while (!q.empty() && order.qty > 0) {
+                auto* resting = q.front();
                 uint32_t fill_qty = std::min(order.qty, resting->qty);
                 Trade t;
                 t.trade_id = 1000 + trades.size();
@@ -209,34 +211,39 @@ private:
 
                 if (resting->qty == 0) {
                     resting->state = OrderState::FILLED;
-                    q->pop_front();
+                    q.pop_front();
                 } else {
                     resting->state = OrderState::PARTIAL_FILL;
                 }
             }
 
-            i++;
+            if (!q.empty() || order.qty == 0) {
+                if (write < i) levels[write] = levels[i];
+                write++;
+            }
         }
 
-        if (i > 0 && i < count) {
-            size_t new_count = 0;
-            for (size_t j = i; j < count; j++) {
-                levels[new_count++] = levels[j];
-            }
-            count = new_count;
-        } else if (i == count) {
-            count = 0;
+        size_t remaining = 0;
+        for (size_t i = write; i < count; i++) {
+            levels[remaining++] = levels[i];
         }
+        count = remaining;
+    }
+
+    void match_against_side(Order& order, PriceLevel* levels, size_t& count,
+                            FixedVector<Trade, 64>& trades, bool is_bid) noexcept {
+        if (is_bid)
+            match_against_side<true>(order, levels, count, trades);
+        else
+            match_against_side<false>(order, levels, count, trades);
     }
 
     struct PriceLevel {
         uint32_t price;
-        OrderQueue* queue;
+        OrderQueue<128> queue;
     };
 
     uint32_t instrument_id_;
-    static constexpr size_t POOL_SIZE = 256;
-    alignas(64) OrderQueue queue_pool_[POOL_SIZE];
     PriceLevel bids_[MAX_PRICE_LEVELS];
     size_t bid_count_ = 0;
     PriceLevel asks_[MAX_PRICE_LEVELS];

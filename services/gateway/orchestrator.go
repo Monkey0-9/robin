@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -48,13 +50,20 @@ type ServiceHealth struct {
 	Addr      string        `json:"addr"`
 }
 
+type TLSConfig struct {
+	Enabled  bool   `json:"enabled"`
+	CertFile string `json:"cert_file"`
+	KeyFile  string `json:"key_file"`
+}
+
 type HotReloadConfig struct {
-	MaxDrawdownLimit float64 `json:"max_drawdown_limit"`
-	MarketDataPort   int     `json:"market_data_port"`
-	OrderEntryPort   int     `json:"order_entry_port"`
-	MaxOrderRate     uint32  `json:"max_order_rate"`
-	MaxCancelRate    uint32  `json:"max_cancel_rate"`
-	MaxPositionLimit int64   `json:"max_position_limit"`
+	MaxDrawdownLimit float64    `json:"max_drawdown_limit"`
+	MarketDataPort   int        `json:"market_data_port"`
+	OrderEntryPort   int        `json:"order_entry_port"`
+	MaxOrderRate     uint32     `json:"max_order_rate"`
+	MaxCancelRate    uint32     `json:"max_cancel_rate"`
+	MaxPositionLimit int64      `json:"max_position_limit"`
+	TLS              TLSConfig  `json:"tls"`
 }
 
 type Orchestrator struct {
@@ -299,13 +308,52 @@ func main() {
 
 	orch.StartHealthProbes(ctx, 100*time.Millisecond)
 
-	httpServer := orch.setupHTTPServer(8080)
-	go func() {
-		log.Printf("[ORCHESTRATOR] HTTP server listening on :8080")
-		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("[ORCHESTRATOR] HTTP server error: %v", err)
+	httpPort := 8080
+	if p := os.Getenv("ORCH_PORT"); p != "" {
+		if v, err := fmt.Sscanf(p, "%d", &httpPort); err != nil || v != 1 {
+			httpPort = 8080
 		}
-	}()
+	}
+
+	httpServer := orch.setupHTTPServer(httpPort)
+
+	tlsCfg := orch.GetConfig().TLS
+	if tlsCfg.Enabled {
+		tlsCfg.CertFile = envOrDefault("ORCH_TLS_CERT", tlsCfg.CertFile)
+		tlsCfg.KeyFile = envOrDefault("ORCH_TLS_KEY", tlsCfg.KeyFile)
+		if tlsCfg.CertFile != "" && tlsCfg.KeyFile != "" {
+			caCert, err := os.ReadFile(tlsCfg.CertFile)
+			if err == nil {
+				caPool := x509.NewCertPool()
+				if caPool.AppendCertsFromPEM(caCert) {
+					httpServer.TLSConfig = &tls.Config{
+						MinVersion: tls.VersionTLS12,
+						ClientCAs:  caPool,
+					}
+				}
+			}
+			go func() {
+				log.Printf("[ORCHESTRATOR] TLS server listening on :%d", httpPort)
+				if err := httpServer.ListenAndServeTLS(tlsCfg.CertFile, tlsCfg.KeyFile); err != nil && err != http.ErrServerClosed {
+					log.Fatalf("[ORCHESTRATOR] TLS server error: %v", err)
+				}
+			}()
+		} else {
+			log.Printf("[ORCHESTRATOR] TLS enabled but cert/key missing, falling back to plain HTTP on :%d", httpPort)
+			go func() {
+				if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					log.Fatalf("[ORCHESTRATOR] HTTP server error: %v", err)
+				}
+			}()
+		}
+	} else {
+		go func() {
+			log.Printf("[ORCHESTRATOR] HTTP server listening on :%d", httpPort)
+			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("[ORCHESTRATOR] HTTP server error: %v", err)
+			}
+		}()
+	}
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -315,4 +363,11 @@ func main() {
 	cancel()
 	httpServer.Shutdown(context.Background())
 	orch.Shutdown()
+}
+
+func envOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }

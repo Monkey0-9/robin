@@ -1,5 +1,6 @@
 // Kernel module for GPIO-based hardware kill switch (simulation)
-// Uses threaded IRQ to avoid sleeping in interrupt context
+// Uses descriptor-based GPIO API (modern replacement for legacy gpio_* API)
+// Threaded IRQ to avoid sleeping in interrupt context
 // On trigger: blocks ALL outgoing network traffic via netfilter
 // WARNING: This blocks ALL IPv4 traffic, not just trading traffic.
 // A whitelist for management/health-check traffic is NOT implemented.
@@ -7,7 +8,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/gpio.h>
+#include <linux/gpio/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/delay.h>
 #include <linux/netfilter.h>
@@ -19,7 +20,7 @@
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Robin Trading Systems");
 MODULE_DESCRIPTION("GPIO Kill Switch (Simulation) - Emergency Trading Halt");
-MODULE_VERSION("1.1.0");
+MODULE_VERSION("2.0.0");
 
 static int gpio_pin = 18;
 module_param(gpio_pin, int, 0644);
@@ -27,6 +28,8 @@ module_param(gpio_pin, int, 0644);
 static int debounce_ms = 50;
 module_param(debounce_ms, int, 0644);
 
+static struct gpio_desc *kill_gpio = NULL;
+static struct gpio_desc *monitor_gpio = NULL;
 static atomic_t kill_switch_active = ATOMIC_INIT(0);
 static unsigned int irq_number;
 static struct task_struct *monitor_thread;
@@ -62,7 +65,7 @@ static void kill_switch_activate(void) {
 // Threaded IRQ handler - runs in process context, safe to sleep
 static irqreturn_t gpio_irq_handler_thread(int irq, void *dev_id) {
     msleep(debounce_ms);
-    if (gpio_get_value(gpio_pin) == 1) {
+    if (kill_gpio && gpiod_get_value(kill_gpio) == 1) {
         kill_switch_activate();
         return IRQ_HANDLED;
     }
@@ -75,7 +78,8 @@ static int monitor_kill_switch(void *data) {
             schedule_timeout_interruptible(HZ);
             continue;
         }
-        if (gpio_get_value(gpio_pin) == 1) kill_switch_activate();
+        if (monitor_gpio && gpiod_get_value(monitor_gpio) == 1)
+            kill_switch_activate();
         schedule_timeout_interruptible(HZ / 100);
     }
     return 0;
@@ -83,22 +87,47 @@ static int monitor_kill_switch(void *data) {
 
 static int __init kill_switch_init(void) {
     int ret;
-    if (!gpio_is_valid(gpio_pin)) return -EINVAL;
-    ret = gpio_request_one(gpio_pin, GPIOF_IN, "kill_switch");
-    if (ret) return ret;
-    irq_number = gpio_to_irq(gpio_pin);
-    if (irq_number < 0) { gpio_free(gpio_pin); return irq_number; }
+
+    kill_gpio = gpio_to_desc(gpio_pin);
+    if (!kill_gpio) {
+        pr_err("[KILL_SWITCH] Invalid GPIO %d\n", gpio_pin);
+        return -EINVAL;
+    }
+
+    ret = gpiod_direction_input(kill_gpio);
+    if (ret) {
+        pr_err("[KILL_SWITCH] Failed to set GPIO %d direction: %d\n", gpio_pin, ret);
+        return ret;
+    }
+
+    irq_number = gpiod_to_irq(kill_gpio);
+    if (irq_number < 0) {
+        pr_err("[KILL_SWITCH] Failed to get IRQ for GPIO %d: %d\n", gpio_pin, irq_number);
+        return irq_number;
+    }
+
     ret = request_threaded_irq(irq_number, NULL, gpio_irq_handler_thread,
                                 IRQF_TRIGGER_RISING | IRQF_ONESHOT, "kill_switch", NULL);
-    if (ret) { gpio_free(gpio_pin); return ret; }
+    if (ret) {
+        pr_err("[KILL_SWITCH] IRQ request failed: %d\n", ret);
+        return ret;
+    }
+
     ret = register_netfilter_hook();
-    if (ret) { free_irq(irq_number, NULL); gpio_free(gpio_pin); return ret; }
+    if (ret) {
+        free_irq(irq_number, NULL);
+        return ret;
+    }
+
+    monitor_gpio = gpio_to_desc(gpio_pin);
     monitor_thread = kthread_run(monitor_kill_switch, NULL, "kill_switch_monitor");
     if (IS_ERR(monitor_thread)) {
-        unregister_netfilter_hook(); free_irq(irq_number, NULL);
-        gpio_free(gpio_pin); return PTR_ERR(monitor_thread);
+        unregister_netfilter_hook();
+        free_irq(irq_number, NULL);
+        return PTR_ERR(monitor_thread);
     }
-    pr_info("[KILL_SWITCH] Module loaded. GPIO %d armed.\n", gpio_pin);
+
+    pr_info("[KILL_SWITCH] Module loaded. GPIO %d armed (descriptor-based API).\n", gpio_pin);
     return 0;
 }
 
@@ -106,7 +135,6 @@ static void __exit kill_switch_exit(void) {
     if (monitor_thread) kthread_stop(monitor_thread);
     unregister_netfilter_hook();
     if (irq_number) free_irq(irq_number, NULL);
-    gpio_free(gpio_pin);
     pr_info("[KILL_SWITCH] Module unloaded\n");
 }
 

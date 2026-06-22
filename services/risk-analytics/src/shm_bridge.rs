@@ -76,7 +76,7 @@ impl ShmBridge {
 
             let mapped_addr = unsafe {
                 libc::mmap(
-                    ptr::null_mut(),
+                    std::ptr::null_mut(),
                     shm_size,
                     libc::PROT_READ | libc::PROT_WRITE,
                     libc::MAP_SHARED,
@@ -188,7 +188,7 @@ impl ShmBridge {
     pub fn unlink(_path: &str) {
         #[cfg(target_os = "linux")]
         {
-            let cpath = std::ffi::CString::new(path).unwrap();
+            let cpath = std::ffi::CString::new(_path).unwrap();
             unsafe { libc::shm_unlink(cpath.as_ptr()) };
         }
     }
@@ -207,7 +207,7 @@ impl Drop for ShmBridge {
 
 #[cfg(test)]
 mod tests {
-    #[allow(unused_imports)]
+    use std::mem::MaybeUninit;
     use super::*;
 
     #[test]

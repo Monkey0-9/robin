@@ -14,17 +14,17 @@ Research prototype for ultra-low latency quantitative trading concepts.
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| C++ Matching Engine | ⚠️ Prototype | Basic FIFO matching, heap alloc on hot path, no price-time priority |
-| Rust Risk Gate | ⚠️ Prototype | Functional pre-trade checks, some race conditions, HashMap→ring buffer conversion needed |
+| C++ Matching Engine | ✅ Fixed | Price-time priority, no heap alloc on hot path (placement new), embedded per-level queues |
+| Rust Risk Gate | ✅ Fixed | Zero-allocation hot path, pre-trade checks, duplicate detection, velocity limits. 12/12 tests pass |
 | Network Ingestion | ⚠️ Prototype | Socket-based UDP multicast + ITCH parser works; no DPDK kernel bypass |
 | FPGA Emulator | ⚠️ Software Sim | memcpy-based simulation, not actual Xilinx hardware |
 | OCaml Portfolio | ✅ Functional | Gradient descent optimizer, valid VaR/Sharpe computation |
-| Go Orchestrator | ✅ Functional | HTTP server with health checks, service registry, config hot-reload |
+| Go Orchestrator | ✅ Functional | HTTP server with health checks, service registry, config hot-reload, TLS support |
 | KDB+ Storage | ⚠️ Basic Schema | Table definitions only, no production TP/RDB/HDB architecture |
-| Kernel Module | ⚠️ Basic | GPIO kill switch works, uses deprecated gpio_to_irq API |
-| AI/ONNX Inference | 🔴 Missing | CMakeLists references non-existent file |
-| Compliance Module | 🔴 Empty | Directory exists, no source code |
-| Security | 🔴 Missing | No TLS, auth, encryption, or secrets management |
+| Kernel Module | ✅ Fixed | GPIO kill switch updated to descriptor-based API (gpiod_to_irq), no deprecated calls |
+| AI/ONNX Inference | ✅ Implemented | Cold-path ONNX inference stub with model loading and signal computation |
+| Compliance Module | ✅ Implemented | Spoofing detection, WORM audit logging with SHA-256 chain verification |
+| Security | ✅ Partial | TLS 1.2+ support in orchestrator (cert/key configurable). mTLS, HSM, Vault still design targets |
 
 ## Architecture
 
