@@ -24,10 +24,12 @@ Research prototype for ultra-low latency quantitative trading concepts.
 | **FPGA Simulator** | ⚠️ Software Sim | C++ | CPU-based order processing simulation (class: `SoftwareOrderMatchSimulator`, NOT hardware). `is_hardware_fpga()` returns `false`. | No Xilinx synthesis; no real acceleration |
 | **OCaml Portfolio** | ✅ Working | OCaml | Gradient descent Sharpe optimizer, VaR/CVaR computation | Not integrated with live pipeline |
 | **Go Orchestrator** | ✅ Working | Go | Service registry, TCP health probes (100ms), hot-reload config, TLS, token-bucket rate limiting (1000 req/s), request ID middleware, structured JSON logging (`slog`), Prometheus, graceful shutdown, 14 unit tests | No order routing |
-| **KDB+ Storage** | ⚠️ Schema Only | Q | Table schemas for `trade`, `quote`, `order` | No TP/RDB/HDB architecture, no sym enumeration |
+| **KDB+ Storage** | ✅ Working | Q | Tickerplant/RDB/HDB subscription protocols, sym enumeration schemas, Prometheus metrics, in-memory TTL query cache, and secure IPC adapter with password validation | Requires full KDB+ deployment |
 | **Kernel Kill Switch** | ✅ Working | C (Linux) | GPIO kill switch v2.1.0 — port whitelist (SSH/22, health/8080, admin/9090 always pass; trading ports 5000–9100 blocked on activation) | Requires actual GPIO hardware |
 | **Linear Signal Model** | ✅ Working | C++ | Weighted linear alpha signal: price momentum + OB imbalance + volume pressure + intraday. Named `LinearSignalModel` (not ONNX) | Not an ML model; no neural network / ONNX runtime |
 | **Compliance Daemon** | ✅ Working | Rust | Standalone binary (`compliance-daemon`): spoofing detector + SHA-256 WORM audit log + Prometheus metrics + `/health` on `:9095` | No live SHM subscription yet (demo mode) |
+| **C++ Options Pricing** | ✅ Working | C++ | Multi-threaded Monte Carlo simulation of European Call paths using thread-local `xoshiro256` random generators | Does not support path-dependent options yet |
+| **Python Backtester** | ✅ Working | Python | Realistic backtester with per-trade commission fees (bps) and square-root market impact slippage (Almgren et al. 2005) | Does not simulate network jitter or queuing |
 | **CI/CD Pipeline** | ✅ Working | GitHub Actions | 8 jobs: risk build+test+clippy, compliance build+test+clippy, go build+vet+test+race, cpp×2 (exec-core + pricing), python validation, rust-fmt check, go-fmt check | No hardware-in-loop tests |
 
 ---

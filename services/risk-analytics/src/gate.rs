@@ -49,6 +49,7 @@ pub struct RiskGate {
     velocity_head:        usize,
     velocity_window_ns:   u64,   // Time window in nanoseconds (default 1 second)
     max_velocity:         usize, // Max orders allowed within velocity_window_ns
+    position_limit:       i64,
 }
 
 /// Size of the velocity ring buffer.
@@ -86,6 +87,7 @@ impl RiskGate {
             velocity_head:       0,
             velocity_window_ns:  1_000_000_000, // 1 second
             max_velocity:        100,           // max 100 orders per second
+            position_limit:      100_000,
         }
     }
 
@@ -99,8 +101,7 @@ impl RiskGate {
         let mut g = Self::new(shm_path);
         g.credit_limit = credit_limit;
         g.max_velocity = max_orders_per_second;
-        // Override position limits in positions array (same limit for all instruments)
-        let _ = position_limit; // per-instrument limit stored externally in production
+        g.position_limit = position_limit;
         g
     }
 
@@ -141,7 +142,8 @@ impl RiskGate {
 
         // HARD BLOCK 7: Price collar (±5% from last trade price)
         {
-            let last = LAST_TRADE_PRICE.load(Ordering::Relaxed);
+            let slot = (order.instrument_id & 4095) as usize;
+            let last = LAST_TRADE_PRICES[slot].load(Ordering::Relaxed);
             if last > 0 {
                 let min_price = (last * 95) / 100;
                 let max_price = (last * 105) / 100;
@@ -160,7 +162,7 @@ impl RiskGate {
                 OrderSide::Bid => current.saturating_add(order.qty as i64),
                 OrderSide::Ask => current.saturating_sub(order.qty as i64),
             };
-            if next.abs() > 100_000i64 {
+            if next.abs() > self.position_limit {
                 return Err(RiskError::PositionLimit);
             }
             // Optimistically update position — if downstream rejects, caller must call rollback_position()
@@ -238,16 +240,21 @@ impl RiskGate {
     }
 
     /// Update the last trade price (called after each matched trade).
-    pub fn update_reference_price(&self, price: u64) {
-        LAST_TRADE_PRICE.store(price, Ordering::Relaxed);
-        self.fast_gate.update_reference_price(price as u32);
+    pub fn update_reference_price(&self, instrument_id: u32, price: u64) {
+        let slot = (instrument_id & 4095) as usize;
+        LAST_TRADE_PRICES[slot].store(price, Ordering::Relaxed);
+        self.fast_gate.update_reference_price(instrument_id, price as u32);
     }
 }
 
-static LAST_TRADE_PRICE: AtomicU64 = AtomicU64::new(0);
+static LAST_TRADE_PRICES: [AtomicU64; 4096] = {
+    const INIT: AtomicU64 = AtomicU64::new(0);
+    [INIT; 4096]
+};
 
-pub fn update_last_trade_price(price: u64) {
-    LAST_TRADE_PRICE.store(price, Ordering::Relaxed);
+pub fn update_last_trade_price(instrument_id: u32, price: u64) {
+    let slot = (instrument_id & 4095) as usize;
+    LAST_TRADE_PRICES[slot].store(price, Ordering::Relaxed);
 }
 
 #[repr(C, align(64))]

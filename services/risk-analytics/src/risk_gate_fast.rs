@@ -12,7 +12,7 @@ pub struct ComplianceThresholds {
 
 pub struct RiskGateFast {
     thresholds:           ComplianceThresholds,
-    reference_price:      AtomicU32,   // Live-updated reference price
+    reference_prices:     Box<[AtomicU32]>, // Live-updated reference prices per instrument
     failed_checks_count:  AtomicU64,
     total_checks_count:   AtomicU64,
 }
@@ -20,9 +20,13 @@ pub struct RiskGateFast {
 impl RiskGateFast {
     pub fn new(thresholds: ComplianceThresholds) -> Self {
         let init_price = thresholds.reference_price;
+        let mut prices = Vec::with_capacity(4096);
+        for _ in 0..4096 {
+            prices.push(AtomicU32::new(init_price));
+        }
         Self {
             thresholds,
-            reference_price:     AtomicU32::new(init_price),
+            reference_prices:    prices.into_boxed_slice(),
             failed_checks_count: AtomicU64::new(0),
             total_checks_count:  AtomicU64::new(0),
         }
@@ -31,15 +35,16 @@ impl RiskGateFast {
     /// Update the reference price used for price collar checks.
     /// Called after each matched trade to keep collars current.
     #[inline]
-    pub fn update_reference_price(&self, price: u32) {
-        self.reference_price.store(price, Ordering::Relaxed);
+    pub fn update_reference_price(&self, instrument_id: u32, price: u32) {
+        let slot = (instrument_id & 4095) as usize;
+        self.reference_prices[slot].store(price, Ordering::Relaxed);
     }
 
     #[inline(always)]
     pub fn validate_compliance(&self, order: &Order) -> bool {
         self.total_checks_count.fetch_add(1, Ordering::Relaxed);
 
-        // Check restricted list (linear scan — acceptable for ≤128 symbols)
+        // Check restricted list (linear scan — cache-friendly and faster than hashing for small arrays up to 128)
         let n = self.thresholds.restricted_count.min(128);
         for i in 0..n {
             if self.thresholds.restricted_list[i] == order.instrument_id {
@@ -62,7 +67,8 @@ impl RiskGateFast {
         }
 
         // Price collar using live reference price
-        let ref_p = self.reference_price.load(Ordering::Relaxed) as u64;
+        let slot = (order.instrument_id & 4095) as usize;
+        let ref_p = self.reference_prices[slot].load(Ordering::Relaxed) as u64;
         if ref_p > 0 {
             let order_p        = order.price as u64;
             let collar_bps     = self.thresholds.price_collar_bps as u64;
@@ -167,7 +173,7 @@ mod tests {
     fn test_update_reference_price() {
         let gate = make_gate();
         // Update reference to 100_000 — collar is now ±5% of 100_000
-        gate.update_reference_price(100_000);
+        gate.update_reference_price(1, 100_000);
         // 51_000 was valid at ref=50_000 but now 51_000 < 95_000 (ask min)
         // For bids: max = 100_000 * 1.05 = 105_000, so 51_000 bid should be valid
         let bid = make_order(5, 1, 51_000, 100, OrderSide::Bid);

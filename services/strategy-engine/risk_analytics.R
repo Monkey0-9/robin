@@ -1,6 +1,11 @@
 library(methods)
 
-LOG_FILE <- "/var/log/robin/risk_analytics.log"
+LOG_DIR <- "logs"
+if (!dir.exists(LOG_DIR)) {
+  dir.create(LOG_DIR, recursive = TRUE)
+}
+LOG_FILE <- file.path(LOG_DIR, "risk_analytics.log")
+
 log_msg <- function(msg) cat(sprintf("[%s] %s\n", Sys.time(), msg), file=LOG_FILE, append=TRUE)
 
 fit_garch_volatility <- function(prices) {
