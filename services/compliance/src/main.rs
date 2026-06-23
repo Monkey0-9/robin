@@ -233,11 +233,13 @@ fn main() {
     let running = Arc::new(AtomicBool::new(true));
     {
         let r = running.clone();
-        ctrlc_handler(move || {
+        if let Err(e) = ctrlc::set_handler(move || {
             eprintln!("[COMPLIANCE] Shutdown signal received");
             r.store(false, Ordering::Relaxed);
             RUNNING.store(false, Ordering::Relaxed);
-        });
+        }) {
+            eprintln!("[COMPLIANCE] Failed to set Ctrl-C handler: {e}");
+        }
     }
 
     // Start HTTP health / metrics server in background thread
@@ -246,36 +248,4 @@ fn main() {
 
     // Run main processing loop (blocking)
     process_loop(&shm_path, &audit_log_path);
-}
-
-// Minimal cross-platform Ctrl-C handler
-fn ctrlc_handler<F: Fn() + Send + 'static>(handler: F) {
-    #[cfg(unix)]
-    {
-        use std::mem;
-        unsafe {
-            let mut action: libc::sigaction = mem::zeroed();
-            action.sa_sigaction = {
-                // Store handler in a static OnceCell equivalent
-                static mut HANDLER: Option<Box<dyn Fn() + Send + 'static>> = None;
-                unsafe extern "C" fn sighandler(_: libc::c_int) {
-                    if let Some(ref h) = HANDLER {
-                        h();
-                    }
-                }
-                HANDLER = Some(Box::new(handler));
-                sighandler as libc::sighandler_t
-            };
-            libc::sigaction(libc::SIGINT,  &action, std::ptr::null_mut());
-            libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut());
-        }
-        return;
-    }
-    #[allow(unreachable_code)]
-    {
-        // On Windows / other platforms: spawn a thread that checks RUNNING
-        thread::spawn(move || {
-            handler();
-        });
-    }
 }
