@@ -141,12 +141,18 @@ func TestConfigGetEndpoint(t *testing.T) {
 }
 
 func TestConfigPostEndpoint(t *testing.T) {
+	// Set the API token env var so auth validation passes in this test
+	const testToken = "test-token-abc123"
+	t.Setenv("ROBIN_GATEWAY_API_TOKEN", testToken)
+	gatewayAPIToken = testToken
+	t.Cleanup(func() { gatewayAPIToken = "" })
+
 	orch := newTestOrch()
 	srv := orch.setupHTTPServer(0)
 	body := `{"max_drawdown_limit":0.15,"max_order_rate":2000}`
 	req := httptest.NewRequest("POST", "/config", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer valid-dummy-jwt-token")
+	req.Header.Set("Authorization", "Bearer "+testToken)
 	w := httptest.NewRecorder()
 	srv.Handler.ServeHTTP(w, req)
 
@@ -158,6 +164,7 @@ func TestConfigPostEndpoint(t *testing.T) {
 		t.Errorf("config not updated: expected 0.15, got %f", cfg.MaxDrawdownLimit)
 	}
 }
+
 
 func TestConfigPostEndpoint_Unauthorized(t *testing.T) {
 	orch := newTestOrch()

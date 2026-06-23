@@ -25,10 +25,15 @@ calculate_var <- function(returns, cl=0.99) {
 }
 
 generate_sec_cat_report <- function(df, path) {
+  firm_id <- Sys.getenv("ROBIN_FIRM_ID", unset = "FIRM_ID_NOT_SET")
+  crd_num  <- Sys.getenv("ROBIN_CRD_NUM",  unset = "CRD_NOT_SET")
+  if (firm_id == "FIRM_ID_NOT_SET" || crd_num == "CRD_NOT_SET") {
+    stop("ROBIN_FIRM_ID and ROBIN_CRD_NUM environment variables must be set before generating SEC CAT reports.")
+  }
   out <- data.frame(
     EventID=df$EventID, Timestamp=format(as.POSIXct(df$Timestamp/1e9, origin="1970-01-01", tz="UTC"), "%Y-%m-%dT%H:%M:%OS6Z"),
     Symbol=df$Symbol, Price=sprintf("%.2f",df$Price), Qty=df$Qty, Side=df$Side,
-    FirmID="QTSYSTEMS", CRD="394028", stringsAsFactors=FALSE)
+    FirmID=firm_id, CRD=crd_num, stringsAsFactors=FALSE)
   write.csv(out, path, row.names=FALSE)
   log_msg(sprintf("SEC CAT: %s (%d recs)", path, nrow(out)))
 }

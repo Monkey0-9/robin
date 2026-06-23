@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -307,15 +308,32 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// jwtAuthMiddleware enforces a Bearer token for sensitive endpoints
+// gatewayAPIToken loads the expected API token from the environment.
+// Returns empty string if not set (all requests will be rejected).
+var gatewayAPIToken = func() string {
+	t := os.Getenv("ROBIN_GATEWAY_API_TOKEN")
+	if t == "" {
+		slog.Warn("ROBIN_GATEWAY_API_TOKEN not set: all authenticated endpoints will return 401")
+	}
+	return t
+}()
+
+// jwtAuthMiddleware enforces a Bearer token for sensitive endpoints.
+// Uses crypto/subtle.ConstantTimeCompare to prevent timing attacks.
 func jwtAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-			http.Error(w, `{"error":"unauthorized: missing or invalid bearer token"}`, http.StatusUnauthorized)
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="robin-gateway"`)
+			http.Error(w, `{"error":"unauthorized: missing bearer token"}`, http.StatusUnauthorized)
 			return
 		}
-		// In a production environment, validate the JWT signature here.
+		provided := strings.TrimPrefix(authHeader, "Bearer ")
+		expected := gatewayAPIToken
+		if expected == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
+			http.Error(w, `{"error":"unauthorized: invalid token"}`, http.StatusUnauthorized)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
