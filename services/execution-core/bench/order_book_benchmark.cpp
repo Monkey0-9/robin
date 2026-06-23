@@ -156,7 +156,7 @@ void consumer_thread(OrderBook** books, LockFreeSPSCQueue<Order, 65536>& inbound
         OrderBook* book = books[order.instrument_id % 1024];
 
         trades_batch.clear();
-        book->match_order(order, trades_batch);
+        (void)book->match_order(order, trades_batch);
 
         const uint64_t latency = rdtscp_bench() - start;
         match_latency.record_value(latency);

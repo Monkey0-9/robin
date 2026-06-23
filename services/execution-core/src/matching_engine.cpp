@@ -115,7 +115,10 @@ private:
                 OrderBook* book = get_or_create_book(incoming.instrument_id);
                 if (unlikely(!book)) { stats_.orders_rejected++; continue; }
                 FixedVector<Trade, 64> matches;
-                book->match_order(incoming, matches);
+                if (unlikely(!book->match_order(incoming, matches))) {
+                    stats_.orders_rejected++;
+                    continue;
+                }
                 for (size_t i = 0; i < matches.size(); ++i)
                     outbound_queue_.push(matches[i]);
                 const uint64_t end_ns = rdtscp_e();
