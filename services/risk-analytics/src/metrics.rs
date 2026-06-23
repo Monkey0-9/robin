@@ -13,17 +13,17 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// All risk gate Prometheus metrics, stored atomically.
-pub static ORDERS_PROCESSED:     AtomicU64 = AtomicU64::new(0);
-pub static ORDERS_REJECTED:      AtomicU64 = AtomicU64::new(0);
-pub static LATENCY_SUM_NS:       AtomicU64 = AtomicU64::new(0);
-pub static LATENCY_MAX_NS:       AtomicU64 = AtomicU64::new(0);
-pub static LATENCY_COUNT:        AtomicU64 = AtomicU64::new(0);
-pub static KILL_SWITCH_TRIPS:    AtomicU64 = AtomicU64::new(0);
-pub static CIRCUIT_BREAKER_TRIPS:AtomicU64 = AtomicU64::new(0);
+pub static ORDERS_PROCESSED: AtomicU64 = AtomicU64::new(0);
+pub static ORDERS_REJECTED: AtomicU64 = AtomicU64::new(0);
+pub static LATENCY_SUM_NS: AtomicU64 = AtomicU64::new(0);
+pub static LATENCY_MAX_NS: AtomicU64 = AtomicU64::new(0);
+pub static LATENCY_COUNT: AtomicU64 = AtomicU64::new(0);
+pub static KILL_SWITCH_TRIPS: AtomicU64 = AtomicU64::new(0);
+pub static CIRCUIT_BREAKER_TRIPS: AtomicU64 = AtomicU64::new(0);
 pub static DUPLICATE_REJECTIONS: AtomicU64 = AtomicU64::new(0);
-pub static VELOCITY_REJECTIONS:  AtomicU64 = AtomicU64::new(0);
-pub static POSITION_REJECTIONS:  AtomicU64 = AtomicU64::new(0);
-pub static CREDIT_REJECTIONS:    AtomicU64 = AtomicU64::new(0);
+pub static VELOCITY_REJECTIONS: AtomicU64 = AtomicU64::new(0);
+pub static POSITION_REJECTIONS: AtomicU64 = AtomicU64::new(0);
+pub static CREDIT_REJECTIONS: AtomicU64 = AtomicU64::new(0);
 
 /// Record a processed order with its gate latency.
 #[inline]
@@ -38,7 +38,10 @@ pub fn record_order(latency_ns: u64, approved: bool) {
     let mut cur = LATENCY_MAX_NS.load(Ordering::Relaxed);
     while latency_ns > cur {
         match LATENCY_MAX_NS.compare_exchange_weak(
-            cur, latency_ns, Ordering::Relaxed, Ordering::Relaxed,
+            cur,
+            latency_ns,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
         ) {
             Ok(_) => break,
             Err(v) => cur = v,
@@ -50,17 +53,17 @@ pub fn record_order(latency_ns: u64, approved: bool) {
 /// Returns an owned String suitable for HTTP response body.
 pub fn render_text() -> String {
     let processed = ORDERS_PROCESSED.load(Ordering::Relaxed);
-    let rejected  = ORDERS_REJECTED.load(Ordering::Relaxed);
-    let lat_sum   = LATENCY_SUM_NS.load(Ordering::Relaxed);
-    let lat_cnt   = LATENCY_COUNT.load(Ordering::Relaxed);
-    let lat_max   = LATENCY_MAX_NS.load(Ordering::Relaxed);
-    let lat_avg   = if lat_cnt > 0 { lat_sum / lat_cnt } else { 0 };
-    let ks_trips  = KILL_SWITCH_TRIPS.load(Ordering::Relaxed);
-    let cb_trips  = CIRCUIT_BREAKER_TRIPS.load(Ordering::Relaxed);
-    let dup_rej   = DUPLICATE_REJECTIONS.load(Ordering::Relaxed);
-    let vel_rej   = VELOCITY_REJECTIONS.load(Ordering::Relaxed);
-    let pos_rej   = POSITION_REJECTIONS.load(Ordering::Relaxed);
-    let cred_rej  = CREDIT_REJECTIONS.load(Ordering::Relaxed);
+    let rejected = ORDERS_REJECTED.load(Ordering::Relaxed);
+    let lat_sum = LATENCY_SUM_NS.load(Ordering::Relaxed);
+    let lat_cnt = LATENCY_COUNT.load(Ordering::Relaxed);
+    let lat_max = LATENCY_MAX_NS.load(Ordering::Relaxed);
+    let lat_avg = if lat_cnt > 0 { lat_sum / lat_cnt } else { 0 };
+    let ks_trips = KILL_SWITCH_TRIPS.load(Ordering::Relaxed);
+    let cb_trips = CIRCUIT_BREAKER_TRIPS.load(Ordering::Relaxed);
+    let dup_rej = DUPLICATE_REJECTIONS.load(Ordering::Relaxed);
+    let vel_rej = VELOCITY_REJECTIONS.load(Ordering::Relaxed);
+    let pos_rej = POSITION_REJECTIONS.load(Ordering::Relaxed);
+    let cred_rej = CREDIT_REJECTIONS.load(Ordering::Relaxed);
 
     format!(
         "# HELP robin_risk_orders_processed_total Total orders through the risk gate\n\
@@ -115,7 +118,8 @@ pub fn serve_metrics(port: u16) {
                 let response = format!(
                     "HTTP/1.0 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\n\
                      Content-Length: {}\r\n\r\n{}",
-                    body.len(), body
+                    body.len(),
+                    body
                 );
                 let _ = s.write_all(response.as_bytes());
             }

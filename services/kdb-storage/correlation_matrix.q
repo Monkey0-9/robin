@@ -1,6 +1,28 @@
 / services/kdb-storage/correlation_matrix.q
 / Real-time Cross-Asset Pearson Correlation calculation in KDB+/q.
 / Computes rolling covariance and correlation between price feeds.
+/
+/ Python Implementation Plan (correlation_engine.py in services/strategy-engine/):
+/ ----------------------------------------------------------------------------
+/ A CorrelationEngine class in Python that mirrors this q logic but uses
+/ Exponential Weighted Moving Average (EWMA) for real-time updates from
+/ streaming tick data. Design:
+/
+/  1. On each tick, update EWMA means for each instrument:
+/        μ_i(t) = λ * μ_i(t-1) + (1-λ) * price_i(t)
+/
+/  2. Update EWMA variances and covariances:
+/        σ²_i(t) = λ * σ²_i(t-1) + (1-λ) * (price_i - μ_i)²
+/        Cov_ij(t) = λ * Cov_ij(t-1) + (1-λ) * (price_i - μ_i)(price_j - μ_j)
+/
+/  3. Correlation derived on-demand:
+/        ρ_ij = Cov_ij / (σ_i * σ_j)
+/
+/  4. Configurable λ (decay factor) and lookback window.
+/
+/  This avoids storing full price histories while still giving more weight
+/  to recent observations — suitable for high-frequency environments.
+/ ----------------------------------------------------------------------------
 
 / Generate mock tick history data
 prices:([sym:`symbol; time:`timespan] price:`float);

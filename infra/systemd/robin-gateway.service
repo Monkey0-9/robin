@@ -1,0 +1,17 @@
+[Unit]
+Description=Robin Platform - API Gateway
+After=network.target
+
+[Service]
+Type=simple
+User=robin
+Group=robin
+ExecStart=/opt/robin/bin/gateway
+Restart=on-failure
+RestartSec=5
+Environment=ROBIN_GATEWAY_API_TOKEN=prod-secret
+Environment=ROBIN_JWT_PUBKEY_FILE=/opt/robin/certs/jwt.pub
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

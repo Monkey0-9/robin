@@ -30,7 +30,10 @@ impl TaxEngine {
     }
 
     // Identifies lots that can be sold to realize losses for tax offsets (Tax-loss harvesting)
-    pub fn identify_harvest_opportunities(&self, current_prices: &std::collections::HashMap<String, f64>) -> Vec<TaxHarvestOpportunity> {
+    pub fn identify_harvest_opportunities(
+        &self,
+        current_prices: &std::collections::HashMap<String, f64>,
+    ) -> Vec<TaxHarvestOpportunity> {
         let mut opportunities = Vec::new();
 
         for lot in &self.lots {
@@ -53,7 +56,10 @@ impl TaxEngine {
     }
 
     // Generate 1099-B matching layout log entry
-    pub fn generate_1099b_report(&self, current_prices: &std::collections::HashMap<String, f64>) -> String {
+    pub fn generate_1099b_report(
+        &self,
+        current_prices: &std::collections::HashMap<String, f64>,
+    ) -> String {
         let mut report = String::new();
         report.push_str("FORM 1099-B: PROCEED LOG (SIMULATED TRANSACTIONS)\n");
         report.push_str("====================================================================\n");
@@ -61,7 +67,10 @@ impl TaxEngine {
         report.push_str("--------------------------------------------------------------------\n");
 
         for lot in &self.lots {
-            let cur_val = current_prices.get(&lot.symbol).copied().unwrap_or(lot.cost_basis);
+            let cur_val = current_prices
+                .get(&lot.symbol)
+                .copied()
+                .unwrap_or(lot.cost_basis);
             let gain_loss = (cur_val - lot.cost_basis) * lot.quantity;
             report.push_str(&format!(
                 "{:<6} | {:<6} | ${:<10.2} | ${:<11.2} | ${:<12.2}\n",

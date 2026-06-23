@@ -72,6 +72,58 @@ interface TerminalState {
   setSelectedSymbol: (symbol: string) => void;
 }
 
+const WS_URL = 'ws://localhost:8080/ws';
+const JWT_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0cmFkZXIxMjMiLCJpc3MiOiJyb2Jpbi1nYXRld2F5IiwiYXVkIjoicm9iaW4tc2VydmljZXMifQ.placeholder';
+
+function simulatePrice(assets: Asset[], selectedSymbol: string, orderBook: { bids: OrderBookLevel[]; asks: OrderBookLevel[] }) {
+  const newAssets = assets.map(a => {
+    const move = a.currentPrice * (1 + (Math.random() - 0.5) * 0.0005);
+    return { ...a, currentPrice: move };
+  });
+
+  let totalUnrealized = 0;
+  let totalMargin = 0;
+  const newPositions = ([] as Position[]).map(() => ({}));
+
+  const currentBtcPrice = newAssets.find(a => a.symbol === selectedSymbol)?.currentPrice || 64500;
+  const bids: OrderBookLevel[] = [];
+  const asks: OrderBookLevel[] = [];
+  let totalBid = 0;
+  let totalAsk = 0;
+  for (let i = 0; i < 8; i++) {
+    const bidSize = Number((Math.random() * 2).toFixed(2));
+    totalBid += bidSize;
+    bids.push({ price: currentBtcPrice - (i + 1) * 0.5, size: bidSize, total: totalBid });
+
+    const askSize = Number((Math.random() * 2).toFixed(2));
+    totalAsk += askSize;
+    asks.push({ price: currentBtcPrice + (i + 1) * 0.5, size: askSize, total: totalAsk });
+  }
+
+  return { assets: newAssets, orderBook: { bids, asks } };
+}
+
+function createWebSocket(
+  onMessage: (data: any) => void,
+  onDisconnect: () => void,
+): WebSocket {
+  const url = `${WS_URL}?token=${JWT_TOKEN}`;
+  const ws = new WebSocket(url);
+  ws.onopen = () => console.log('WebSocket connected');
+  ws.onmessage = (event) => {
+    try {
+      const parsed = JSON.parse(event.data);
+      onMessage(parsed);
+    } catch { /* ignore malformed */ }
+  };
+  ws.onclose = () => {
+    console.log('WebSocket disconnected');
+    onDisconnect();
+  };
+  ws.onerror = () => ws.close();
+  return ws;
+}
+
 export const useTerminalStore = create<TerminalState>((set, get) => ({
   assets: [
     { symbol: 'BTC/USD', name: 'Bitcoin / US Dollar', currentPrice: 64500.50, dailyChangePct: 2.4, type: 'crypto' },
@@ -94,56 +146,124 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   init: () => {
     console.log("Terminal store initialized");
     get().showNotification("Connected to Gateway", "success");
-    
-    // Simulate live ticking data for selected asset
+
+    let ws: WebSocket | null = null;
+    let wsConnected = false;
+    let reconnectAttempts = 0;
+    const maxReconnectDelay = 30000;
+
+    function connect() {
+      ws = createWebSocket(
+        (data) => {
+          wsConnected = true;
+          reconnectAttempts = 0;
+
+          if (data.type === 'orderbook') {
+            const { symbol, bids, asks } = data.data;
+            const orderBookBids: OrderBookLevel[] = bids.slice(0, 8).map(([price, size]: number[], i: number) => ({
+              price,
+              size,
+              total: bids.slice(0, i + 1).reduce((s: number, [_, sz]: number[]) => s + sz, 0),
+            }));
+            const orderBookAsks: OrderBookLevel[] = asks.slice(0, 8).map(([price, size]: number[], i: number) => ({
+              price,
+              size,
+              total: asks.slice(0, i + 1).reduce((s: number, [_, sz]: number[]) => s + sz, 0),
+            }));
+
+            set((state) => {
+              const newAssets = state.assets.map(a => {
+                if (a.symbol === symbol) {
+                  const mid = (bids[0]?.[0] + asks[0]?.[0]) / 2;
+                  return { ...a, currentPrice: mid || a.currentPrice };
+                }
+                return a;
+              });
+
+              let totalUnrealized = 0;
+              let totalMargin = 0;
+              const newPositions = state.positions.map(p => {
+                const currentAsset = newAssets.find(a => a.symbol === p.symbol);
+                const currentPrice = currentAsset ? currentAsset.currentPrice : p.entryPrice;
+                const pnl = p.side === 'LONG'
+                  ? (currentPrice - p.entryPrice) * p.size
+                  : (p.entryPrice - currentPrice) * p.size;
+                totalUnrealized += pnl;
+                totalMargin += p.marginRequired;
+                return { ...p, unrealizedPnL: pnl };
+              });
+
+              const newEquity = state.balance + totalUnrealized;
+              const marginUtil = newEquity > 0 ? (totalMargin / newEquity) * 100 : 0;
+
+              return {
+                assets: newAssets,
+                positions: newPositions,
+                equity: newEquity,
+                marginUtilization: marginUtil,
+                orderBook: { bids: orderBookBids, asks: orderBookAsks },
+              };
+            });
+          } else if (data.type === 'trade') {
+            const trade = data.data;
+            set((state) => ({
+              tradeHistory: [{
+                id: trade.id,
+                symbol: trade.symbol,
+                side: trade.side,
+                qty: trade.qty,
+                price: trade.price,
+                realizedPnL: 0,
+                timestamp: new Date(trade.timestamp),
+              }, ...state.tradeHistory],
+            }));
+          }
+        },
+        () => {
+          wsConnected = false;
+          reconnectAttempts++;
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), maxReconnectDelay);
+          console.log(`WebSocket reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
+          setTimeout(connect, delay);
+        },
+      );
+    }
+
+    connect();
+
+    // Simulate live ticking data as fallback when WebSocket is disconnected
     setInterval(() => {
-      set((state) => {
-        const newAssets = state.assets.map(a => {
-          const move = a.currentPrice * (1 + (Math.random() - 0.5) * 0.0005);
-          return { ...a, currentPrice: move };
+      if (!wsConnected) {
+        set((state) => {
+          const { assets: newAssets, orderBook } = simulatePrice(
+            state.assets, state.selectedSymbol, state.orderBook
+          );
+
+          let totalUnrealized = 0;
+          let totalMargin = 0;
+          const newPositions = state.positions.map(p => {
+            const currentAsset = newAssets.find(a => a.symbol === p.symbol);
+            const currentPrice = currentAsset ? currentAsset.currentPrice : p.entryPrice;
+            const pnl = p.side === 'LONG'
+              ? (currentPrice - p.entryPrice) * p.size
+              : (p.entryPrice - currentPrice) * p.size;
+            totalUnrealized += pnl;
+            totalMargin += p.marginRequired;
+            return { ...p, unrealizedPnL: pnl };
+          });
+
+          const newEquity = state.balance + totalUnrealized;
+          const marginUtil = newEquity > 0 ? (totalMargin / newEquity) * 100 : 0;
+
+          return {
+            assets: newAssets,
+            positions: newPositions,
+            equity: newEquity,
+            marginUtilization: marginUtil,
+            orderBook,
+          };
         });
-
-        // Update positions PnL
-        let totalUnrealized = 0;
-        let totalMargin = 0;
-        const newPositions = state.positions.map(p => {
-          const currentAsset = newAssets.find(a => a.symbol === p.symbol);
-          const currentPrice = currentAsset ? currentAsset.currentPrice : p.entryPrice;
-          const pnl = p.side === 'LONG' 
-            ? (currentPrice - p.entryPrice) * p.size 
-            : (p.entryPrice - currentPrice) * p.size;
-          totalUnrealized += pnl;
-          totalMargin += p.marginRequired;
-          return { ...p, unrealizedPnL: pnl };
-        });
-
-        const newEquity = state.balance + totalUnrealized;
-        const marginUtil = newEquity > 0 ? (totalMargin / newEquity) * 100 : 0;
-
-        // Simulate order book
-        const currentBtcPrice = newAssets.find(a => a.symbol === state.selectedSymbol)?.currentPrice || 64500;
-        const bids: OrderBookLevel[] = [];
-        const asks: OrderBookLevel[] = [];
-        let totalBid = 0;
-        let totalAsk = 0;
-        for(let i=0; i<8; i++) {
-          const bidSize = Number((Math.random() * 2).toFixed(2));
-          totalBid += bidSize;
-          bids.push({ price: currentBtcPrice - (i+1)*0.5, size: bidSize, total: totalBid });
-          
-          const askSize = Number((Math.random() * 2).toFixed(2));
-          totalAsk += askSize;
-          asks.push({ price: currentBtcPrice + (i+1)*0.5, size: askSize, total: totalAsk });
-        }
-
-        return { 
-          assets: newAssets,
-          positions: newPositions,
-          equity: newEquity,
-          marginUtilization: marginUtil,
-          orderBook: { bids, asks }
-        };
-      });
+      }
     }, 500);
 
     // Poll the Go Gateway
@@ -177,7 +297,6 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         return state;
       }
 
-      // Automatically fill the order and turn into position
       const newPosition: Position = {
         id: Math.random().toString(36).substring(7),
         symbol,
@@ -201,7 +320,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       state.showNotification(`Order FILLED: ${side} ${size} ${symbol} @ ${price}`, "success");
 
       return {
-        balance: state.balance - marginRequired, // deduct margin
+        balance: state.balance - marginRequired,
         positions: [...state.positions, newPosition],
         tradeHistory: [newTrade, ...state.tradeHistory]
       };

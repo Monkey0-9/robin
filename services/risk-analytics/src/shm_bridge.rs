@@ -139,7 +139,7 @@ impl ShmBridge {
         unsafe {
             std::ptr::copy_nonoverlapping(msg as *const ShmMessage, self.ring.add(slot), 1);
             std::sync::atomic::fence(Ordering::Release);
-            header.write_idx.store(write_idx + 1, Ordering::Release);
+            header.write_idx.store(write_idx + 1, Ordering::Relaxed);
         }
         true
     }
@@ -157,8 +157,8 @@ impl ShmBridge {
         let slot = (read_idx & (SHM_CAPACITY as u64 - 1)) as usize;
         unsafe {
             std::ptr::copy_nonoverlapping(self.ring.add(slot), msg as *mut ShmMessage, 1);
-            std::sync::atomic::fence(Ordering::Acquire);
-            header.read_idx.store(read_idx + 1, Ordering::Release);
+            std::sync::atomic::fence(Ordering::Release);
+            header.read_idx.store(read_idx + 1, Ordering::Relaxed);
         }
         true
     }

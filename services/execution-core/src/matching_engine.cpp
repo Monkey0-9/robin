@@ -14,6 +14,8 @@
 #elif defined(__linux__)
 #include <pthread.h>
 #include <sched.h>
+#include <numa.h>
+#include <numaif.h>
 #endif
 
 #ifndef likely
@@ -65,6 +67,7 @@ public:
         numa_node_ = numa_node;
         cpu_core_ = cpu_core;
         pin_to_cpu(cpu_core);
+        bind_to_numa_node(numa_node);
         return true;
     }
 
@@ -104,6 +107,17 @@ private:
         CPU_ZERO(&cpuset);
         CPU_SET(cpu, &cpuset);
         pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+#endif
+    }
+
+    void bind_to_numa_node(uint32_t node) noexcept {
+#if defined(__linux__) && defined(__NR_getcpu)
+        struct bitmask *nodemask = numa_allocate_nodemask();
+        if (nodemask) {
+            numa_bitmask_setbit(nodemask, node);
+            numa_bind(nodemask);
+            numa_free_nodemask(nodemask);
+        }
 #endif
     }
 

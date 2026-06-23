@@ -36,14 +36,14 @@ struct MatchResultFPGA {
 // Each HBM channel is 256-bit wide, running at 450MHz
 // Total bandwidth: 8 channels * 256-bit * 450MHz = 115.2 GB/s
 
-static OrderBookEntry bid_book[MAX_BOOK_DEPTH];
-static OrderBookEntry ask_book[MAX_BOOK_DEPTH];
+OrderBookEntry bid_book[MAX_BOOK_DEPTH];
+OrderBookEntry ask_book[MAX_BOOK_DEPTH];
 
 #pragma HLS RESOURCE variable=bid_book core=RAM_2P_BRAM
 #pragma HLS RESOURCE variable=ask_book core=RAM_2P_BRAM
 
-static depth_t bid_count = 0;
-static depth_t ask_count = 0;
+depth_t bid_count = 0;
+depth_t ask_count = 0;
 
 // Top-level HLS kernel function
 extern "C" {
@@ -58,8 +58,7 @@ void order_match_kernel(
 #pragma HLS INTERFACE m_axi port=hbm_in offset=slave bundle=gmem0
 #pragma HLS INTERFACE m_axi port=hbm_out offset=slave bundle=gmem1
 #pragma HLS INTERFACE s_axilite port=return bundle=control
-
-#pragma HLS PIPELINE II=1
+#pragma HLS DATAFLOW
 
     ap_axiu<256,0,0,0> cmd = input_stream.read();
 
@@ -77,38 +76,61 @@ void order_match_kernel(
     result.buy_order_id = 0;
     result.sell_order_id = 0;
 
-    if (op == 1 && bid_price >= ask_price) {
+    if (op == 0) {
+        // Reset book state
         for (depth_t i = 0; i < MAX_BOOK_DEPTH; i++) {
-#pragma HLS UNROLL
+#pragma HLS UNROLL factor=16
+            bid_book[i].active = 0;
+            ask_book[i].active = 0;
+        }
+        bid_count = 0;
+        ask_count = 0;
+    } else if (op == 1 && bid_price >= ask_price) {
+        depth_t best_idx = MAX_BOOK_DEPTH;
+        price_t best_price = 0;
+        for (depth_t i = 0; i < MAX_BOOK_DEPTH; i++) {
+#pragma HLS UNROLL factor=16
             if (i < ask_count && ask_book[i].active && ask_book[i].price <= bid_price) {
-                qty_t match_qty = (bid_qty < ask_book[i].qty) ? bid_qty : ask_book[i].qty;
-                result.matched = 1;
-                result.buy_order_id = ord_id;
-                result.sell_order_id = ask_book[i].order_id;
-                result.match_price = ask_book[i].price;
-                result.match_qty = match_qty;
-                ask_book[i].qty -= match_qty;
-                if (ask_book[i].qty == 0) {
-                    ask_book[i].active = 0;
+                if (i < best_idx) {
+                    best_idx = i;
+                    best_price = ask_book[i].price;
                 }
-                break;
+            }
+        }
+        if (best_idx < MAX_BOOK_DEPTH) {
+            qty_t match_qty = (bid_qty < ask_book[best_idx].qty) ? bid_qty : ask_book[best_idx].qty;
+            result.matched = 1;
+            result.buy_order_id = ord_id;
+            result.sell_order_id = ask_book[best_idx].order_id;
+            result.match_price = ask_book[best_idx].price;
+            result.match_qty = match_qty;
+            ask_book[best_idx].qty -= match_qty;
+            if (ask_book[best_idx].qty == 0) {
+                ask_book[best_idx].active = 0;
             }
         }
     } else if (op == 2 && ask_price <= bid_price) {
+        depth_t best_idx = MAX_BOOK_DEPTH;
+        price_t best_price = 0;
         for (depth_t i = 0; i < MAX_BOOK_DEPTH; i++) {
-#pragma HLS UNROLL
+#pragma HLS UNROLL factor=16
             if (i < bid_count && bid_book[i].active && bid_book[i].price >= ask_price) {
-                qty_t match_qty = (ask_qty < bid_book[i].qty) ? ask_qty : bid_book[i].qty;
-                result.matched = 1;
-                result.buy_order_id = bid_book[i].order_id;
-                result.sell_order_id = ord_id;
-                result.match_price = bid_book[i].price;
-                result.match_qty = match_qty;
-                bid_book[i].qty -= match_qty;
-                if (bid_book[i].qty == 0) {
-                    bid_book[i].active = 0;
+                if (i < best_idx) {
+                    best_idx = i;
+                    best_price = bid_book[i].price;
                 }
-                break;
+            }
+        }
+        if (best_idx < MAX_BOOK_DEPTH) {
+            qty_t match_qty = (ask_qty < bid_book[best_idx].qty) ? ask_qty : bid_book[best_idx].qty;
+            result.matched = 1;
+            result.buy_order_id = bid_book[best_idx].order_id;
+            result.sell_order_id = ord_id;
+            result.match_price = bid_book[best_idx].price;
+            result.match_qty = match_qty;
+            bid_book[best_idx].qty -= match_qty;
+            if (bid_book[best_idx].qty == 0) {
+                bid_book[best_idx].active = 0;
             }
         }
     } else if (op == 3) {
@@ -145,8 +167,19 @@ void order_match_kernel(
 }
 }
 
+// Reset function to clear book state between kernel calls (simulation helper)
+void reset_book_state() {
+    for (depth_t i = 0; i < MAX_BOOK_DEPTH; i++) {
+        bid_book[i].active = 0;
+        ask_book[i].active = 0;
+    }
+    bid_count = 0;
+    ask_count = 0;
+}
+
 // Testbench
 int main() {
+    reset_book_state();
     hls::stream<ap_axiu<256,0,0,0>> in;
     hls::stream<ap_axiu<256,0,0,0>> out;
 

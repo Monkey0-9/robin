@@ -49,9 +49,17 @@ impl HedgingEngine {
                 let hedge_notional = market_exposure * beta;
                 if hedge_notional.abs() > 1000.0 {
                     let hedge_qty = (hedge_notional / index_price).abs() as u64;
-                    let side = if hedge_notional > 0.0 { HedgeSide::Sell } else { HedgeSide::Buy };
+                    let side = if hedge_notional > 0.0 {
+                        HedgeSide::Sell
+                    } else {
+                        HedgeSide::Buy
+                    };
                     if hedge_qty > 0 {
-                        orders.push(HedgeOrder { symbol, side, qty: hedge_qty });
+                        orders.push(HedgeOrder {
+                            symbol,
+                            side,
+                            qty: hedge_qty,
+                        });
                     }
                 }
             }
@@ -67,7 +75,11 @@ mod tests {
     #[test]
     fn test_delta_neutral_hedge() {
         let mut engine = HedgingEngine::new();
-        engine.update_position(Position { symbol: "AAPL", qty: 1000, avg_price: 150.0 });
+        engine.update_position(Position {
+            symbol: "AAPL",
+            qty: 1000,
+            avg_price: 150.0,
+        });
         engine.set_beta("AAPL", 1.2);
         let orders = engine.execute_hedge(5000.0);
         assert_eq!(orders.len(), 1);
@@ -78,7 +90,11 @@ mod tests {
     #[test]
     fn test_no_hedge_for_small_position() {
         let mut engine = HedgingEngine::new();
-        engine.update_position(Position { symbol: "AAPL", qty: 1, avg_price: 150.0 });
+        engine.update_position(Position {
+            symbol: "AAPL",
+            qty: 1,
+            avg_price: 150.0,
+        });
         engine.set_beta("AAPL", 1.2);
         let orders = engine.execute_hedge(5000.0);
         assert!(orders.is_empty());

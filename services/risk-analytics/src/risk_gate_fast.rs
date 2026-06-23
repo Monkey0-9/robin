@@ -2,19 +2,19 @@ use crate::gate::{Order, OrderSide};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 pub struct ComplianceThresholds {
-    pub max_order_value:  u64,
-    pub max_order_qty:    u32,
-    pub price_collar_bps: u32,   // e.g. 500 = ±5%
-    pub reference_price:  u32,   // Updated dynamically via update_reference_price()
-    pub restricted_list:  [u32; 128],
+    pub max_order_value: u64,
+    pub max_order_qty: u32,
+    pub price_collar_bps: u32, // e.g. 500 = ±5%
+    pub reference_price: u32,  // Updated dynamically via update_reference_price()
+    pub restricted_list: [u32; 128],
     pub restricted_count: usize,
 }
 
 pub struct RiskGateFast {
-    thresholds:           ComplianceThresholds,
-    reference_prices:     Box<[AtomicU32]>, // Live-updated reference prices per instrument
-    failed_checks_count:  AtomicU64,
-    total_checks_count:   AtomicU64,
+    thresholds: ComplianceThresholds,
+    reference_prices: Box<[AtomicU32]>, // Live-updated reference prices per instrument
+    failed_checks_count: AtomicU64,
+    total_checks_count: AtomicU64,
 }
 
 impl RiskGateFast {
@@ -26,9 +26,9 @@ impl RiskGateFast {
         }
         Self {
             thresholds,
-            reference_prices:    prices.into_boxed_slice(),
+            reference_prices: prices.into_boxed_slice(),
             failed_checks_count: AtomicU64::new(0),
-            total_checks_count:  AtomicU64::new(0),
+            total_checks_count: AtomicU64::new(0),
         }
     }
 
@@ -70,10 +70,10 @@ impl RiskGateFast {
         let slot = (order.instrument_id & 4095) as usize;
         let ref_p = self.reference_prices[slot].load(Ordering::Relaxed) as u64;
         if ref_p > 0 {
-            let order_p        = order.price as u64;
-            let collar_bps     = self.thresholds.price_collar_bps as u64;
-            let max_allowed    = ref_p.saturating_mul(10000 + collar_bps) / 10000;
-            let min_allowed    = ref_p.saturating_mul(10000u64.saturating_sub(collar_bps)) / 10000;
+            let order_p = order.price as u64;
+            let collar_bps = self.thresholds.price_collar_bps as u64;
+            let max_allowed = ref_p.saturating_mul(10000 + collar_bps) / 10000;
+            let min_allowed = ref_p.saturating_mul(10000u64.saturating_sub(collar_bps)) / 10000;
 
             let price_ok = match order.side {
                 OrderSide::Bid => order_p <= max_allowed,
@@ -98,9 +98,11 @@ impl RiskGateFast {
     }
 
     pub fn get_pass_rate(&self) -> f64 {
-        let total  = self.total_checks_count.load(Ordering::Relaxed);
+        let total = self.total_checks_count.load(Ordering::Relaxed);
         let failed = self.failed_checks_count.load(Ordering::Relaxed);
-        if total == 0 { return 1.0; }
+        if total == 0 {
+            return 1.0;
+        }
         1.0 - (failed as f64 / total as f64)
     }
 }
@@ -111,21 +113,29 @@ mod tests {
 
     fn make_gate() -> RiskGateFast {
         RiskGateFast::new(ComplianceThresholds {
-            max_order_value:  10_000_000_000,
-            max_order_qty:    100_000,
+            max_order_value: 10_000_000_000,
+            max_order_qty: 100_000,
             price_collar_bps: 500,
-            reference_price:  50_000,
-            restricted_list:  [0u32; 128],
+            reference_price: 50_000,
+            restricted_list: [0u32; 128],
             restricted_count: 0,
         })
     }
 
     fn make_order(id: u64, instrument_id: u32, price: u32, qty: u32, side: OrderSide) -> Order {
         Order {
-            id, cl_order_id: id + 1000, instrument_id,
-            symbol: *b"AAPL    ", price, qty, side,
-            timestamp: 1000, account_id: 1,
-            client_id: 42, strategy_id: 1, entry_time_ns: 0,
+            id,
+            cl_order_id: id + 1000,
+            instrument_id,
+            symbol: *b"AAPL    ",
+            price,
+            qty,
+            side,
+            timestamp: 1000,
+            account_id: 1,
+            client_id: 42,
+            strategy_id: 1,
+            entry_time_ns: 0,
         }
     }
 
@@ -156,11 +166,11 @@ mod tests {
     #[test]
     fn test_restricted_symbol_fails() {
         let mut thresholds = ComplianceThresholds {
-            max_order_value:  10_000_000_000,
-            max_order_qty:    100_000,
+            max_order_value: 10_000_000_000,
+            max_order_qty: 100_000,
             price_collar_bps: 500,
-            reference_price:  50_000,
-            restricted_list:  [0u32; 128],
+            reference_price: 50_000,
+            restricted_list: [0u32; 128],
             restricted_count: 1,
         };
         thresholds.restricted_list[0] = 42; // instrument_id 42 is restricted
@@ -186,7 +196,7 @@ mod tests {
     #[test]
     fn test_pass_rate_calculation() {
         let gate = make_gate();
-        let ok  = make_order(7, 1, 51_000, 100, OrderSide::Bid);
+        let ok = make_order(7, 1, 51_000, 100, OrderSide::Bid);
         let bad = make_order(8, 1, 60_000, 100, OrderSide::Bid);
         gate.validate_compliance(&ok);
         gate.validate_compliance(&bad);

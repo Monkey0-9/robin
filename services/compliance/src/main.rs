@@ -170,11 +170,17 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
             event_type:   "NEW",
             timestamp_ns: now,
         };
-        let alert = detector.process_order_event(event);
+        let alert = detector.process_order_event(event.clone());
         EVENTS_PROCESSED.fetch_add(1, Ordering::Relaxed);
         if alert {
             SPOOFING_ALERTS.fetch_add(1, Ordering::Relaxed);
             eprintln!("[COMPLIANCE] SPOOFING ALERT on order {synthetic_order_id}");
+        }
+
+        // FINRA Rule 3110: Principal approval logging for large orders
+        let order_value = event.price as u64 * event.qty as u64;
+        if event.qty >= 10_000 || order_value >= 10_000_000 {
+            eprintln!("[COMPLIANCE] FINRA 3110: Principal approval required for large order {} (Qty: {}, Value: {})", synthetic_order_id, event.qty, order_value);
         }
 
         // Write audit record

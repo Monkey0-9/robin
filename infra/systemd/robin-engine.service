@@ -1,0 +1,19 @@
+[Unit]
+Description=Robin Platform - Execution Core (Matching Engine)
+After=network.target
+Wants=robin-risk.service
+
+[Service]
+Type=simple
+User=robin
+Group=robin
+# Pin to CPU 8-15 for low-latency NUMA node
+ExecStart=/usr/bin/taskset -c 8-15 /opt/robin/bin/matching_engine
+Restart=always
+RestartSec=1
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+Nice=-20
+
+[Install]
+WantedBy=multi-user.target

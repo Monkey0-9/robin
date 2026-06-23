@@ -1,9 +1,9 @@
-use crate::pre_trade::PreTradeRiskEvaluator;
 use crate::circuit_breaker::RiskCircuitBreaker;
 use crate::gpio_kill_switch::HardwareKillSwitch;
-use crate::risk_gate_fast::{RiskGateFast, ComplianceThresholds};
-use crate::shm_bridge::ShmBridge;
 use crate::hedging::HedgingEngine;
+use crate::pre_trade::PreTradeRiskEvaluator;
+use crate::risk_gate_fast::{ComplianceThresholds, RiskGateFast};
+use crate::shm_bridge::ShmBridge;
 use crate::tax_engine::TaxEngine;
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -29,27 +29,27 @@ pub enum OrderSide {
 ///   2. Velocity limits (max orders per sliding 1-second window)
 ///   3. Concentration limits (could be added)
 pub struct RiskGate {
-    pre_trade:            PreTradeRiskEvaluator,
-    circuit_breaker:      RiskCircuitBreaker,
-    kill_switch:          HardwareKillSwitch,
-    fast_gate:            RiskGateFast,
-    shm:                  Option<ShmBridge>,
+    pre_trade: PreTradeRiskEvaluator,
+    circuit_breaker: RiskCircuitBreaker,
+    kill_switch: HardwareKillSwitch,
+    fast_gate: RiskGateFast,
+    shm: Option<ShmBridge>,
     #[allow(dead_code)]
-    hedging:              HedgingEngine,
+    hedging: HedgingEngine,
     #[allow(dead_code)]
-    tax_engine:           TaxEngine,
-    orders_processed:     AtomicU64,
-    credit_limit:         u64,           // Hard block: max order value in price-units
-    duplicate_window_ns:  u64,
-    recent_orders:        Box<[(u64, u64)]>, // (order_id, timestamp_ns) ring
-    positions:            Box<[i64]>,         // Per-instrument net position
+    tax_engine: TaxEngine,
+    orders_processed: AtomicU64,
+    credit_limit: u64, // Hard block: max order value in price-units
+    duplicate_window_ns: u64,
+    recent_orders: Box<[(u64, u64)]>, // (order_id, timestamp_ns) ring
+    positions: Box<[i64]>,            // Per-instrument net position
     /// Circular buffer for velocity rate limiting.
     /// Stores the timestamp_ns of the last VELOCITY_WINDOW_SIZE approved orders.
-    velocity_ring:        Box<[u64]>,
-    velocity_head:        usize,
-    velocity_window_ns:   u64,   // Time window in nanoseconds (default 1 second)
-    max_velocity:         usize, // Max orders allowed within velocity_window_ns
-    position_limit:       i64,
+    velocity_ring: Box<[u64]>,
+    velocity_head: usize,
+    velocity_window_ns: u64, // Time window in nanoseconds (default 1 second)
+    max_velocity: usize,     // Max orders allowed within velocity_window_ns
+    position_limit: i64,
 }
 
 /// Size of the velocity ring buffer.
@@ -68,26 +68,26 @@ impl RiskGate {
             circuit_breaker: RiskCircuitBreaker::new(0.10),
             kill_switch: HardwareKillSwitch::new(),
             fast_gate: RiskGateFast::new(ComplianceThresholds {
-                max_order_value:  10_000_000_000,
-                max_order_qty:    1_000_000,
+                max_order_value: 10_000_000_000,
+                max_order_qty: 1_000_000,
                 price_collar_bps: 500,
-                reference_price:  50_000,
-                restricted_list:  [0u32; 128],
+                reference_price: 50_000,
+                restricted_list: [0u32; 128],
                 restricted_count: 0,
             }),
             shm: ShmBridge::new(shm_path, true).ok(),
-            hedging:    HedgingEngine::new(),
+            hedging: HedgingEngine::new(),
             tax_engine: TaxEngine::new(Vec::new()),
-            orders_processed:    AtomicU64::new(0),
-            credit_limit:        10_000_000_000, // 10 billion price-units
-            duplicate_window_ns: 1_000_000,      // 1 ms
-            recent_orders:       vec![(0u64, 0u64); 4096].into_boxed_slice(),
-            positions:           vec![0i64; 4096].into_boxed_slice(),
-            velocity_ring:       vec![0u64; VELOCITY_RING_SIZE].into_boxed_slice(),
-            velocity_head:       0,
-            velocity_window_ns:  1_000_000_000, // 1 second
-            max_velocity:        100,           // max 100 orders per second
-            position_limit:      100_000,
+            orders_processed: AtomicU64::new(0),
+            credit_limit: 10_000_000_000,   // 10 billion price-units
+            duplicate_window_ns: 1_000_000, // 1 ms
+            recent_orders: vec![(0u64, 0u64); 4096].into_boxed_slice(),
+            positions: vec![0i64; 4096].into_boxed_slice(),
+            velocity_ring: vec![0u64; VELOCITY_RING_SIZE].into_boxed_slice(),
+            velocity_head: 0,
+            velocity_window_ns: 1_000_000_000, // 1 second
+            max_velocity: 100,                 // max 100 orders per second
+            position_limit: 100_000,
         }
     }
 
@@ -110,7 +110,6 @@ impl RiskGate {
     ///
     /// Latency target: <500ns p99 on warm CPU (no DPDK, no kernel bypass).
     pub fn check_order(&mut self, order: &Order) -> Result<OrderStatus, RiskError> {
-
         // HARD BLOCK 1: Hardware kill switch
         if self.kill_switch.is_active() {
             return Err(RiskError::KillSwitchActive);
@@ -122,7 +121,9 @@ impl RiskGate {
         }
 
         // HARD BLOCK 3: Basic pre-trade size/price range checks
-        self.pre_trade.evaluate_order(order).map_err(|_| RiskError::FatFinger)?;
+        self.pre_trade
+            .evaluate_order(order)
+            .map_err(|_| RiskError::FatFinger)?;
 
         // HARD BLOCK 4: Order value limit (price × qty > credit_limit)
         let order_value = (order.price as u64).saturating_mul(order.qty as u64);
@@ -206,8 +207,7 @@ impl RiskGate {
 
     fn check_duplicate(&self, order: &Order) -> bool {
         let (old_id, old_ts) = self.recent_orders[(order.id & 4095) as usize];
-        old_id == order.id
-            && order.timestamp.wrapping_sub(old_ts) < self.duplicate_window_ns
+        old_id == order.id && order.timestamp.wrapping_sub(old_ts) < self.duplicate_window_ns
     }
 
     /// Correct sliding-window velocity check.
@@ -222,8 +222,8 @@ impl RiskGate {
             return false; // Rate limiting disabled
         }
         // Index of the entry that was approved (max_velocity) orders ago
-        let lookback_idx = (self.velocity_head + VELOCITY_RING_SIZE - self.max_velocity)
-            % VELOCITY_RING_SIZE;
+        let lookback_idx =
+            (self.velocity_head + VELOCITY_RING_SIZE - self.max_velocity) % VELOCITY_RING_SIZE;
         let oldest_ts = self.velocity_ring[lookback_idx];
 
         // If the oldest entry in the window is non-zero and within the time window,
@@ -243,7 +243,8 @@ impl RiskGate {
     pub fn update_reference_price(&self, instrument_id: u32, price: u64) {
         let slot = (instrument_id & 4095) as usize;
         LAST_TRADE_PRICES[slot].store(price, Ordering::Relaxed);
-        self.fast_gate.update_reference_price(instrument_id, price as u32);
+        self.fast_gate
+            .update_reference_price(instrument_id, price as u32);
     }
 }
 
@@ -259,17 +260,17 @@ pub fn update_last_trade_price(instrument_id: u32, price: u64) {
 
 #[repr(C, align(64))]
 pub struct Order {
-    pub id:            u64,
-    pub cl_order_id:   u64,
+    pub id: u64,
+    pub cl_order_id: u64,
     pub instrument_id: u32,
-    pub symbol:        [u8; 8],
-    pub price:         u32,
-    pub qty:           u32,
-    pub side:          OrderSide,
-    pub timestamp:     u64,
-    pub account_id:    u32,
-    pub client_id:     u32,
-    pub strategy_id:   u32,
+    pub symbol: [u8; 8],
+    pub price: u32,
+    pub qty: u32,
+    pub side: OrderSide,
+    pub timestamp: u64,
+    pub account_id: u32,
+    pub client_id: u32,
+    pub strategy_id: u32,
     pub entry_time_ns: u64,
 }
 
@@ -364,14 +365,23 @@ mod tests {
     #[test]
     fn test_reject_position_limit() {
         let mut gate = RiskGate::new("/tmp/test_shm_pos");
-        let o1 = Order { instrument_id: 5, ..make_order(10, 50000, 80_000, OrderSide::Bid, 1000) };
+        let o1 = Order {
+            instrument_id: 5,
+            ..make_order(10, 50000, 80_000, OrderSide::Bid, 1000)
+        };
         assert_eq!(gate.check_order(&o1), Ok(OrderStatus::Approved));
 
-        let o2 = Order { instrument_id: 5, ..make_order(11, 50000, 30_000, OrderSide::Bid, 2000) };
+        let o2 = Order {
+            instrument_id: 5,
+            ..make_order(11, 50000, 30_000, OrderSide::Bid, 2000)
+        };
         assert_eq!(gate.check_order(&o2), Err(RiskError::PositionLimit));
 
         // Sell reduces position — should pass
-        let o3 = Order { instrument_id: 5, ..make_order(12, 50000, 20_000, OrderSide::Ask, 3000) };
+        let o3 = Order {
+            instrument_id: 5,
+            ..make_order(12, 50000, 20_000, OrderSide::Ask, 3000)
+        };
         assert_eq!(gate.check_order(&o3), Ok(OrderStatus::Approved));
     }
 
@@ -381,7 +391,12 @@ mod tests {
         // Send exactly max_velocity (100) orders, spaced 1000ns each (well within 1s window)
         for i in 0..100u64 {
             let o = make_order(i + 100, 50000, 1, OrderSide::Bid, 1_000_000 + i * 1000);
-            assert_eq!(gate.check_order(&o), Ok(OrderStatus::Approved), "order {} should pass", i);
+            assert_eq!(
+                gate.check_order(&o),
+                Ok(OrderStatus::Approved),
+                "order {} should pass",
+                i
+            );
         }
         // 101st order within the same second should fail
         let o_fail = make_order(201, 50000, 1, OrderSide::Bid, 1_000_000 + 100 * 1000);

@@ -68,13 +68,24 @@ mod tests {
         let evaluator = PreTradeRiskEvaluator::new(1_000_000_000, 10000, 100000, 1000);
 
         let order = Order {
-            id: 1, cl_order_id: 1001, instrument_id: 1,
-            symbol: *b"AAPL    ", price: 50000, qty: 999999, side: crate::gate::OrderSide::Bid,
-            timestamp: 1000, account_id: 1,
-            client_id: 42, strategy_id: 1, entry_time_ns: 0,
+            id: 1,
+            cl_order_id: 1001,
+            instrument_id: 1,
+            symbol: *b"AAPL    ",
+            price: 50000,
+            qty: 999999,
+            side: crate::gate::OrderSide::Bid,
+            timestamp: 1000,
+            account_id: 1,
+            client_id: 42,
+            strategy_id: 1,
+            entry_time_ns: 0,
         };
 
-        assert_eq!(evaluator.evaluate_order(&order), Err("ORDER_QTY_LIMIT_EXCEEDED"));
+        assert_eq!(
+            evaluator.evaluate_order(&order),
+            Err("ORDER_QTY_LIMIT_EXCEEDED")
+        );
     }
 
     #[test]
@@ -82,12 +93,23 @@ mod tests {
         let evaluator = PreTradeRiskEvaluator::new(1_000_000_000, 10000, 100000, 50000);
 
         let order = Order {
-            id: 1, cl_order_id: 1001, instrument_id: 1,
-            symbol: *b"AAPL    ", price: 200000, qty: 100, side: crate::gate::OrderSide::Bid,
-            timestamp: 1000, account_id: 1,
-            client_id: 42, strategy_id: 1, entry_time_ns: 0,
+            id: 1,
+            cl_order_id: 1001,
+            instrument_id: 1,
+            symbol: *b"AAPL    ",
+            price: 200000,
+            qty: 100,
+            side: crate::gate::OrderSide::Bid,
+            timestamp: 1000,
+            account_id: 1,
+            client_id: 42,
+            strategy_id: 1,
+            entry_time_ns: 0,
         };
 
-        assert_eq!(evaluator.evaluate_order(&order), Err("PRICE_COLLAR_COLLISION"));
+        assert_eq!(
+            evaluator.evaluate_order(&order),
+            Err("PRICE_COLLAR_COLLISION")
+        );
     }
 }

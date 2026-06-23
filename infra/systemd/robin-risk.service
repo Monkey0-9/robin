@@ -1,0 +1,19 @@
+[Unit]
+Description=Robin Platform - Risk Analytics Gate
+After=network.target
+Wants=robin-gateway.service
+
+[Service]
+Type=simple
+User=robin
+Group=robin
+# Pin to CPU 2-7 for low-latency NUMA node
+ExecStart=/usr/bin/taskset -c 2-7 /opt/robin/bin/robin-risk-analytics
+Restart=on-failure
+RestartSec=2
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+Nice=-20
+
+[Install]
+WantedBy=multi-user.target
