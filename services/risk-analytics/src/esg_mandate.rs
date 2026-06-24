@@ -29,6 +29,12 @@ pub struct ESGMandateEngine {
     pub mandates: Vec<ESGMandate>,
 }
 
+impl Default for ESGMandateEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ESGMandateEngine {
     pub fn new() -> Self {
         Self {
@@ -41,7 +47,11 @@ impl ESGMandateEngine {
     }
 
     pub fn check_order(&self, order: &Order, mandate: &ESGMandate) -> Result<(), String> {
-        if mandate.restricted_sectors.iter().any(|s| s == &order.sector) {
+        if mandate
+            .restricted_sectors
+            .iter()
+            .any(|s| s == &order.sector)
+        {
             return Err(format!(
                 "Order for {} blocked: sector '{}' is restricted by mandate '{}'",
                 order.symbol, order.sector, mandate.fund_name

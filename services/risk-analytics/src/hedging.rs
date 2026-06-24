@@ -25,6 +25,12 @@ pub struct HedgingEngine {
     beta_sensitivities: HashMap<&'static str, f64>,
 }
 
+impl Default for HedgingEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HedgingEngine {
     pub fn new() -> Self {
         Self {

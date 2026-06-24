@@ -9,6 +9,12 @@ pub struct HardwareKillSwitch {
     monitor_handle: Option<thread::JoinHandle<()>>,
 }
 
+impl Default for HardwareKillSwitch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl HardwareKillSwitch {
     pub fn new() -> Self {
         Self {

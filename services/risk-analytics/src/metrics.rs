@@ -57,7 +57,7 @@ pub fn render_text() -> String {
     let lat_sum = LATENCY_SUM_NS.load(Ordering::Relaxed);
     let lat_cnt = LATENCY_COUNT.load(Ordering::Relaxed);
     let lat_max = LATENCY_MAX_NS.load(Ordering::Relaxed);
-    let lat_avg = if lat_cnt > 0 { lat_sum / lat_cnt } else { 0 };
+    let lat_avg = lat_sum.checked_div(lat_cnt).unwrap_or(0);
     let ks_trips = KILL_SWITCH_TRIPS.load(Ordering::Relaxed);
     let cb_trips = CIRCUIT_BREAKER_TRIPS.load(Ordering::Relaxed);
     let dup_rej = DUPLICATE_REJECTIONS.load(Ordering::Relaxed);

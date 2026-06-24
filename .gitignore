@@ -23,6 +23,9 @@ pids/
 build_cpp_dir/
 .vscode/settings.json
 *.user
+*.dll
+*.so
+*.dylib
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake

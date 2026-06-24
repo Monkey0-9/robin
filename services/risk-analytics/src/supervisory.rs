@@ -34,7 +34,8 @@ impl SupervisoryWorkflow {
 
     pub fn request_approval(&mut self, order_id: u64, notional: f64, symbol: &str) {
         if notional <= self.approval_threshold {
-            self.principal_approvals.insert(order_id, ApprovalStatus::Approved);
+            self.principal_approvals
+                .insert(order_id, ApprovalStatus::Approved);
             return;
         }
 
@@ -43,7 +44,8 @@ impl SupervisoryWorkflow {
             .unwrap()
             .as_secs();
 
-        self.principal_approvals.insert(order_id, ApprovalStatus::Pending);
+        self.principal_approvals
+            .insert(order_id, ApprovalStatus::Pending);
         self.pending_approvals.push(PendingApproval {
             order_id,
             principal_id: 0,
@@ -54,15 +56,25 @@ impl SupervisoryWorkflow {
     }
 
     pub fn approve(&mut self, order_id: u64, principal_id: u64) {
-        self.principal_approvals.insert(order_id, ApprovalStatus::Approved);
-        if let Some(pa) = self.pending_approvals.iter_mut().find(|pa| pa.order_id == order_id) {
+        self.principal_approvals
+            .insert(order_id, ApprovalStatus::Approved);
+        if let Some(pa) = self
+            .pending_approvals
+            .iter_mut()
+            .find(|pa| pa.order_id == order_id)
+        {
             pa.principal_id = principal_id;
         }
     }
 
     pub fn reject(&mut self, order_id: u64, principal_id: u64, _reason: &str) {
-        self.principal_approvals.insert(order_id, ApprovalStatus::Rejected);
-        if let Some(pa) = self.pending_approvals.iter_mut().find(|pa| pa.order_id == order_id) {
+        self.principal_approvals
+            .insert(order_id, ApprovalStatus::Rejected);
+        if let Some(pa) = self
+            .pending_approvals
+            .iter_mut()
+            .find(|pa| pa.order_id == order_id)
+        {
             pa.principal_id = principal_id;
         }
     }

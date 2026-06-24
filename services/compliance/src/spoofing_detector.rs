@@ -21,7 +21,7 @@ impl SpoofingDetector {
         Self {
             recent_events: HashMap::new(),
             alert_count: 0,
-            window_ns: window_ns,
+            window_ns,
         }
     }
 

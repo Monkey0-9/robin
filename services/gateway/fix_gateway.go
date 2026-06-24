@@ -1,9 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
+	"log/slog"
+	"net"
+	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -174,16 +179,25 @@ func ExecutionReport(sender, target string, seqNum int, clOrdID, orderID, execID
 // FixEngine
 
 type ExecutionReportCallback func(*FixMessage)
+type LogonCallback func()
+type DisconnectCallback func(error)
 
 type FixEngine struct {
-	mu           sync.Mutex
-	connected    bool
-	targetHost   string
-	targetPort   int
-	senderCompID string
-	targetCompID string
-	seqNum       int
-	onExecReport ExecutionReportCallback
+	mu              sync.Mutex
+	conn            net.Conn
+	reader          *bufio.Reader
+	connected       bool
+	stopped         atomic.Bool
+	targetHost      string
+	targetPort      int
+	senderCompID    string
+	targetCompID    string
+	seqNum          int
+	heartBtInt      int
+	onExecReport    ExecutionReportCallback
+	onLogon         LogonCallback
+	onDisconnect    DisconnectCallback
+	logger          *slog.Logger
 }
 
 func NewFixEngine(senderCompID, targetCompID string) *FixEngine {
@@ -191,32 +205,69 @@ func NewFixEngine(senderCompID, targetCompID string) *FixEngine {
 		senderCompID: senderCompID,
 		targetCompID: targetCompID,
 		seqNum:       1,
+		heartBtInt:   30,
+		logger:       slog.With("module", "fix"),
 	}
 }
 
 func (e *FixEngine) Connect(targetHost string, targetPort int) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+
+	if e.connected {
+		return fmt.Errorf("already connected")
+	}
+
 	e.targetHost = targetHost
 	e.targetPort = targetPort
-	// TODO: Establish TCP connection to FIX counterparty
+
+	addr := fmt.Sprintf("%s:%d", targetHost, targetPort)
+	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("TCP dial failed: %w", err)
+	}
+
+	e.conn = conn
+	e.reader = bufio.NewReaderSize(conn, 4096)
 	e.connected = true
-	fmt.Printf("[FIX] Connected to %s:%d\n", targetHost, targetPort)
+	e.logger.Info("TCP connection established", "addr", addr)
+
+	// Send Logon
+	logon := Logon(e.senderCompID, e.targetCompID, e.seqNum)
+	e.seqNum++
+	encoded := logon.encode()
+	if _, err := fmt.Fprint(conn, encoded); err != nil {
+		conn.Close()
+		e.connected = false
+		return fmt.Errorf("logon send failed: %w", err)
+	}
+	e.logger.Info("Logon sent", "seq", e.seqNum-1)
+
+	// Start receive goroutine
+	go e.receiveLoop()
+
+	// Start heartbeat goroutine
+	go e.heartbeatLoop()
+
 	return nil
 }
 
 func (e *FixEngine) Disconnect() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.stopped.Store(true)
+	if e.conn != nil {
+		e.conn.Close()
+	}
 	e.connected = false
-	fmt.Println("[FIX] Disconnected")
+	e.logger.Info("Disconnected")
 	return nil
 }
 
 func (e *FixEngine) SendOrder(order *FixMessage) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if !e.connected {
+	if !e.connected || e.conn == nil {
 		return fmt.Errorf("not connected")
 	}
 	order.SenderCompID = e.senderCompID
@@ -224,57 +275,203 @@ func (e *FixEngine) SendOrder(order *FixMessage) error {
 	order.MsgSeqNum = e.seqNum
 	e.seqNum++
 	encoded := order.encode()
-	fmt.Printf("[FIX] Sending (%d bytes): %s\n", len(encoded), encoded)
+	e.logger.Debug("Sending FIX message", "type", order.MsgType, "seq", order.MsgSeqNum, "bytes", len(encoded))
+	if _, err := fmt.Fprint(e.conn, encoded); err != nil {
+		e.logger.Error("FIX send failed", "error", err)
+		return fmt.Errorf("send failed: %w", err)
+	}
 	return nil
+}
+
+func (e *FixEngine) SendRaw(msg *FixMessage) error {
+	return e.SendOrder(msg)
+}
+
+func (e *FixEngine) receiveLoop() {
+	e.logger.Info("FIX receive loop started")
+	for !e.stopped.Load() {
+		raw, err := e.reader.ReadString(SOH[0])
+		if err != nil {
+			e.logger.Warn("FIX receive error", "error", err)
+			e.mu.Lock()
+			e.connected = false
+			if e.conn != nil {
+				e.conn.Close()
+			}
+			e.mu.Unlock()
+			if e.onDisconnect != nil {
+				e.onDisconnect(err)
+			}
+			return
+		}
+
+		// Read until we have a full message (ending with 10=xxx SOH)
+		for !strings.Contains(raw, fmt.Sprintf("%s10=", SOH)) && !e.stopped.Load() {
+			chunk, err := e.reader.ReadString(SOH[0])
+			if err != nil {
+				break
+			}
+			raw += chunk
+		}
+
+		msg := decode(raw)
+		if msg == nil {
+			continue
+		}
+
+		switch msg.MsgType {
+		case "A": // Logon
+			e.logger.Info("Logon response received")
+			if e.onLogon != nil {
+				e.onLogon()
+			}
+		case "0": // Heartbeat
+			e.logger.Debug("Heartbeat received")
+		case "8": // ExecutionReport
+			e.logger.Info("Execution report received", "clOrdID", msg.Fields[11], "execType", msg.Fields[150])
+			if e.onExecReport != nil {
+				e.onExecReport(msg)
+			}
+		case "3": // Reject
+			e.logger.Warn("FIX message rejected", "refSeqNum", msg.Fields[45], "text", msg.Fields[58])
+		case "5": // Logout
+			e.logger.Info("Logout received")
+			e.mu.Lock()
+			e.connected = false
+			if e.conn != nil {
+				e.conn.Close()
+			}
+			e.mu.Unlock()
+			if e.onDisconnect != nil {
+				e.onDisconnect(fmt.Errorf("remote logout"))
+			}
+			return
+		default:
+			e.logger.Debug("Received FIX message", "type", msg.MsgType)
+		}
+	}
+}
+
+func (e *FixEngine) heartbeatLoop() {
+	ticker := time.NewTicker(time.Duration(e.heartBtInt) * time.Second)
+	defer ticker.Stop()
+
+	for !e.stopped.Load() {
+		<-ticker.C
+
+		e.mu.Lock()
+		if !e.connected || e.conn == nil {
+			e.mu.Unlock()
+			return
+		}
+		hb := Heartbeat(e.senderCompID, e.targetCompID, e.seqNum)
+		e.seqNum++
+		encoded := hb.encode()
+		if _, err := fmt.Fprint(e.conn, encoded); err != nil {
+			e.logger.Warn("Heartbeat send failed", "error", err)
+		}
+		e.mu.Unlock()
+	}
 }
 
 func (e *FixEngine) OnExecutionReport(callback ExecutionReportCallback) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.onExecReport = callback
-	fmt.Println("[FIX] Execution report callback registered")
+	e.logger.Info("Execution report callback registered")
 }
 
-// RunFixGatewayDemo demonstrates FIX message encoding/decoding
+func (e *FixEngine) OnLogon(callback LogonCallback) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.onLogon = callback
+}
+
+func (e *FixEngine) OnDisconnect(callback DisconnectCallback) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.onDisconnect = callback
+}
+
+func (e *FixEngine) IsConnected() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.connected
+}
+
+func (e *FixEngine) SetHeartBtInt(sec int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.heartBtInt = sec
+}
+
+// RunFixGatewayDemo demonstrates FIX message encoding/decoding and TCP connectivity
 func RunFixGatewayDemo() {
-	engine := NewFixEngine("ROBIN", "BROKER")
-	if err := engine.Connect("fix.broker.com", 4198); err != nil {
-		fmt.Printf("Connect failed: %v\n", err)
+	fmt.Println("=== FIX Gateway Demo ===")
+
+	// Test with a real broker endpoint or use env vars
+	brokerHost := envOrDefault("FIX_BROKER_HOST", "fix.broker.com")
+	brokerPort := 4198
+	if p := os.Getenv("FIX_BROKER_PORT"); p != "" {
+		fmt.Sscanf(p, "%d", &brokerPort)
+	}
+	sender := envOrDefault("FIX_SENDER_COMP_ID", "ROBIN")
+	target := envOrDefault("FIX_TARGET_COMP_ID", "BROKER")
+
+	engine := NewFixEngine(sender, target)
+	engine.SetHeartBtInt(30)
+
+	// Register callbacks
+	engine.OnLogon(func() {
+		fmt.Println("[FIX DEMO] Logon confirmed by counterparty")
+	})
+	engine.OnExecutionReport(func(msg *FixMessage) {
+		fmt.Printf("[FIX DEMO] ExecReport: ClOrdID=%s ExecType=%s OrdStatus=%s LastQty=%s LastPx=%s\n",
+			msg.Fields[11], msg.Fields[150], msg.Fields[39],
+			msg.Fields[32], msg.Fields[31])
+	})
+	engine.OnDisconnect(func(err error) {
+		fmt.Printf("[FIX DEMO] Disconnected: %v\n", err)
+	})
+
+	if err := engine.Connect(brokerHost, brokerPort); err != nil {
+		fmt.Printf("[FIX DEMO] Connect to %s:%d failed (expected in dev): %v\n", brokerHost, brokerPort, err)
+		fmt.Println("[FIX DEMO] Falling back to encoding/decoding roundtrip demo...")
+
+		// Offline roundtrip test
+		order := NewOrderSingle(sender, target, 1, "ORD-001", "AAPL",
+			"1", "2", 100.0, 150.25, "0")
+		decoded := decode(order.encode())
+		fmt.Printf("[FIX DEMO] Roundtrip: MsgType=%s Symbol=%s Side=%s Qty=%s Price=%s\n",
+			decoded.MsgType, decoded.Fields[55], decoded.Fields[54],
+			decoded.Fields[38], decoded.Fields[44])
+
+		logon := Logon(sender, target, 1)
+		decodedLogon := decode(logon.encode())
+		fmt.Printf("[FIX DEMO] Logon roundtrip: EncryptMethod=%s HeartBtInt=%s\n",
+			decodedLogon.Fields[98], decodedLogon.Fields[108])
+
+		exec := ExecutionReport(sender, target, 2, "ORD-001", "ORD-EXEC-1",
+			"EXEC-1", "F", "2", "AAPL", "1", 100.0, 150.25, 0.0)
+		decodedExec := decode(exec.encode())
+		fmt.Printf("[FIX DEMO] ExecReport roundtrip: ExecType=%s OrdStatus=%s LastQty=%s LastPx=%s\n",
+			decodedExec.Fields[150], decodedExec.Fields[39],
+			decodedExec.Fields[32], decodedExec.Fields[31])
+
 		return
 	}
 
-	order := NewOrderSingle("ROBIN", "BROKER", 1, "ORD-001", "AAPL",
+	// Send a sample order
+	order := NewOrderSingle(sender, target, 1, "ORD-001", "AAPL",
 		"1", "2", 100.0, 150.25, "0")
 	if err := engine.SendOrder(order); err != nil {
-		fmt.Printf("Send failed: %v\n", err)
+		fmt.Printf("[FIX DEMO] Send failed: %v\n", err)
 	}
 
-	decoded := decode(order.encode())
-	fmt.Printf("[FIX] Decoded MsgType=%s Sender=%s Target=%s Symbol=%s Side=%s Qty=%s\n",
-		decoded.MsgType, decoded.SenderCompID, decoded.TargetCompID,
-		decoded.Fields[55], decoded.Fields[54], decoded.Fields[38])
+	// Keep the connection alive for a few seconds to demonstrate heartbeat/receive
+	fmt.Println("[FIX DEMO] Connection established. Waiting for messages (5s)...")
+	time.Sleep(5 * time.Second)
 
 	engine.Disconnect()
-
-	// Build a Logon message and roundtrip
-	logon := Logon("ROBIN", "BROKER", 1)
-	encoded := logon.encode()
-	decodedLogon := decode(encoded)
-	fmt.Printf("[FIX] Logon roundtrip: MsgType=%s EncryptMethod=%s HeartBtInt=%s\n",
-		decodedLogon.MsgType, decodedLogon.Fields[98], decodedLogon.Fields[108])
-
-	// Build an ExecutionReport and roundtrip
-	exec := ExecutionReport("ROBIN", "BROKER", 2, "ORD-001", "ORD-EXEC-1",
-		"EXEC-1", "F", "2", "AAPL", "1", 100.0, 150.25, 0.0)
-	encodedExec := exec.encode()
-	decodedExec := decode(encodedExec)
-	fmt.Printf("[FIX] ExecReport roundtrip: ExecType=%s OrdStatus=%s LastQty=%s LastPx=%s\n",
-		decodedExec.Fields[150], decodedExec.Fields[39],
-		decodedExec.Fields[32], decodedExec.Fields[31])
-
-	// Heartbeat roundtrip
-	hb := Heartbeat("ROBIN", "BROKER", 3)
-	encodedHb := hb.encode()
-	decodedHb := decode(encodedHb)
-	fmt.Printf("[FIX] Heartbeat roundtrip: MsgType=%s\n", decodedHb.MsgType)
+	fmt.Println("=== FIX Gateway Demo Complete ===")
 }

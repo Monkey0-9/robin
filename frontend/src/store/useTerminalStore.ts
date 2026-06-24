@@ -73,7 +73,13 @@ interface TerminalState {
 }
 
 const WS_URL = 'ws://localhost:8080/ws';
-const JWT_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0cmFkZXIxMjMiLCJpc3MiOiJyb2Jpbi1nYXRld2F5IiwiYXVkIjoicm9iaW4tc2VydmljZXMifQ.placeholder';
+const GATEWAY_URL = 'http://localhost:8080';
+
+// Dev JWT: HS256, signed with "secret-dev-key", sub=trader123
+// Header: {"alg":"HS256","typ":"JWT"}
+// Payload: {"sub":"trader123","iss":"robin-gateway","aud":"robin-services","iat":1700000000}
+// To regenerate: node -e "const j=require('jsonwebtoken'); console.log(j.sign({sub:'trader123',iss:'robin-gateway',aud:'robin-services'}, 'secret-dev-key'));"
+const JWT_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0cmFkZXIxMjMiLCJpc3MiOiJyb2Jpbi1nYXRld2F5IiwiYXVkIjoicm9iaW4tc2VydmljZXMiLCJpYXQiOjE3MDAwMDAwMDB9.kGfBvfS0FZQn5FHKm7wMhJ1C9XgEFR4UkO5EHVzrT14';
 
 function simulatePrice(assets: Asset[], selectedSymbol: string, orderBook: { bids: OrderBookLevel[]; asks: OrderBookLevel[] }) {
   const newAssets = assets.map(a => {
@@ -289,49 +295,131 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }, 2000);
   },
 
-  submitOrder: (symbol, side, price, size, isMarket) => {
-    set((state) => {
-      const marginRequired = price * size * 0.05; // 5% margin
-      if (marginRequired > state.balance) {
-        state.showNotification("Insufficient margin", "error");
-        return state;
-      }
+  submitOrder: async (symbol, side, price, size, isMarket) => {
+    const state = get();
+    const marginRequired = price * size * 0.05; // 5% margin
+    if (marginRequired > state.balance) {
+      state.showNotification('Insufficient margin', 'error');
+      return;
+    }
 
-      const newPosition: Position = {
-        id: Math.random().toString(36).substring(7),
+    const clOrdId = `ORD-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+    // Attempt to submit via gateway
+    try {
+      const res = await fetch(`${GATEWAY_URL}/order`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${JWT_TOKEN}`,
+        },
+        body: JSON.stringify({
+          symbol,
+          side,
+          price,
+          qty: size,
+          order_type: isMarket ? 'MARKET' : 'LIMIT',
+          cl_ord_id: clOrdId,
+        }),
+        signal: AbortSignal.timeout(3000),
+      });
+
+      if (res.ok) {
+        const fill = await res.json();
+        const fillPrice = fill.fill_price ?? price;
+        set((s) => {
+          const newPosition = {
+            id: fill.exec_id ?? clOrdId,
+            symbol,
+            side: (side === 'BUY' ? 'LONG' : 'SHORT') as 'LONG' | 'SHORT',
+            size,
+            entryPrice: fillPrice,
+            marginRequired,
+            unrealizedPnL: 0,
+          };
+          const newTrade = {
+            id: fill.exec_id ?? clOrdId,
+            symbol,
+            side: side as 'BUY' | 'SELL',
+            qty: size,
+            price: fillPrice,
+            realizedPnL: 0,
+            timestamp: new Date(),
+          };
+          s.showNotification(
+            `Order FILLED via Gateway: ${side} ${size} ${symbol} @ $${fillPrice.toFixed(2)}`,
+            'success'
+          );
+          return {
+            balance: s.balance - marginRequired,
+            positions: [...s.positions, newPosition],
+            tradeHistory: [newTrade, ...s.tradeHistory],
+          };
+        });
+        return;
+      }
+    } catch {
+      // Gateway unreachable — fall back to local simulation
+    }
+
+    // Local simulation fallback (gateway offline)
+    set((s) => {
+      const newPosition = {
+        id: clOrdId,
         symbol,
-        side: side === 'BUY' ? 'LONG' : 'SHORT',
+        side: (side === 'BUY' ? 'LONG' : 'SHORT') as 'LONG' | 'SHORT',
         size,
         entryPrice: price,
         marginRequired,
-        unrealizedPnL: 0
+        unrealizedPnL: 0,
       };
-
-      const newTrade: Trade = {
-        id: Math.random().toString(36).substring(7),
+      const newTrade = {
+        id: clOrdId,
         symbol,
-        side,
+        side: side as 'BUY' | 'SELL',
         qty: size,
         price,
         realizedPnL: 0,
-        timestamp: new Date()
+        timestamp: new Date(),
       };
-
-      state.showNotification(`Order FILLED: ${side} ${size} ${symbol} @ ${price}`, "success");
-
+      s.showNotification(
+        `Order FILLED (sim): ${side} ${size} ${symbol} @ $${price.toFixed(2)}`,
+        'success'
+      );
       return {
-        balance: state.balance - marginRequired,
-        positions: [...state.positions, newPosition],
-        tradeHistory: [newTrade, ...state.tradeHistory]
+        balance: s.balance - marginRequired,
+        positions: [...s.positions, newPosition],
+        tradeHistory: [newTrade, ...s.tradeHistory],
       };
     });
   },
 
   dismissNotification: () => set({ notification: null }),
+
   exportToCSV: () => {
-    console.log("Exporting trades to CSV...");
-    get().showNotification("Exporting...", "info");
+    const { tradeHistory } = get();
+    if (tradeHistory.length === 0) {
+      get().showNotification('No trades to export', 'info');
+      return;
+    }
+    const header = 'ID,Symbol,Side,Qty,Price,RealizedPnL,Timestamp\n';
+    const rows = tradeHistory
+      .map((t) =>
+        [t.id, t.symbol, t.side, t.qty, t.price, t.realizedPnL, t.timestamp.toISOString()].join(',')
+      )
+      .join('\n');
+    const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', `robin_trades_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    get().showNotification(`Exported ${tradeHistory.length} trades to CSV`, 'success');
   },
+
   showNotification: (message, type) => set({ notification: { message, type } }),
-  setSelectedSymbol: (symbol) => set({ selectedSymbol: symbol })
+  setSelectedSymbol: (symbol) => set({ selectedSymbol: symbol }),
 }));

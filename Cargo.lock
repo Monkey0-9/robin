@@ -190,6 +190,7 @@ version = "1.0.0"
 dependencies = [
  "ctrlc",
  "hex",
+ "libc",
  "sha2",
 ]
 

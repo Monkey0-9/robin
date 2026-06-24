@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 // ============================================================================
@@ -299,5 +301,59 @@ func TestServiceStatusMarshalJSON(t *testing.T) {
 	}
 	if string(b) != `"ACTIVE"` {
 		t.Errorf("expected \"ACTIVE\", got %s", string(b))
+	}
+}
+
+func TestJWTAuthMiddleware_JWTVerification(t *testing.T) {
+	// Set up keys
+	hmacSecret := []byte("my-test-secret-key-123456789")
+	authenticator := &jwtAuthenticator{
+		hmacKey:   hmacSecret,
+		useHMAC:   true,
+		issuer:    "robin-gateway",
+		audience:  "robin-services",
+	}
+
+	// Create a valid signed token
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"iss": "robin-gateway",
+		"aud": "robin-services",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	validTokenStr, err := token.SignedString(hmacSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify valid token succeeds
+	claims, err := authenticator.verify(validTokenStr)
+	if err != nil {
+		t.Errorf("expected validation to succeed, got error: %v", err)
+	}
+	if claims["iss"] != "robin-gateway" {
+		t.Errorf("expected issuer robin-gateway, got %v", claims["iss"])
+	}
+
+	// Verify tampered token fails
+	tamperedTokenStr := validTokenStr + "extra"
+	_, err = authenticator.verify(tamperedTokenStr)
+	if err == nil {
+		t.Error("expected validation to fail for tampered token, got nil")
+	}
+
+	// Verify token signed with different key fails
+	wrongSecret := []byte("wrong-secret-key-987654321")
+	wrongToken := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"iss": "robin-gateway",
+		"aud": "robin-services",
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	wrongTokenStr, err := wrongToken.SignedString(wrongSecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = authenticator.verify(wrongTokenStr)
+	if err == nil {
+		t.Error("expected validation to fail for token with wrong secret, got nil")
 	}
 }

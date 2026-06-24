@@ -246,8 +246,89 @@ impl RiskGate {
         self.fast_gate
             .update_reference_price(instrument_id, price as u32);
     }
+
+    // -------------------------------------------------------------------------
+    // Position persistence — crash recovery (Gap 6)
+    // -------------------------------------------------------------------------
+    //
+    // Format: [magic: u64][count: u64][i64 × count]
+    // Magic: 0x524F42494E504F53 ("ROBINPOS")
+    // On startup: call load_snapshot() before accepting orders.
+    // On SIGTERM/shutdown: call save_snapshot().
+    // This is NOT on the hot path; it is only called at startup/shutdown.
+    // -------------------------------------------------------------------------
+
+    const SNAPSHOT_MAGIC: u64 = 0x524F42494E504F53; // "ROBINPOS"
+
+    /// Save all 4096 instrument positions to a binary snapshot file.
+    pub fn save_snapshot(&self, path: &str) -> std::io::Result<()> {
+        use std::io::Write;
+        // Write to a temp file then atomically rename to avoid partial writes
+        let tmp_path = format!("{}.tmp", path);
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&tmp_path)?;
+
+        // Header
+        f.write_all(&Self::SNAPSHOT_MAGIC.to_le_bytes())?;
+        f.write_all(&(self.positions.len() as u64).to_le_bytes())?;
+
+        // Position data
+        for &pos in self.positions.iter() {
+            f.write_all(&pos.to_le_bytes())?;
+        }
+        f.flush()?;
+        drop(f);
+
+        // Atomic rename
+        std::fs::rename(&tmp_path, path)?;
+        eprintln!(
+            "[RISK] Position snapshot saved to {path} ({} instruments)",
+            self.positions.len()
+        );
+        Ok(())
+    }
+
+    /// Load instrument positions from a binary snapshot file.
+    /// Returns Ok(count) with the number of positions restored, or Err on failure.
+    pub fn load_snapshot(&mut self, path: &str) -> std::io::Result<usize> {
+        use std::io::Read;
+        let mut f = std::fs::File::open(path)?;
+
+        // Validate magic
+        let mut magic_buf = [0u8; 8];
+        f.read_exact(&mut magic_buf)?;
+        let magic = u64::from_le_bytes(magic_buf);
+        if magic != Self::SNAPSHOT_MAGIC {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("invalid snapshot magic: 0x{:016X}", magic),
+            ));
+        }
+
+        // Read count
+        let mut count_buf = [0u8; 8];
+        f.read_exact(&mut count_buf)?;
+        let count = u64::from_le_bytes(count_buf) as usize;
+        let restore_count = count.min(self.positions.len());
+
+        // Read positions
+        let mut pos_buf = [0u8; 8];
+        for i in 0..restore_count {
+            f.read_exact(&mut pos_buf)?;
+            self.positions[i] = i64::from_le_bytes(pos_buf);
+        }
+
+        eprintln!(
+            "[RISK] Position snapshot loaded from {path} ({restore_count} instruments restored)"
+        );
+        Ok(restore_count)
+    }
 }
 
+#[allow(clippy::declare_interior_mutable_const)]
 static LAST_TRADE_PRICES: [AtomicU64; 4096] = {
     const INIT: AtomicU64 = AtomicU64::new(0);
     [INIT; 4096]

@@ -2,19 +2,22 @@ package main
 
 import (
 	"context"
+	"bufio"
 	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
-	"strings"
 	"syscall"
 	"time"
 
@@ -22,6 +25,89 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
 )
+
+// MatchingEngineClient manages a TCP connection to the C++ matching engine.
+type MatchingEngineClient struct {
+	mu       sync.Mutex
+	addr     string
+	conn     net.Conn
+	reader   *bufio.Reader
+	enabled  bool
+	lastErr  string
+}
+
+func NewMatchingEngineClient(host string, port int) *MatchingEngineClient {
+	return &MatchingEngineClient{
+		addr:    fmt.Sprintf("%s:%d", host, port),
+		enabled: false,
+	}
+}
+
+func (c *MatchingEngineClient) Connect() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	conn, err := net.DialTimeout("tcp", c.addr, 2*time.Second)
+	if err != nil {
+		c.enabled = false
+		c.lastErr = err.Error()
+		return err
+	}
+	c.conn = conn
+	c.reader = bufio.NewReaderSize(conn, 4096)
+	c.enabled = true
+	c.lastErr = ""
+	return nil
+}
+
+func (c *MatchingEngineClient) SendOrderJSON(orderJSON string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
+		return "", fmt.Errorf("not connected")
+	}
+	if _, err := fmt.Fprint(c.conn, orderJSON); err != nil {
+		c.enabled = false
+		c.lastErr = err.Error()
+		c.conn.Close()
+		c.conn = nil
+		return "", err
+	}
+	resp, err := c.reader.ReadString('\n')
+	if err != nil {
+		c.enabled = false
+		c.lastErr = err.Error()
+		c.conn.Close()
+		c.conn = nil
+		return "", err
+	}
+	return resp, nil
+}
+
+func (c *MatchingEngineClient) HealthCheck() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn == nil {
+		return false
+	}
+	if _, err := fmt.Fprint(c.conn, "health"); err != nil {
+		return false
+	}
+	resp, err := c.reader.ReadString('\n')
+	return err == nil && strings.Contains(resp, "ok")
+}
+
+func (c *MatchingEngineClient) IsEnabled() bool { c.mu.Lock(); defer c.mu.Unlock(); return c.enabled }
+func (c *MatchingEngineClient) LastError() string { c.mu.Lock(); defer c.mu.Unlock(); return c.lastErr }
+
+// OrderResponse from the matching engine
+type MatchingEngineResponse struct {
+	OrderID      uint64 `json:"order_id"`
+	InstrumentID uint32 `json:"instrument_id"`
+	FillPrice    uint32 `json:"fill_price"`
+	FillQty      uint32 `json:"fill_qty"`
+	Status       string `json:"status"`
+	Success      bool   `json:"success"`
+}
 
 // ============================================================================
 // Service Status
@@ -86,6 +172,16 @@ type HotReloadConfig struct {
 // Orchestrator
 // ============================================================================
 
+// OrderRequest is the JSON body for POST /order
+type OrderRequest struct {
+	Symbol      string  `json:"symbol"`
+	Side        string  `json:"side"`   // BUY or SELL
+	Price       float64 `json:"price"`
+	Qty         float64 `json:"qty"`
+	OrderType   string  `json:"order_type"` // LIMIT or MARKET
+	ClientOrdID string  `json:"cl_ord_id"`
+}
+
 type Orchestrator struct {
 	mu            sync.RWMutex
 	services      map[string]*ServiceHealth
@@ -98,11 +194,13 @@ type Orchestrator struct {
 	shutdownCh    chan struct{}
 	wg            sync.WaitGroup
 	logger        *slog.Logger
+	wsHub         *WebSocketHub
 
 	orderCount  atomic.Uint64
 	rejectCount atomic.Uint64
 	tradeCount  atomic.Uint64
 	latencySum  atomic.Uint64
+	matchClient *MatchingEngineClient
 }
 
 func NewOrchestrator() *Orchestrator {
@@ -116,8 +214,10 @@ func NewOrchestrator() *Orchestrator {
 			MaxCancelRate:    5000,
 			MaxPositionLimit: 100000,
 		},
-		shutdownCh: make(chan struct{}),
-		logger:     slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
+		shutdownCh:  make(chan struct{}),
+		logger:      slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
+		wsHub:       NewWebSocketHub(),
+		matchClient: NewMatchingEngineClient("127.0.0.1", 9091),
 	}
 }
 
@@ -148,6 +248,61 @@ func (o *Orchestrator) StartHealthProbes(ctx context.Context, interval time.Dura
 		}
 	}()
 	o.logger.Info("health probes started", "interval", interval)
+
+	// Try connecting to the matching engine
+	go func() {
+		for i := 0; i < 30; i++ {
+			if err := o.matchClient.Connect(); err == nil {
+				o.logger.Info("connected to matching engine", "addr", o.matchClient.addr)
+				return
+			}
+			time.Sleep(1 * time.Second)
+		}
+		o.logger.Warn("could not connect to matching engine after 30s, using simulated fills", "addr", o.matchClient.addr)
+	}()
+
+	// Market-data broadcast goroutine: publishes synthetic order-book ticks every 500ms.
+	// When a real market-data feed is connected, replace this with live data.
+	o.wg.Add(1)
+	go func() {
+		defer o.wg.Done()
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		basePrice := map[string]float64{
+			"BTC/USD": 64500.0,
+			"ETH/USD": 3450.0,
+			"AAPL":    185.30,
+			"EUR/USD": 1.0850,
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				for symbol, bp := range basePrice {
+					// Random walk: ±0.025% per tick
+					drift := bp * (1 + (rand.Float64()-0.5)*0.0005)
+					basePrice[symbol] = drift
+					bids, asks := buildOrderBookLevels(drift, 8)
+					o.wsHub.BroadcastOrderBook(symbol, bids, asks)
+				}
+			}
+		}
+	}()
+}
+
+// buildOrderBookLevels generates synthetic bid/ask levels around midPrice.
+func buildOrderBookLevels(midPrice float64, depth int) ([][2]float64, [][2]float64) {
+	tick := math.Max(midPrice*0.0001, 0.01) // 1bps tick size, min $0.01
+	bids := make([][2]float64, depth)
+	asks := make([][2]float64, depth)
+	for i := 0; i < depth; i++ {
+		spread := tick * float64(i+1)
+		size := math.Round((0.1+rand.Float64()*2)*100) / 100
+		bids[i] = [2]float64{midPrice - spread, size}
+		asks[i] = [2]float64{midPrice + spread, size}
+	}
+	return bids, asks
 }
 
 func (o *Orchestrator) runHealthChecks() {
@@ -319,7 +474,7 @@ var gatewayAPIToken = func() string {
 }()
 
 // jwtAuthMiddleware enforces a Bearer token for sensitive endpoints.
-// Uses crypto/subtle.ConstantTimeCompare to prevent timing attacks.
+// Uses jwtAuth.verify for signature verification and crypto/subtle.ConstantTimeCompare for static tokens.
 func jwtAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
@@ -329,12 +484,22 @@ func jwtAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		provided := strings.TrimPrefix(authHeader, "Bearer ")
-		expected := gatewayAPIToken
-		if expected == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
-			http.Error(w, `{"error":"unauthorized: invalid token"}`, http.StatusUnauthorized)
+
+		// 1. Attempt JWT verification first (includes signature verification)
+		_, err := jwtAuth.verify(provided)
+		if err == nil {
+			next.ServeHTTP(w, r)
 			return
 		}
-		next.ServeHTTP(w, r)
+
+		// 2. Fallback to static token comparison (useful for dev mode / tests)
+		expected := gatewayAPIToken
+		if expected != "" && subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) == 1 {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		http.Error(w, `{"error":"unauthorized: invalid token"}`, http.StatusUnauthorized)
 	})
 }
 
@@ -366,7 +531,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		json.NewEncoder(w).Encode(o.GetConfig())
 	}).Methods("GET")
 
-	// Apply JWT auth middleware only to POST /config
+	// POST /config — hot-reload risk parameters (JWT required)
 	r.Handle("/config", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		var body map[string]interface{}
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
@@ -383,6 +548,144 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"status": "reloaded"})
 	}))).Methods("POST")
+
+	// POST /order — submit a new order (JWT required)
+	// Forwards to the matching engine TCP server, or falls back to simulated fill.
+	r.Handle("/order", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var orderReq OrderRequest
+		if err := json.NewDecoder(req.Body).Decode(&orderReq); err != nil {
+			http.Error(w, `{"error":"invalid order JSON"}`, http.StatusBadRequest)
+			return
+		}
+
+		if orderReq.Symbol == "" || orderReq.Qty <= 0 || orderReq.Price < 0 {
+			http.Error(w, `{"error":"symbol, qty, and price are required"}`, http.StatusBadRequest)
+			return
+		}
+		if orderReq.Side != "BUY" && orderReq.Side != "SELL" {
+			http.Error(w, `{"error":"side must be BUY or SELL"}`, http.StatusBadRequest)
+			return
+		}
+
+		start := time.Now()
+		o.RecordOrder()
+
+		orderID := uint64(time.Now().UnixNano())
+		execID := fmt.Sprintf("EXEC-%d", orderID)
+		if orderReq.ClientOrdID == "" {
+			orderReq.ClientOrdID = fmt.Sprintf("ORD-%d", orderID)
+		}
+
+		// Map symbol to instrument_id
+		instID := uint64(1)
+		switch orderReq.Symbol {
+		case "BTC/USD": instID = 1
+		case "ETH/USD": instID = 2
+		case "AAPL":    instID = 3
+		case "EUR/USD": instID = 4
+		}
+
+		side := "BID"
+		if orderReq.Side == "SELL" {
+			side = "ASK"
+		}
+
+		orderType := "LIMIT"
+		if orderReq.OrderType == "MARKET" {
+			orderType = "MARKET"
+		}
+
+		fillPrice := orderReq.Price
+		var fillQty float64
+		status := "FILLED"
+		engineUsed := false
+
+		// Try the matching engine
+		if o.matchClient != nil && o.matchClient.IsEnabled() {
+			matchJSON := fmt.Sprintf(
+				`{"id":%d,"instrument_id":%d,"price":%.0f,"qty":%.0f,"side":"%s","type":"%s"}`,
+				orderID, instID, orderReq.Price*10000, orderReq.Qty, side, orderType,
+			)
+			resp, err := o.matchClient.SendOrderJSON(matchJSON)
+			if err == nil {
+				var meResp MatchingEngineResponse
+				if json.Unmarshal([]byte(resp), &meResp) == nil {
+					engineUsed = true
+					if meResp.Success {
+						if meResp.FillPrice > 0 {
+							fillPrice = float64(meResp.FillPrice) / 10000.0
+							fillQty = float64(meResp.FillQty)
+						}
+						status = meResp.Status
+					} else {
+						status = "REJECTED"
+						o.RecordReject()
+					}
+				}
+			} else {
+				o.logger.Warn("matching engine call failed, falling back to sim", "error", err)
+			}
+		}
+
+		// Fallback: simulated fill
+		if !engineUsed {
+			if orderReq.OrderType == "MARKET" || fillPrice == 0 {
+				slippage := orderReq.Price * 0.00005
+				if orderReq.Side == "BUY" {
+					fillPrice = orderReq.Price + slippage
+				} else {
+					fillPrice = orderReq.Price - slippage
+				}
+			}
+			fillQty = orderReq.Qty
+		}
+
+		latencyNs := uint64(time.Since(start).Nanoseconds())
+		if status == "FILLED" || !engineUsed {
+			o.RecordTrade()
+		}
+		o.RecordLatency(latencyNs)
+
+		// Broadcast trade via WebSocket
+		if status == "FILLED" {
+			o.wsHub.BroadcastTrade(TradePayload{
+				ID:        execID,
+				Symbol:    orderReq.Symbol,
+				Side:      orderReq.Side,
+				Qty:       fillQty,
+				Price:     fillPrice,
+				Timestamp: time.Now().UnixMilli(),
+			})
+		}
+
+		o.logger.Info("order processed",
+			"cl_ord_id", orderReq.ClientOrdID,
+			"symbol", orderReq.Symbol,
+			"side", orderReq.Side,
+			"qty", orderReq.Qty,
+			"fill_price", fillPrice,
+			"status", status,
+			"engine", engineUsed,
+			"latency_ns", latencyNs,
+		)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":      status,
+			"exec_id":     execID,
+			"cl_ord_id":   orderReq.ClientOrdID,
+			"symbol":      orderReq.Symbol,
+			"side":        orderReq.Side,
+			"qty":         fillQty,
+			"fill_price":  fillPrice,
+			"latency_ns":  latencyNs,
+			"engine":      engineUsed,
+		})
+	}))).Methods("POST")
+
+	// WebSocket endpoint — real-time order book + trade notifications
+	r.HandleFunc("/ws", o.wsHub.handleWebSocket)
 
 	r.Handle("/metrics", promhttp.Handler())
 
@@ -407,12 +710,12 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	// Apply middleware chain: requestID → rateLimit → router
 	handler := requestIDMiddleware(rateLimitMiddleware(1000, r))
 
-	// Apply CORS
+	// Apply CORS — allow localhost:3000 (Next.js dev) and all origins for WebSocket upgrade
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:3000"},
+		AllowedOrigins:   []string{"http://localhost:3000", "http://localhost:3001"},
 		AllowCredentials: true,
 		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
-		AllowedHeaders:   []string{"*"},
+		AllowedHeaders:   []string{"Authorization", "Content-Type", "X-Request-ID"},
 	})
 	handler = c.Handler(handler)
 

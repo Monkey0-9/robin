@@ -167,26 +167,123 @@ class StrategyBacktester:
         )
 
 
-if __name__ == "__main__":
-    np.random.seed(42)
-    n = 2520  # 10 years of daily bars
-    prices = 100.0 * np.exp(np.cumsum(np.random.normal(0.0001, 0.01, n)))
-    signals = np.random.choice([-1, 0, 1], n, p=[0.05, 0.90, 0.05])
+def _import_from_path(module_name, file_path):
+    import importlib.util, sys
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+def run_backtest_with_yfinance(
+    symbol: str = "SPY",
+    period: str = "2y",
+    initial_capital: float = 1_000_000.0,
+    commission_bps: float = 2.0,
+    impact_bps: float = 5.0,
+    adv_usd: float = 50_000_000.0,
+    signal_threshold: float = 0.05,
+):
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    _yf_mod = _import_from_path("yfinance_fetcher", os.path.join(root, "data-ingestion", "market", "yfinance_fetcher.py"))
+    YFinanceFetcher = _yf_mod.YFinanceFetcher
+    _sm_mod = _import_from_path("robin_signal_model", os.path.join(root, "ai-engine", "robin_signal_model.py"))
+    RobinSignalModel = _sm_mod.RobinSignalModel
+    ModelInput = _sm_mod.ModelInput
+
+    fetcher = YFinanceFetcher()
+    model = RobinSignalModel()
+
+    data = fetcher.download(symbol, period=period)
+    if symbol not in data:
+        print(f"No data for {symbol}")
+        return
+
+    df = data[symbol]
+    prices = df["close"].values
+    volumes = df["volume"].values
+
+    model_inputs = YFinanceFetcher.build_model_inputs(df)
+    price_w = model_inputs["price_features"]
+    vol_w = model_inputs["volume_features"]
+    ob_f = model_inputs["order_book_features"]
+    ts_f = model_inputs["timestamp_features"]
+
+    signals = np.zeros(len(price_w), dtype=np.int8)
+    for i in range(len(price_w)):
+        inp = ModelInput(
+            price_features=price_w[i],
+            volume_features=vol_w[i],
+            order_book_features=ob_f[i],
+            timestamp_features=ts_f[i],
+        )
+        out = model.compute(inp)
+        if out.alpha_signal > signal_threshold:
+            signals[i] = 1
+        elif out.alpha_signal < -signal_threshold:
+            signals[i] = -1
+
+    if len(signals) > len(prices):
+        signals = signals[:len(prices)]
+    elif len(signals) < len(prices):
+        signals = np.pad(signals, (len(prices) - len(signals), 0), mode='constant')
 
     bt = StrategyBacktester(
-        initial_capital=1_000_000.0,
-        commission_bps=2.0,
-        slippage_model=SlippageModel(impact_bps=5.0, adv_usd=50_000_000.0),
+        initial_capital=initial_capital,
+        commission_bps=commission_bps,
+        slippage_model=SlippageModel(impact_bps=impact_bps, adv_usd=adv_usd),
     )
-    r = bt.run_backtest(prices, signals)
+    result = bt.run_backtest(prices, signals)
 
-    print(f"Capital:     ${r.final_capital:>14,.2f}")
-    print(f"Return:      {r.total_return:>+14.2%}")
-    print(f"Sharpe:      {r.sharpe_ratio:>14.3f}")
-    print(f"Sortino:     {r.sortino_ratio:>14.3f}")
-    print(f"Calmar:      {r.calmar_ratio:>14.3f}")
-    print(f"Max DD:      {r.max_drawdown:>14.2%}")
-    print(f"Trades:      {r.total_trades:>14d}")
-    print(f"Commission:  ${r.total_commission:>14,.2f}")
-    print(f"Slippage:    ${r.total_slippage:>14,.2f}")
-    print(f"Total cost:  ${r.total_commission + r.total_slippage:>14,.2f}")
+    print(f"\n {'='*58}")
+    print(f"  Backtest: {symbol} — Robin Signal Model ({period})")
+    print(f" {'='*58}")
+    print(f"  Capital:     ${result.final_capital:>14,.2f}")
+    print(f"  Return:      {result.total_return:>+14.2%}")
+    print(f"  Sharpe:      {result.sharpe_ratio:>14.3f}")
+    print(f"  Sortino:     {result.sortino_ratio:>14.3f}")
+    print(f"  Calmar:      {result.calmar_ratio:>14.3f}")
+    print(f"  Max DD:      {result.max_drawdown:>14.2%}")
+    print(f"  Trades:      {result.total_trades:>14d}")
+    print(f"  Commission:  ${result.total_commission:>14,.2f}")
+    print(f"  Slippage:    ${result.total_slippage:>14,.2f}")
+    print(f"  Total cost:  ${result.total_commission + result.total_slippage:>14,.2f}")
+    print(f" {'='*58}\n")
+
+    return result
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Robin Strategy Backtester")
+    parser.add_argument("--yfinance", action="store_true", help="Use yfinance data + Robin signal model")
+    parser.add_argument("--symbol", default="SPY", help="Symbol for yfinance backtest")
+    parser.add_argument("--period", default="2y", help="Yahoo Finance period (1mo, 3mo, 6mo, 1y, 2y, 5y)")
+    parser.add_argument("--synthetic", action="store_true", help="Run with synthetic data (legacy mode)")
+    args = parser.parse_args()
+
+    if args.yfinance:
+        run_backtest_with_yfinance(symbol=args.symbol, period=args.period)
+    else:
+        np.random.seed(42)
+        n = 2520
+        prices = 100.0 * np.exp(np.cumsum(np.random.normal(0.0001, 0.01, n)))
+        signals = np.random.choice([-1, 0, 1], n, p=[0.05, 0.90, 0.05])
+
+        bt = StrategyBacktester(
+            initial_capital=1_000_000.0,
+            commission_bps=2.0,
+            slippage_model=SlippageModel(impact_bps=5.0, adv_usd=50_000_000.0),
+        )
+        r = bt.run_backtest(prices, signals)
+
+        print(f"Capital:     ${r.final_capital:>14,.2f}")
+        print(f"Return:      {r.total_return:>+14.2%}")
+        print(f"Sharpe:      {r.sharpe_ratio:>14.3f}")
+        print(f"Sortino:     {r.sortino_ratio:>14.3f}")
+        print(f"Calmar:      {r.calmar_ratio:>14.3f}")
+        print(f"Max DD:      {r.max_drawdown:>14.2%}")
+        print(f"Trades:      {r.total_trades:>14d}")
+        print(f"Commission:  ${r.total_commission:>14,.2f}")
+        print(f"Slippage:    ${r.total_slippage:>14,.2f}")
+        print(f"Total cost:  ${r.total_commission + r.total_slippage:>14,.2f}")

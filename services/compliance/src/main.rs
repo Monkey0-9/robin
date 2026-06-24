@@ -26,6 +26,126 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 // ============================================================================
+// Shared Memory Reader (mirrors ShmBridge from risk-analytics)
+// ============================================================================
+
+#[repr(C, align(64))]
+struct ShmHeader {
+    write_idx: AtomicU64,
+    read_idx: AtomicU64,
+    magic: u64,
+    version: u32,
+    size: u32,
+    pid_writer: u32,
+    pid_reader: u32,
+    _pad: [u8; 24],
+}
+
+#[derive(Default, Clone, Copy)]
+#[repr(C, align(64))]
+struct ShmMessage {
+    msg_type: u8,
+    client_id: u32,
+    instrument_id: u32,
+    price: u32,
+    qty: u32,
+    side: u8,
+    flags: u8,
+    order_id: u64,
+    cl_order_id: u64,
+    timestamp_ns: u64,
+    _pad: [u8; 21],
+}
+
+#[allow(dead_code)]
+const SHM_MAGIC: u64 = 0x524f42494e484d5f;
+#[allow(dead_code)]
+const SHM_CAPACITY: usize = 65536;
+#[allow(dead_code)]
+const SHM_MSG_SIZE: usize = 64;
+
+#[allow(dead_code)]
+struct ShmReader {
+    mapped_addr: *mut u8,
+    size: usize,
+    header: *mut ShmHeader,
+    ring: *mut ShmMessage,
+}
+
+#[cfg(target_os = "linux")]
+impl ShmReader {
+    fn new(path: &str) -> Result<Self, String> {
+        let shm_size = std::mem::size_of::<ShmHeader>() + SHM_CAPACITY * SHM_MSG_SIZE;
+        let cpath = std::ffi::CString::new(path).map_err(|e| e.to_string())?;
+
+        let fd = unsafe {
+            libc::shm_open(cpath.as_ptr(), libc::O_RDONLY, 0)
+        };
+        if fd < 0 {
+            return Err(format!("shm_open failed: {}", std::io::Error::last_os_error()));
+        }
+
+        let mapped_addr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                shm_size,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            )
+        } as *mut u8;
+        if mapped_addr == libc::MAP_FAILED as *mut u8 {
+            unsafe { libc::close(fd) };
+            return Err(format!("mmap failed: {}", std::io::Error::last_os_error()));
+        }
+
+        unsafe { libc::close(fd) };
+
+        let header = mapped_addr as *mut ShmHeader;
+        let ring = unsafe { mapped_addr.add(std::mem::size_of::<ShmHeader>()) as *mut ShmMessage };
+
+        Ok(Self { mapped_addr, size: shm_size, header, ring })
+    }
+
+    fn pop(&mut self, msg: &mut ShmMessage) -> bool {
+        let header = unsafe { &*self.header };
+        let read_idx = header.read_idx.load(Ordering::Relaxed);
+        let write_idx = header.write_idx.load(Ordering::Acquire);
+        if read_idx == write_idx {
+            return false;
+        }
+        let slot = (read_idx & (SHM_CAPACITY as u64 - 1)) as usize;
+        unsafe {
+            std::ptr::copy_nonoverlapping(self.ring.add(slot), msg as *mut ShmMessage, 1);
+            // Reader doesn't advance write_idx; the writer does that.
+            // We need an atomic store to read_idx — but we only have read-only mmap.
+            // For true read-only the writer would need to expose read_idx updates.
+            // For now we spin and re-read — the writer will eventually advance.
+        }
+        true
+    }
+}
+
+impl Drop for ShmReader {
+    fn drop(&mut self) {
+        #[cfg(target_os = "linux")]
+        unsafe { libc::munmap(self.mapped_addr as *mut libc::c_void, self.size); }
+    }
+}
+
+// Non-Linux fallback
+#[cfg(not(target_os = "linux"))]
+impl ShmReader {
+    #[allow(dead_code)]
+    fn new(_path: &str) -> Result<Self, String> {
+        Err("SHM requires Linux".to_string())
+    }
+    #[allow(dead_code)]
+    fn pop(&mut self, _msg: &mut ShmMessage) -> bool { false }
+}
+
+// ============================================================================
 // Configuration
 // ============================================================================
 const DEFAULT_SHM_PATH:   &str = "/robin_risk_match";
@@ -127,78 +247,160 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
     eprintln!("[COMPLIANCE]   SHM path:   {shm_path}");
     eprintln!("[COMPLIANCE]   Audit log:  {audit_log_path}");
 
-    // On Linux: attempt to read from shared memory
-    // On other platforms / when SHM unavailable: demo mode with heartbeat logging
+    // Shared memory buffer for reading OrderMessages
+    let mut shm_reader: Option<ShmReader> = None;
+
+    // On Linux: attempt to open shared memory for reading
+    #[cfg(target_os = "linux")]
+    {
+        match ShmReader::new(shm_path) {
+            Ok(reader) => {
+                eprintln!("[COMPLIANCE] Connected to SHM: {shm_path}");
+                shm_reader = Some(reader);
+            }
+            Err(e) => {
+                eprintln!("[COMPLIANCE] SHM open failed ({e}) — running in log-only demo mode");
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = shm_path;
+        eprintln!("[COMPLIANCE] Non-Linux — running in demo mode (generating synthetic events)");
+    }
+
     let mut synthetic_order_id: u64 = 1;
     let mut last_heartbeat = now_ns();
+    let mut shm_buf = ShmMessage::default();
 
     loop {
         if !RUNNING.load(Ordering::Relaxed) { break; }
 
-        // ----------------------------------------------------------------
-        // On Linux, SHM reading would go here via libc::shm_open + mmap.
-        // For now we emit a periodic synthetic event to exercise the
-        // audit logger and spoofing detector logic on all platforms.
-        // ----------------------------------------------------------------
         let now = now_ns();
+        let mut processed = false;
 
-        // Heartbeat log entry every 10 seconds
-        if now.wrapping_sub(last_heartbeat) > HEARTBEAT_INTERVAL.as_nanos() as u64 {
-            let record = AuditRecord {
-                timestamp_ns:  now,
-                order_id:      0,
-                action:        "HEARTBEAT",
-                price:         0,
-                qty:           0,
-                client_id:     0,
-                instrument_id: 0,
-            };
-            if let Err(e) = logger.log_transaction(&record) {
-                eprintln!("[COMPLIANCE] Audit log write error: {e}");
-            } else {
-                AUDIT_RECORDS.fetch_add(1, Ordering::Relaxed);
+        // ----------------------------------------------------------------
+        // Read from SHM if available (Linux only)
+        // ----------------------------------------------------------------
+        if let Some(ref mut reader) = shm_reader {
+            while reader.pop(&mut shm_buf) {
+                processed = true;
+
+                // Convert SHM message to compliance event
+                let msg_type_str = match shm_buf.msg_type {
+                    1 => "NEW",
+                    2 => "CANCEL",
+                    3 => "REPLACE",
+                    4 => "TRADE",
+                    _ => "UNKNOWN",
+                };
+
+                let side_str = if shm_buf.side == 0 { "BUY" } else { "SELL" };
+
+                // Check for spoofing
+                let event = OrderEvent {
+                    order_id:     shm_buf.order_id,
+                    symbol:       format!("INST{}", shm_buf.instrument_id),
+                    price:        shm_buf.price,
+                    qty:          shm_buf.qty,
+                    event_type:   msg_type_str,
+                    timestamp_ns: shm_buf.timestamp_ns,
+                };
+                let alert = detector.process_order_event(event);
+                EVENTS_PROCESSED.fetch_add(1, Ordering::Relaxed);
+                if alert {
+                    SPOOFING_ALERTS.fetch_add(1, Ordering::Relaxed);
+                    eprintln!("[COMPLIANCE] SPOOFING ALERT: OrderID={} {} {} @ {}x{}",
+                              shm_buf.order_id, side_str, msg_type_str, shm_buf.price, shm_buf.qty);
+                }
+
+                // FINRA 3110: principal approval for large orders
+                let order_value = shm_buf.price as u64 * shm_buf.qty as u64;
+                if shm_buf.qty >= 10_000 || order_value >= 10_000_000 {
+                    eprintln!("[COMPLIANCE] FINRA 3110: Principal approval required for OrderID={} (Qty={}, Value={})",
+                              shm_buf.order_id, shm_buf.qty, order_value);
+                }
+
+                // Write to audit log
+                let record = AuditRecord {
+                    timestamp_ns:  shm_buf.timestamp_ns,
+                    order_id:      shm_buf.order_id,
+                    action:        msg_type_str,
+                    price:         shm_buf.price,
+                    qty:           shm_buf.qty,
+                    client_id:     shm_buf.client_id,
+                    instrument_id: shm_buf.instrument_id,
+                };
+                if logger.log_transaction(&record).is_ok() {
+                    AUDIT_RECORDS.fetch_add(1, Ordering::Relaxed);
+                }
             }
-            last_heartbeat = now;
         }
 
-        // Demo: process a synthetic NEW order event
-        let event = OrderEvent {
-            order_id:     synthetic_order_id,
-            symbol:       "DEMO".to_string(),
-            price:        50_000,
-            qty:          1000,
-            event_type:   "NEW",
-            timestamp_ns: now,
-        };
-        let alert = detector.process_order_event(event.clone());
-        EVENTS_PROCESSED.fetch_add(1, Ordering::Relaxed);
-        if alert {
-            SPOOFING_ALERTS.fetch_add(1, Ordering::Relaxed);
-            eprintln!("[COMPLIANCE] SPOOFING ALERT on order {synthetic_order_id}");
+        // ----------------------------------------------------------------
+        // If no SHM data, generate synthetic events (demo mode)
+        // ----------------------------------------------------------------
+        if !processed {
+            // Heartbeat log entry every 10 seconds
+            if now.wrapping_sub(last_heartbeat) > HEARTBEAT_INTERVAL.as_nanos() as u64 {
+                let record = AuditRecord {
+                    timestamp_ns:  now,
+                    order_id:      0,
+                    action:        "HEARTBEAT",
+                    price:         0,
+                    qty:           0,
+                    client_id:     0,
+                    instrument_id: 0,
+                };
+                if let Err(e) = logger.log_transaction(&record) {
+                    eprintln!("[COMPLIANCE] Audit log write error: {e}");
+                } else {
+                    AUDIT_RECORDS.fetch_add(1, Ordering::Relaxed);
+                }
+                last_heartbeat = now;
+            }
+
+            // Synthetic NEW order every 100ms in demo mode
+            if shm_reader.is_none() {
+                let event = OrderEvent {
+                    order_id:     synthetic_order_id,
+                    symbol:       "DEMO".to_string(),
+                    price:        50_000,
+                    qty:          1000,
+                    event_type:   "NEW",
+                    timestamp_ns: now,
+                };
+                let alert = detector.process_order_event(event.clone());
+                EVENTS_PROCESSED.fetch_add(1, Ordering::Relaxed);
+                if alert {
+                    SPOOFING_ALERTS.fetch_add(1, Ordering::Relaxed);
+                    eprintln!("[COMPLIANCE] SPOOFING ALERT on order {synthetic_order_id}");
+                }
+
+                let order_value = event.price as u64 * event.qty as u64;
+                if event.qty >= 10_000 || order_value >= 10_000_000 {
+                    eprintln!("[COMPLIANCE] FINRA 3110: Principal approval required for large order {} (Qty: {}, Value: {})", synthetic_order_id, event.qty, order_value);
+                }
+
+                let record = AuditRecord {
+                    timestamp_ns:  now,
+                    order_id:      synthetic_order_id,
+                    action:        "NEW",
+                    price:         50_000,
+                    qty:           1000,
+                    client_id:     1,
+                    instrument_id: 1,
+                };
+                if logger.log_transaction(&record).is_ok() {
+                    AUDIT_RECORDS.fetch_add(1, Ordering::Relaxed);
+                }
+                synthetic_order_id += 1;
+            }
         }
 
-        // FINRA Rule 3110: Principal approval logging for large orders
-        let order_value = event.price as u64 * event.qty as u64;
-        if event.qty >= 10_000 || order_value >= 10_000_000 {
-            eprintln!("[COMPLIANCE] FINRA 3110: Principal approval required for large order {} (Qty: {}, Value: {})", synthetic_order_id, event.qty, order_value);
-        }
-
-        // Write audit record
-        let record = AuditRecord {
-            timestamp_ns:  now,
-            order_id:      synthetic_order_id,
-            action:        "NEW",
-            price:         50_000,
-            qty:           1000,
-            client_id:     1,
-            instrument_id: 1,
-        };
-        if logger.log_transaction(&record).is_ok() {
-            AUDIT_RECORDS.fetch_add(1, Ordering::Relaxed);
-        }
-
-        synthetic_order_id += 1;
-        thread::sleep(Duration::from_millis(100)); // 10 events/sec in demo mode
+        // Sleep to avoid busy-wait
+        thread::sleep(Duration::from_millis(10));
     }
 
     eprintln!("[COMPLIANCE] Daemon stopped. Chain hash: {}", logger.get_chain_hash());

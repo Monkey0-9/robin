@@ -376,7 +376,7 @@ private:
 
 int main() {
     CPPIngestionPipeline pipeline;
-    if (!pipeline.init_shm("/robin_shm_bridge")) {
+    if (!pipeline.init_shm("/robin_ingest_risk")) {
         std::printf("[FATAL] SHM init failed\n");
         return 1;
     }

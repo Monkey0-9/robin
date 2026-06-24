@@ -36,7 +36,7 @@ impl AuditLogger {
         );
 
         let mut hasher = Sha256::new();
-        hasher.update(&self.current_state_hash);
+        hasher.update(self.current_state_hash);
         hasher.update(serialized.as_bytes());
         self.current_state_hash.copy_from_slice(&hasher.finalize());
 
@@ -49,6 +49,7 @@ impl AuditLogger {
 
         self.records_written += 1;
 
+        #[allow(clippy::manual_is_multiple_of)]
         if self.records_written % 10000 == 0 {
             println!("[AUDIT] {} records written. Chain hash: {}",
                      self.records_written, self.get_chain_hash());
@@ -73,7 +74,7 @@ impl AuditLogger {
                 let record_part = line.split("HASH:").next().unwrap_or("");
                 let record_part_with_newline = format!("{}\n", record_part);
                 let mut hasher = Sha256::new();
-                hasher.update(&prev_hash);
+                hasher.update(prev_hash);
                 hasher.update(record_part_with_newline.as_bytes());
                 let computed = hasher.finalize();
 

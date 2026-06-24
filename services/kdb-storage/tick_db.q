@@ -122,3 +122,35 @@ exec_report:([]
 -1 "[KDB+] Robin schema loaded with sym enum, g# attributes, TP/RDB/HDB protocol.";
 -1 "[KDB+] Tables: trade, quote, order, exec_report";
 -1 "[KDB+] Endpoints: .u.sub .u.upd .u.pub .u.end";
+
+/ =============================================================================
+/ Permissioning — Gap 8
+/ =============================================================================
+
+/ .z.pw: Password authentication
+/ Reads ROBIN_KDB_PASSWORD from environment (default: "devpassword" for local dev)
+/ Production: set ROBIN_KDB_PASSWORD to a strong random value in .env
+.robin.pw: {[]
+    pw: getenv `ROBIN_KDB_PASSWORD;
+    $[0 = count pw; `devpassword; `$pw]
+    };
+
+.z.pw: {[u;p]
+    $[p ~ .robin.pw[];
+        [-1 "[KDB+] AUTH OK: ", string u;    1b];
+        [-1 "[KDB+] AUTH FAIL: ", string u;  0b]]
+    };
+
+/ .z.po: Called when a new client connects
+.z.po: {[h]
+    -1 "[KDB+] CONNECT: handle=", (string h), " ip=", (string .z.a), " user=", string .z.u;
+    };
+
+/ .z.pc: Called when a client disconnects
+.z.pc: {[h]
+    -1 "[KDB+] DISCONNECT: handle=", string h;
+    / Remove from subscriber lists on disconnect
+    .u.w: {[k;v] k!{[h;v] v except h}[h] each v}[key .u.w; .u.w];
+    };
+
+-1 "[KDB+] Permissioning enabled (.z.pw/.z.po/.z.pc). Set ROBIN_KDB_PASSWORD env var.";

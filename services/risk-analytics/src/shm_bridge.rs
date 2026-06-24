@@ -65,14 +65,20 @@ impl ShmBridge {
                 )
             };
             if fd < 0 {
-                return Err(format!("shm_open failed: {}", std::io::Error::last_os_error()));
+                return Err(format!(
+                    "shm_open failed: {}",
+                    std::io::Error::last_os_error()
+                ));
             }
 
             if create {
                 let ret = unsafe { libc::ftruncate(fd, shm_size as i64) };
                 if ret < 0 {
                     unsafe { libc::close(fd) };
-                    return Err(format!("ftruncate failed: {}", std::io::Error::last_os_error()));
+                    return Err(format!(
+                        "ftruncate failed: {}",
+                        std::io::Error::last_os_error()
+                    ));
                 }
             }
 
@@ -106,7 +112,8 @@ impl ShmBridge {
                 }
             }
 
-            let ring = unsafe { mapped_addr.add(std::mem::size_of::<ShmHeader>()) as *mut ShmMessage };
+            let ring =
+                unsafe { mapped_addr.add(std::mem::size_of::<ShmHeader>()) as *mut ShmMessage };
 
             Ok(Self {
                 fd: -1,
@@ -209,8 +216,7 @@ impl Drop for ShmBridge {
 
 #[cfg(test)]
 mod tests {
-    use std::mem::MaybeUninit;
-    use super::*;
+    use super::{ShmBridge, ShmMessage};
 
     #[test]
     #[cfg(target_os = "linux")]

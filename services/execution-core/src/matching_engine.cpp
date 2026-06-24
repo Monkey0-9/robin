@@ -1,187 +1,68 @@
-#include "order_state.hpp"
-#include "lockfree_queue.hpp"
-#include "memory_pool.hpp"
-#include "order_book.hpp"
-#include <atomic>
-#include <thread>
-#include <cstring>
+#include "matching_engine.hpp"
+#include "order_server.hpp"
 #include <cstdio>
+#include <csignal>
 #include <cstdlib>
-#include <memory>
+#include <chrono>
+#include <thread>
 
-#if defined(_WIN32)
-#include <malloc.h>
-#elif defined(__linux__)
-#include <pthread.h>
-#include <sched.h>
-#include <numa.h>
-#include <numaif.h>
-#endif
+std::atomic<bool> g_running(true);
 
-#ifndef likely
-#define likely(x)   __builtin_expect(!!(x), 1)
-#endif
-#ifndef unlikely
-#define unlikely(x) __builtin_expect(!!(x), 0)
-#endif
-#define CACHE_LINE_SIZE 64
-#define ALIGN_PAD_64 alignas(CACHE_LINE_SIZE)
-
-static inline uint64_t rdtscp_e() noexcept {
-    uint32_t aux; uint64_t rax, rdx;
-    __asm__ __volatile__("rdtscp" : "=a"(rax), "=d"(rdx) : : "rcx");
-    return (rdx << 32) | rax;
+void signal_handler(int) {
+    g_running = false;
 }
 
-namespace quantum { namespace execution {
-
-struct alignas(64) EngineStats {
-    uint64_t orders_submitted;
-    uint64_t trades_executed;
-    uint64_t orders_rejected;
-    uint64_t orders_cancelled;
-    uint64_t total_latency_ns;
-    uint64_t max_latency_ns;
-    uint64_t min_latency_ns;
-    uint64_t cycle_count;
-    char pad_[8];
-};
-
-class MatchingEngine {
-public:
-    static constexpr size_t INBOUND_CAPACITY = 65536;
-    static constexpr size_t OUTBOUND_CAPACITY = 65536;
-    static constexpr size_t BOOK_COUNT = 1024;
-
-    MatchingEngine() noexcept : running_(false), numa_node_(0), cpu_core_(2) {
-        std::memset(&stats_, 0, sizeof(stats_));
-        stats_.min_latency_ns = UINT64_MAX;
-        for (auto& book : books_) book = nullptr;
-    }
-
-    ~MatchingEngine() noexcept {
-        stop();
-    }
-
-    bool init(uint32_t numa_node = 0, int cpu_core = 2) noexcept {
-        numa_node_ = numa_node;
-        cpu_core_ = cpu_core;
-        pin_to_cpu(cpu_core);
-        bind_to_numa_node(numa_node);
-        return true;
-    }
-
-    bool submit_order(const Order& order) noexcept {
-        const uint64_t start = rdtscp_e();
-        bool result = inbound_queue_.push(order);
-        if (unlikely(!result)) stats_.orders_rejected++;
-        return result;
-    }
-
-    bool poll_trade(Trade& trade) noexcept { return outbound_queue_.pop(trade); }
-
-    void start() noexcept {
-        running_ = true;
-        matching_thread_ = std::thread(&MatchingEngine::run_matching_loop, this);
-    }
-
-    void stop() noexcept {
-        running_ = false;
-        if (matching_thread_.joinable()) matching_thread_.join();
-    }
-
-    const EngineStats& stats() const noexcept { return stats_; }
-
-    OrderBook* get_or_create_book(uint32_t instrument_id) noexcept {
-        const size_t idx = instrument_id % BOOK_COUNT;
-        if (unlikely(!books_[idx])) {
-            books_[idx] = new (&book_storage_[idx]) OrderBook(instrument_id);
-        }
-        return books_[idx];
-    }
-
-private:
-    void pin_to_cpu(int cpu) noexcept {
-#if defined(__linux__)
-        cpu_set_t cpuset;
-        CPU_ZERO(&cpuset);
-        CPU_SET(cpu, &cpuset);
-        pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
-#endif
-    }
-
-    void bind_to_numa_node(uint32_t node) noexcept {
-#if defined(__linux__) && defined(__NR_getcpu)
-        struct bitmask *nodemask = numa_allocate_nodemask();
-        if (nodemask) {
-            numa_bitmask_setbit(nodemask, node);
-            numa_bind(nodemask);
-            numa_free_nodemask(nodemask);
-        }
-#endif
-    }
-
-    void run_matching_loop() noexcept {
-        Order incoming;
-        while (running_) {
-            if (inbound_queue_.pop(incoming)) {
-                const uint64_t start_ns = rdtscp_e();
-                OrderBook* book = get_or_create_book(incoming.instrument_id);
-                if (unlikely(!book)) { stats_.orders_rejected++; continue; }
-                FixedVector<Trade, 64> matches;
-                if (unlikely(!book->match_order(incoming, matches))) {
-                    stats_.orders_rejected++;
-                    continue;
-                }
-                for (size_t i = 0; i < matches.size(); ++i)
-                    outbound_queue_.push(matches[i]);
-                const uint64_t end_ns = rdtscp_e();
-                const uint64_t latency = end_ns - start_ns;
-                stats_.orders_submitted++;
-                stats_.trades_executed += matches.size();
-                stats_.total_latency_ns += latency;
-                stats_.cycle_count++;
-                if (latency > stats_.max_latency_ns) stats_.max_latency_ns = latency;
-                if (latency < stats_.min_latency_ns) stats_.min_latency_ns = latency;
-            } else {
-                __asm__ __volatile__("pause" ::: "memory");
-            }
-        }
-    }
-
-    ALIGN_PAD_64 std::atomic<bool> running_;
-    int numa_node_;
-    int cpu_core_;
-    ALIGN_PAD_64 std::thread matching_thread_;
-    ALIGN_PAD_64 LockFreeSPSCQueue<Order, INBOUND_CAPACITY> inbound_queue_;
-    ALIGN_PAD_64 LockFreeSPSCQueue<Trade, OUTBOUND_CAPACITY> outbound_queue_;
-    alignas(64) OrderBook book_storage_[BOOK_COUNT];
-    OrderBook* books_[BOOK_COUNT];
-    ALIGN_PAD_64 EngineStats stats_;
-};
-
-}} // namespace quantum::execution
-
-int main() {
+int main(int argc, char* argv[]) {
     using namespace quantum::execution;
+
+    uint16_t port = 9091;
+    if (argc > 1) {
+        int p = std::atoi(argv[1]);
+        if (p > 0 && p < 65536) port = (uint16_t)p;
+    }
+
+    std::signal(SIGINT, signal_handler);
+    std::signal(SIGTERM, signal_handler);
+
     auto engine = std::make_unique<MatchingEngine>();
     engine->init(0, 2);
     engine->start();
-    Order order;
-    std::memset(&order, 0, sizeof(order));
-    order.id = 1; order.price = 500000; order.qty = 100;
-    order.instrument_id = 1; order.side = Side::BID;
-    order.state = OrderState::NEW;
-    order.type = OrderType::LIMIT;
-    engine->submit_order(order);
-    for (int i = 0; i < 1000000 && engine->stats().orders_submitted == 0 && engine->stats().orders_rejected == 0; ++i) {
-        std::this_thread::yield();
+
+    OrderServer server(engine.get(), port);
+    if (!server.start()) {
+        std::fprintf(stderr, "[ENGINE] Failed to start TCP server on port %u\n", port);
+        return 1;
     }
+
+    std::printf("[ENGINE] Robin Matching Engine v1.0\n");
+    std::printf("[ENGINE] TCP server listening on port %u\n", port);
+    std::printf("[ENGINE] Send JSON orders or 'health' to check status\n");
+    std::printf("[ENGINE] Ctrl+C to stop\n\n");
+
+    auto last_stats = std::chrono::steady_clock::now();
+    while (g_running) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        auto now = std::chrono::steady_clock::now();
+        if (now - last_stats > std::chrono::seconds(5)) {
+            last_stats = now;
+            const auto& s = engine->stats();
+            std::printf("[ENGINE] Orders=%llu Trades=%llu Rejected=%llu AvgLat=%llu ns\n",
+                (unsigned long long)s.orders_submitted,
+                (unsigned long long)s.trades_executed,
+                (unsigned long long)s.orders_rejected,
+                s.cycle_count ? (unsigned long long)(s.total_latency_ns / s.cycle_count) : 0);
+        }
+    }
+
+    std::printf("\n[ENGINE] Shutting down...\n");
+    server.stop();
     engine->stop();
+
     const auto& s = engine->stats();
-    std::printf("[ENGINE] Orders=%llu Trades=%llu Rejected=%llu AvgLat=%llu ns\n",
-           (unsigned long long)s.orders_submitted, (unsigned long long)s.trades_executed,
-           (unsigned long long)s.orders_rejected,
-           s.cycle_count ? (unsigned long long)(s.total_latency_ns / s.cycle_count) : 0);
+    std::printf("[ENGINE] Final: Orders=%llu Trades=%llu Rejected=%llu\n",
+        (unsigned long long)s.orders_submitted,
+        (unsigned long long)s.trades_executed,
+        (unsigned long long)s.orders_rejected);
     return 0;
 }
