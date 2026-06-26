@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: gateway
+    environment:
+      - ORCH_PORT=8080
+      - ROBIN_JWT_PUBKEY=placeholder_or_disable_fatal_in_dev
+      - ROBIN_GATEWAY_API_TOKEN=test-secret
+    volumes:
+      - gateway_data:/app/data
+    working_dir: /app/data
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - gateway
+
+  compliance:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: compliance
+    ports:
+      - "9095:9095"
+    environment:
+      - RUST_LOG=info
+    volumes:
+      - compliance_logs:/logs
+
+volumes:
+  gateway_data:
+  compliance_logs:

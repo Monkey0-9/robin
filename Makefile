@@ -23,33 +23,37 @@ build-cpp:
 	cmake -S services/execution-core \
 	      -B services/execution-core/build \
 	      -DCMAKE_BUILD_TYPE=Release \
-	      -DCMAKE_CXX_COMPILER=$(CXX) 2>/dev/null || true
-	cmake --build services/execution-core/build -j$(NPROC) 2>/dev/null || true
-	cmake -S services/pricing \
-	      -B services/pricing/build \
+	      -DCMAKE_CXX_COMPILER=$(CXX)
+	cmake --build services/execution-core/build -j$(NPROC)
+
+## C++ options pricing engine (Research)
+build-pricing:
+	@echo "[BUILD] C++ options pricing engine..."
+	mkdir -p research/pricing/build
+	cd research/pricing/build && cmake .. \
 	      -DCMAKE_BUILD_TYPE=Release \
-	      -DCMAKE_CXX_COMPILER=$(CXX) 2>/dev/null || true
-	cmake --build services/pricing/build -j$(NPROC) 2>/dev/null || true
+	      -DCMAKE_CXX_COMPILER=$(CXX)
+	cmake --build research/pricing/build -j$(NPROC)
 
 ## Rust risk gate (library + bin)
 build-rust:
 	@echo "[BUILD] Rust risk analytics..."
-	cd services/risk-analytics && $(RUST) build --release 2>/dev/null || true
+	cd services/risk-analytics && $(RUST) build --release
 
 ## Go orchestrator
 build-go:
 	@echo "[BUILD] Go orchestrator..."
-	cd services/gateway && $(GO) build -o ../../build/orchestrator . 2>/dev/null || true
+	cd services/gateway && $(GO) build -o ../../build/orchestrator .
 
 ## Compliance daemon (Rust)
 build-compliance:
 	@echo "[BUILD] Compliance daemon..."
-	cd services/compliance && $(RUST) build --release 2>/dev/null || true
+	cd services/compliance && $(RUST) build --release
 
 ## GPIO kill switch kernel module (Linux only)
 build-kernel:
 	@echo "[BUILD] Kernel module (requires Linux kernel headers)..."
-	$(MAKE) -C services/kernel 2>/dev/null || true
+	$(MAKE) -C services/kernel
 
 # ============================================================================
 # Tests
@@ -84,8 +88,8 @@ test-cpp:
 ## Lint all Rust code (requires clippy)
 test-lint:
 	@echo "[LINT] Rust clippy..."
-	cd services/risk-analytics && $(RUST) clippy -- -D warnings 2>&1 || true
-	cd services/compliance     && $(RUST) clippy -- -D warnings 2>&1 || true
+	cd services/risk-analytics && $(RUST) clippy -- -D warnings
+	cd services/compliance     && $(RUST) clippy -- -D warnings
 
 ## Integration smoke test (Linux only)
 test-integration:
@@ -101,9 +105,9 @@ clean:
 	rm -rf build/
 	rm -rf services/execution-core/build/
 	rm -rf services/pricing/build/
-	cd services/risk-analytics && $(RUST) clean 2>/dev/null || true
-	cd services/compliance     && $(RUST) clean 2>/dev/null || true
-	$(MAKE) -C services/kernel clean 2>/dev/null || true
+	cd services/risk-analytics && $(RUST) clean
+	cd services/compliance     && $(RUST) clean
+	$(MAKE) -C services/kernel clean
 	rm -rf logs/robin_audit_test.log
 
 ## Show help

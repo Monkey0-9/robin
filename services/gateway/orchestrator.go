@@ -1,11 +1,8 @@
 package main
 
 import (
-	"context"
 	"bufio"
-	"crypto/subtle"
-	"crypto/tls"
-	"crypto/x509"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -14,13 +11,12 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/signal"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
@@ -204,7 +200,7 @@ type Orchestrator struct {
 }
 
 func NewOrchestrator() *Orchestrator {
-	return &Orchestrator{
+	orch := &Orchestrator{
 		services: make(map[string]*ServiceHealth),
 		config: HotReloadConfig{
 			MaxDrawdownLimit: 0.10,
@@ -217,8 +213,10 @@ func NewOrchestrator() *Orchestrator {
 		shutdownCh:  make(chan struct{}),
 		logger:      slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
 		wsHub:       NewWebSocketHub(),
-		matchClient: NewMatchingEngineClient("127.0.0.1", 9091),
+		matchClient: NewMatchingEngineClient("127.0.0.1", 9092), // Route to Risk Analytics instead of Execution Core
 	}
+	orch.loadConfig()
+	return orch
 }
 
 func (o *Orchestrator) RegisterService(name string, addr string) {
@@ -355,14 +353,20 @@ func (o *Orchestrator) runHealthChecks() {
 
 func (o *Orchestrator) HotReloadConfig(jsonConfig []byte) error {
 	o.configMutex.Lock()
-	defer o.configMutex.Unlock()
 
 	var newConfig HotReloadConfig
 	if err := json.Unmarshal(jsonConfig, &newConfig); err != nil {
+		o.configMutex.Unlock()
 		return fmt.Errorf("config parse error: %w", err)
 	}
 	old := o.config
 	o.config = newConfig
+	o.configMutex.Unlock()
+
+	if err := o.persistConfig(); err != nil {
+		o.logger.Error("failed to persist config", "error", err)
+	}
+
 	o.logger.Info("config hot-reloaded",
 		"old_max_drawdown", old.MaxDrawdownLimit,
 		"new_max_drawdown", newConfig.MaxDrawdownLimit,
@@ -370,6 +374,31 @@ func (o *Orchestrator) HotReloadConfig(jsonConfig []byte) error {
 		"new_max_order_rate", newConfig.MaxOrderRate,
 	)
 	return nil
+}
+
+func (o *Orchestrator) loadConfig() {
+	o.configMutex.Lock()
+	defer o.configMutex.Unlock()
+	data, err := os.ReadFile("config_state.json")
+	if err == nil {
+		var newConfig HotReloadConfig
+		if err := json.Unmarshal(data, &newConfig); err == nil {
+			o.config = newConfig
+			o.logger.Info("loaded config from disk", "file", "config_state.json")
+			return
+		}
+	}
+	o.logger.Info("using default config")
+}
+
+func (o *Orchestrator) persistConfig() error {
+	o.configMutex.RLock()
+	data, err := json.MarshalIndent(o.config, "", "  ")
+	o.configMutex.RUnlock()
+	if err != nil {
+		return err
+	}
+	return os.WriteFile("config_state.json", data, 0644)
 }
 
 func (o *Orchestrator) GetConfig() HotReloadConfig {
@@ -463,15 +492,7 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// gatewayAPIToken loads the expected API token from the environment.
-// Returns empty string if not set (all requests will be rejected).
-var gatewayAPIToken = func() string {
-	t := os.Getenv("ROBIN_GATEWAY_API_TOKEN")
-	if t == "" {
-		slog.Warn("ROBIN_GATEWAY_API_TOKEN not set: all authenticated endpoints will return 401")
-	}
-	return t
-}()
+// Removed gatewayAPIToken plain-text fallback mechanism.
 
 // jwtAuthMiddleware enforces a Bearer token for sensitive endpoints.
 // Uses jwtAuth.verify for signature verification and crypto/subtle.ConstantTimeCompare for static tokens.
@@ -485,22 +506,37 @@ func jwtAuthMiddleware(next http.Handler) http.Handler {
 		}
 		provided := strings.TrimPrefix(authHeader, "Bearer ")
 
-		// 1. Attempt JWT verification first (includes signature verification)
-		_, err := jwtAuth.verify(provided)
+		// Enforce strict JWT signature verification
+		claims, err := jwtAuth.verify(provided)
 		if err == nil {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// 2. Fallback to static token comparison (useful for dev mode / tests)
-		expected := gatewayAPIToken
-		if expected != "" && subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) == 1 {
-			next.ServeHTTP(w, r)
+			ctx := context.WithValue(r.Context(), "jwt_claims", claims)
+			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 
 		http.Error(w, `{"error":"unauthorized: invalid token"}`, http.StatusUnauthorized)
 	})
+}
+
+// rbacMiddleware enforces role-based access control based on JWT claims.
+func rbacMiddleware(allowedRoles ...string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			claims, ok := r.Context().Value("jwt_claims").(jwt.MapClaims)
+			if !ok {
+				http.Error(w, `{"error":"unauthorized: missing claims"}`, http.StatusUnauthorized)
+				return
+			}
+			role, _ := claims["role"].(string)
+			for _, allowed := range allowedRoles {
+				if role == allowed {
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+			http.Error(w, `{"error":"forbidden: insufficient permissions"}`, http.StatusForbidden)
+		})
+	}
 }
 
 // ============================================================================
@@ -526,13 +562,13 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		json.NewEncoder(w).Encode(o.GetServices())
 	}).Methods("GET")
 
-	r.HandleFunc("/config", func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/config", jwtAuthMiddleware(rbacMiddleware("admin")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(o.GetConfig())
-	}).Methods("GET")
+	})))).Methods("GET")
 
-	// POST /config — hot-reload risk parameters (JWT required)
-	r.Handle("/config", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	// POST /config — hot-reload risk parameters (JWT Admin required)
+	r.Handle("/config", jwtAuthMiddleware(rbacMiddleware("admin")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		var body map[string]interface{}
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -547,11 +583,11 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"status": "reloaded"})
-	}))).Methods("POST")
+	})))).Methods("POST")
 
-	// POST /order — submit a new order (JWT required)
+	// POST /order — submit a new order (JWT Trader required)
 	// Forwards to the matching engine TCP server, or falls back to simulated fill.
-	r.Handle("/order", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/order", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		var orderReq OrderRequest
 		if err := json.NewDecoder(req.Body).Decode(&orderReq); err != nil {
 			http.Error(w, `{"error":"invalid order JSON"}`, http.StatusBadRequest)
@@ -682,14 +718,14 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"latency_ns":  latencyNs,
 			"engine":      engineUsed,
 		})
-	}))).Methods("POST")
+	})))).Methods("POST")
 
 	// WebSocket endpoint — real-time order book + trade notifications
 	r.HandleFunc("/ws", o.wsHub.handleWebSocket)
 
 	r.Handle("/metrics", promhttp.Handler())
 
-	r.HandleFunc("/stats", func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/stats", jwtAuthMiddleware(rbacMiddleware("admin")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		orders   := o.orderCount.Load()
 		rejects  := o.rejectCount.Load()
 		trades   := o.tradeCount.Load()
@@ -705,7 +741,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"trades":     trades,
 			"avg_lat_ns": avgLat,
 		})
-	}).Methods("GET")
+	})))).Methods("GET")
 
 	// Apply middleware chain: requestID → rateLimit → router
 	handler := requestIDMiddleware(rateLimitMiddleware(1000, r))
@@ -732,88 +768,4 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 // Main
 // ============================================================================
 
-func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	slog.SetDefault(logger)
-
-	logger.Info("Robin Gateway Orchestrator starting", "version", "1.1.0")
-
-	orch := NewOrchestrator()
-	orch.RegisterService("ExecutionCore",   "127.0.0.1:9091")
-	orch.RegisterService("RiskAnalytics",   "127.0.0.1:9092")
-	orch.RegisterService("MarketData",      "127.0.0.1:9093")
-	orch.RegisterService("PortfolioEngine", "127.0.0.1:9094")
-	orch.RegisterService("Compliance",      "127.0.0.1:9095")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	orch.StartHealthProbes(ctx, 100*time.Millisecond)
-
-	httpPort := 8080
-	if p := os.Getenv("ORCH_PORT"); p != "" {
-		if _, err := fmt.Sscanf(p, "%d", &httpPort); err != nil {
-			httpPort = 8080
-		}
-	}
-
-	httpServer := orch.setupHTTPServer(httpPort)
-
-	tlsCfg := orch.GetConfig().TLS
-	if tlsCfg.Enabled {
-		tlsCfg.CertFile = envOrDefault("ORCH_TLS_CERT", tlsCfg.CertFile)
-		tlsCfg.KeyFile  = envOrDefault("ORCH_TLS_KEY",  tlsCfg.KeyFile)
-		if tlsCfg.CertFile != "" && tlsCfg.KeyFile != "" {
-			caCert, err := os.ReadFile(tlsCfg.CertFile)
-			if err == nil {
-				caPool := x509.NewCertPool()
-				if caPool.AppendCertsFromPEM(caCert) {
-					httpServer.TLSConfig = &tls.Config{
-						MinVersion: tls.VersionTLS12,
-						ClientCAs:  caPool,
-					}
-				}
-			}
-			go func() {
-				logger.Info("TLS server listening", "port", httpPort)
-				if err := httpServer.ListenAndServeTLS(tlsCfg.CertFile, tlsCfg.KeyFile); err != nil && err != http.ErrServerClosed {
-					logger.Error("TLS server error", "error", err)
-					os.Exit(1)
-				}
-			}()
-		} else {
-			logger.Warn("TLS enabled but cert/key missing, falling back to plain HTTP", "port", httpPort)
-			go startHTTP(httpServer, logger)
-		}
-	} else {
-		go startHTTP(httpServer, logger)
-	}
-
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-sigCh
-	logger.Info("shutdown signal received", "signal", sig.String())
-
-	cancel()
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer shutdownCancel()
-	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		logger.Error("HTTP server shutdown error", "error", err)
-	}
-	orch.Shutdown()
-}
-
-func startHTTP(srv *http.Server, logger *slog.Logger) {
-	logger.Info("HTTP server listening", "addr", srv.Addr)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		logger.Error("HTTP server error", "error", err)
-		os.Exit(1)
-	}
-}
-
-func envOrDefault(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
-}
+// Main moved to main.go

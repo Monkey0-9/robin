@@ -60,16 +60,16 @@ func newJWTAuthenticator() *jwtAuthenticator {
 		return auth
 	}
 
-	slog.Warn("no JWT key configured (set ROBIN_JWT_PUBKEY or ROBIN_GATEWAY_API_TOKEN): auth disabled")
+	// Under test environments (or if no key is configured), we don't call os.Exit(1) immediately.
+	// Instead, we log a warning. When verify() is called on an unconfigured authenticator,
+	// it will return an error, which is safe.
+	slog.Warn("no JWT key configured (set ROBIN_JWT_PUBKEY or ROBIN_GATEWAY_API_TOKEN). Authentication will fail on verify.")
 	return auth
 }
 
 func (a *jwtAuthenticator) verify(tokenStr string) (jwt.MapClaims, error) {
 	if a.publicKey == nil && a.hmacKey == nil {
-		// Dev mode — skip verification
-		claims := jwt.MapClaims{}
-		_, _, err := jwt.NewParser().ParseUnverified(tokenStr, &claims)
-		return claims, err
+		return nil, fmt.Errorf("authentication disabled: no JWT key configured")
 	}
 
 	var keyFunc jwt.Keyfunc

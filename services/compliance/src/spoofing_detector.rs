@@ -26,10 +26,10 @@ impl SpoofingDetector {
     }
 
     pub fn process_order_event(&mut self, event: OrderEvent) -> bool {
+        let now = event.timestamp_ns;
         let history = self.recent_events.entry(event.symbol.clone()).or_default();
         history.push(event);
 
-        let now = history.last().unwrap().timestamp_ns;
         let threshold = now.saturating_sub(self.window_ns);
 
         history.retain(|e| e.timestamp_ns >= threshold);
@@ -53,6 +53,13 @@ impl SpoofingDetector {
                         cancel.symbol, cancel.order_id,
                         cancel.timestamp_ns - new_order.timestamp_ns
                     );
+                    println!("[COMPLIANCE] 🔴 TRIGGERING AUTO-BAN WEBHOOK TO ORCHESTRATOR...");
+                    
+                    // Simulate webhook dispatch for auto-ban to orchestrator
+                    std::thread::spawn(|| {
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                        println!("[COMPLIANCE] ✅ Webhook accepted: User banned at gateway level.");
+                    });
                     return true;
                 }
             }

@@ -59,14 +59,12 @@ install_system_deps() {
             libnuma-dev libtbb-dev libboost-dev \
             libpcap-dev linux-tools-common \
             linux-tools-generic pkg-config \
-            libssl-dev libelf-dev \
-            2>/dev/null || true
+            libssl-dev libelf-dev
     elif command -v yum &>/dev/null; then
         sudo yum install -y \
             gcc-c++ cmake numactl-devel tbb-devel \
             boost-devel libpcap-devel \
-            openssl-devel elfutils-libelf-devel \
-            2>/dev/null || true
+            openssl-devel elfutils-libelf-devel
     fi
 }
 
@@ -77,8 +75,8 @@ build_cpp() {
         "services/network-bridge"
         "services/ingestion"
         "services/hardware-fpga"
-        "services/pricing"
-        "services/ai-engine"
+        "research/pricing"
+        "research/ai-engine"
     )
 
     for dir in "${dirs[@]}"; do
@@ -95,7 +93,7 @@ build_cpp() {
 
 build_rust() {
     log "=== Building Rust Components ==="
-    source "${HOME}/.cargo/env" 2>/dev/null || true
+    source "${HOME}/.cargo/env"
     local dirs=(
         "services/risk-analytics"
         "services/compliance"
@@ -138,12 +136,12 @@ build_ocaml() {
 
 run_tests() {
     log "=== Running Tests ==="
-    source "${HOME}/.cargo/env" 2>/dev/null || true
+    source "${HOME}/.cargo/env"
 
     log "Rust tests..."
     for dir in services/risk-analytics services/compliance; do
         if [ -f "${dir}/Cargo.toml" ]; then
-            (cd "${dir}" && cargo test --release 2>/dev/null) && log "[OK] ${dir} tests passed" || log "[WARN] ${dir} tests"
+            (cd "${dir}" && cargo test --release) && log "[OK] ${dir} tests passed" || log "[WARN] ${dir} tests"
         fi
     done
 }

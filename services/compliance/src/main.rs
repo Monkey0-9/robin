@@ -79,7 +79,7 @@ impl ShmReader {
         let cpath = std::ffi::CString::new(path).map_err(|e| e.to_string())?;
 
         let fd = unsafe {
-            libc::shm_open(cpath.as_ptr(), libc::O_RDONLY, 0)
+            libc::shm_open(cpath.as_ptr(), libc::O_RDWR, 0)
         };
         if fd < 0 {
             return Err(format!("shm_open failed: {}", std::io::Error::last_os_error()));
@@ -89,7 +89,7 @@ impl ShmReader {
             libc::mmap(
                 std::ptr::null_mut(),
                 shm_size,
-                libc::PROT_READ,
+                libc::PROT_READ | libc::PROT_WRITE,
                 libc::MAP_SHARED,
                 fd,
                 0,
@@ -118,10 +118,8 @@ impl ShmReader {
         let slot = (read_idx & (SHM_CAPACITY as u64 - 1)) as usize;
         unsafe {
             std::ptr::copy_nonoverlapping(self.ring.add(slot), msg as *mut ShmMessage, 1);
-            // Reader doesn't advance write_idx; the writer does that.
-            // We need an atomic store to read_idx — but we only have read-only mmap.
-            // For true read-only the writer would need to expose read_idx updates.
-            // For now we spin and re-read — the writer will eventually advance.
+            std::sync::atomic::fence(Ordering::Release);
+            header.read_idx.store(read_idx + 1, Ordering::Relaxed);
         }
         true
     }

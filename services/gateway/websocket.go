@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -13,7 +14,9 @@ var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		return true // allow all origins in dev; tighten for production
+		origin := r.Header.Get("Origin")
+		// In production, configure explicit allowed origins
+		return origin == "http://localhost:3000" || origin == "http://localhost:3001"
 	},
 }
 
@@ -31,9 +34,24 @@ func NewWebSocketHub() *WebSocketHub {
 }
 
 // handleWebSocket upgrades an HTTP connection to WebSocket after JWT validation.
-// The token is expected as a query parameter: /ws?token=<JWT>
+// The token is extracted from the Authorization header, Sec-WebSocket-Protocol, or cookie.
 func (hub *WebSocketHub) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	tokenStr := r.URL.Query().Get("token")
+	tokenStr := ""
+	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+		tokenStr = strings.TrimPrefix(auth, "Bearer ")
+	} else if protocols := r.Header.Get("Sec-WebSocket-Protocol"); protocols != "" {
+		// Example: Sec-WebSocket-Protocol: token, <actual-jwt>
+		parts := strings.Split(protocols, ",")
+		for i, p := range parts {
+			if strings.TrimSpace(p) == "token" && i+1 < len(parts) {
+				tokenStr = strings.TrimSpace(parts[i+1])
+				break
+			}
+		}
+	} else if cookie, err := r.Cookie("jwt_token"); err == nil {
+		tokenStr = cookie.Value
+	}
+
 	if tokenStr == "" {
 		http.Error(w, `{"error":"missing token"}`, http.StatusUnauthorized)
 		return
@@ -43,6 +61,12 @@ func (hub *WebSocketHub) handleWebSocket(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		slog.Warn("WebSocket JWT verification failed", "error", err)
 		http.Error(w, `{"error":"invalid token"}`, http.StatusUnauthorized)
+		return
+	}
+
+	role, _ := claims["role"].(string)
+	if role != "trader" {
+		http.Error(w, `{"error":"forbidden: insufficient permissions"}`, http.StatusForbidden)
 		return
 	}
 

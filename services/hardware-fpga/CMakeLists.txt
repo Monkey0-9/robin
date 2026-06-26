@@ -1,12 +1,5 @@
-cmake_minimum_required(VERSION 3.25)
-project(robin-fpga-sim VERSION 0.1.0 LANGUAGES CXX)
-set(CMAKE_CXX_STANDARD 20)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+cmake_minimum_required(VERSION 3.20)
+project(hardware-fpga)
 
-# NOTE: This is a SOFTWARE SIMULATION of FPGA behavior.
-# Actual FPGA acceleration requires Xilinx Alveo U50 + Vitis HLS.
-# The fpga_emulator uses memcpy on regular DRAM - NOT hardware.
-
-add_executable(fpga_simulator fpga_emulator.cpp)
-target_include_directories(fpga_simulator PRIVATE .)
-target_compile_definitions(fpga_simulator PRIVATE FPGA_EMULATOR_MAIN)
+add_executable(uio_driver uio_driver.cpp)
+target_compile_features(uio_driver PUBLIC cxx_std_20)

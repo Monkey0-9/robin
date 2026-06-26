@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +70,7 @@ func TestHotReloadConfig_Invalid(t *testing.T) {
 }
 
 func TestGetConfig_DefaultValues(t *testing.T) {
+	os.Remove("config_state.json") // Ensure we load defaults, not persisted state from other tests
 	orch := newTestOrch()
 	cfg := orch.GetConfig()
 	if cfg.MaxDrawdownLimit != 0.10 {
@@ -127,6 +129,7 @@ func TestConfigGetEndpoint(t *testing.T) {
 	orch := newTestOrch()
 	srv := orch.setupHTTPServer(0)
 	req := httptest.NewRequest("GET", "/config", nil)
+	req.Header.Set("Authorization", "Bearer "+generateTestToken("admin"))
 	w := httptest.NewRecorder()
 	srv.Handler.ServeHTTP(w, req)
 
@@ -143,11 +146,7 @@ func TestConfigGetEndpoint(t *testing.T) {
 }
 
 func TestConfigPostEndpoint(t *testing.T) {
-	// Set the API token env var so auth validation passes in this test
-	const testToken = "test-token-abc123"
-	t.Setenv("ROBIN_GATEWAY_API_TOKEN", testToken)
-	gatewayAPIToken = testToken
-	t.Cleanup(func() { gatewayAPIToken = "" })
+	testToken := generateTestToken("admin")
 
 	orch := newTestOrch()
 	srv := orch.setupHTTPServer(0)
@@ -190,6 +189,7 @@ func TestStatsEndpoint(t *testing.T) {
 	orch.RecordLatency(1500)
 	srv := orch.setupHTTPServer(0)
 	req := httptest.NewRequest("GET", "/stats", nil)
+	req.Header.Set("Authorization", "Bearer "+generateTestToken("admin"))
 	w := httptest.NewRecorder()
 	srv.Handler.ServeHTTP(w, req)
 

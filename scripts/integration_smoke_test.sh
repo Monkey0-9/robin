@@ -49,36 +49,38 @@ trap cleanup EXIT INT TERM
 # ============================================================================
 log "Checking prerequisites..."
 
-if [[ "$(uname)" != "Linux" ]]; then
-    log "WARNING: This smoke test requires Linux for POSIX SHM. Running in check-only mode."
-    log "Checking if binaries exist..."
-    [[ -f build/orchestrator ]]             && pass "orchestrator binary found" \
-                                            || log "SKIP: orchestrator not built (run make build-go)"
-    [[ -f services/compliance/target/release/compliance-daemon ]] \
-                                            && pass "compliance-daemon binary found" \
-                                            || log "SKIP: compliance-daemon not built (run make build-compliance)"
-    log "Non-Linux environment: skipping live integration test."
-    exit 0
-fi
+# OS check removed to allow running on Windows/MinGW
 
-ORCH_BIN="./build/orchestrator"
-COMPLIANCE_BIN="./services/compliance/target/release/compliance-daemon"
+ORCH_BIN="./build/orchestrator.exe"
+COMPLIANCE_BIN="./target/release/compliance-daemon.exe"
+EXEC_BIN="./services/execution-core/build/matching_engine.exe"
+RISK_BIN="./target/release/robin-risk-daemon.exe"
 
 if [[ ! -f "$ORCH_BIN" ]]; then
     log "Building orchestrator..."
-    make build-go 2>/dev/null || fail "build-go failed"
+    make build-go || fail "build-go failed"
 fi
 
 if [[ ! -f "$COMPLIANCE_BIN" ]]; then
     log "Building compliance daemon..."
-    make build-compliance 2>/dev/null || fail "build-compliance failed"
+    make build-compliance || fail "build-compliance failed"
+fi
+
+if [[ ! -f "$EXEC_BIN" ]]; then
+    log "Building execution-core..."
+    make build-cpp || fail "build-cpp failed"
+fi
+
+if [[ ! -f "$RISK_BIN" ]]; then
+    log "Building risk-analytics..."
+    make build-rust || fail "build-rust failed"
 fi
 
 # ============================================================================
 # Start orchestrator
 # ============================================================================
 log "Starting orchestrator on :18080..."
-ORCH_PORT=18080 "$ORCH_BIN" > /tmp/orch.log 2>&1 &
+ROBIN_GATEWAY_API_TOKEN="smoke-test-secret" ORCH_PORT=18080 "$ORCH_BIN" > /tmp/orch.log 2>&1 &
 PIDS+=($!)
 sleep 1
 
@@ -98,6 +100,19 @@ if [[ "$STATUS" != "ok" ]]; then
     fail "Orchestrator /health returned unexpected status. Response: $(cat /tmp/health.json)"
 fi
 pass "Orchestrator /health returned ok"
+
+# ============================================================================
+# Start execution-core and risk-analytics
+# ============================================================================
+log "Starting execution-core on :9091..."
+"$EXEC_BIN" 9091 > /tmp/exec.log 2>&1 &
+PIDS+=($!)
+sleep 1
+
+log "Starting risk-analytics on :9092..."
+"$RISK_BIN" > /tmp/risk.log 2>&1 &
+PIDS+=($!)
+sleep 1
 
 # ============================================================================
 # Start compliance daemon
@@ -161,13 +176,26 @@ else
 fi
 
 # ============================================================================
-# Audit log chain verification
+# Send Test Order and Verify Audit Log
 # ============================================================================
+log "Submitting test order..."
+curl -s -X POST -H "Content-Type: application/json" \
+    -H "Authorization: Bearer smoke-test-secret" \
+    -d '{"symbol":"BTC/USD","side":"BUY","price":64000.0,"qty":1.0,"order_type":"LIMIT","cl_ord_id":"client-test"}' \
+    "http://127.0.0.1:18080/order" > /tmp/order_resp.json
+log "Order response: $(cat /tmp/order_resp.json)"
+
 sleep 3  # Let compliance daemon write some records
 if [[ -f /tmp/robin_logs/test_audit.log ]]; then
     LINES=$(wc -l < /tmp/robin_logs/test_audit.log)
     if [[ $LINES -gt 0 ]]; then
         pass "Audit log contains $LINES entries"
+        # Check if the trade/order event was logged
+        if grep -q '"client-test"' /tmp/robin_logs/test_audit.log || grep -q 'NEW' /tmp/robin_logs/test_audit.log; then
+            pass "Found order event in audit log"
+        else
+            log "WARNING: Did not find order event in audit log (might just be heartbeats)"
+        fi
     else
         fail "Audit log is empty"
     fi

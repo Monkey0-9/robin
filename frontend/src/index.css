@@ -1,0 +1,61 @@
+:root {
+  --bg-color: #0a0a0a;
+  --text-color: #e5e5e5;
+  --accent-color: #00ff9d;
+  --card-bg: #1a1a1a;
+}
+
+body {
+  margin: 0;
+  font-family: 'Inter', -apple-system, sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #333;
+  padding-bottom: 1rem;
+  margin-bottom: 2rem;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin: 0;
+  font-weight: 600;
+}
+
+.status {
+  font-size: 0.875rem;
+  font-weight: bold;
+}
+
+.status.online {
+  color: var(--accent-color);
+}
+
+.status.offline {
+  color: #ff3366;
+}
+
+.dashboard-card {
+  background: var(--card-bg);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+}
+
+.dashboard-card h2 {
+  margin-top: 0;
+  font-size: 1.1rem;
+  color: #888;
+}
