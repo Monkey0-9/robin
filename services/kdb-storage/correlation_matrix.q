@@ -2,7 +2,7 @@
 / Real-time Cross-Asset Pearson Correlation calculation in KDB+/q.
 / Computes rolling covariance and correlation between price feeds.
 /
-/ Python Implementation Plan (correlation_engine.py in services/strategy-engine/):
+/ Python Implementation Plan (correlation_engine.py in research/strategy-engine/):
 / ----------------------------------------------------------------------------
 / A CorrelationEngine class in Python that mirrors this q logic but uses
 / Exponential Weighted Moving Average (EWMA) for real-time updates from

@@ -1,25 +1,18 @@
-# Security Architecture (Design Specification — NOT Implemented)
+# Security Architecture (Current State)
 
 > [!WARNING]
-> **None of the security features described below are currently implemented.**
-> - No TLS, mTLS, or WireGuard
-> - No HSM or HashiCorp Vault
-> - No authentication or authorization
-> - No secrets management
-> - No encryption at rest or in transit
+> **This is a research prototype. Advanced enterprise-grade security features (HSM hardware keys, WireGuard tunnels) are not implemented.**
 
 ## Current Security State
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Authentication | NOT IMPLEMENTED | No JWT, mTLS, or API keys |
-| Authorization | NOT IMPLEMENTED | No RBAC, no role-based access |
-| Encryption (in transit) | NOT IMPLEMENTED | No TLS, no WireGuard |
-| Encryption (at rest) | NOT IMPLEMENTED | No LUKS, no AES |
-| Secrets Management | NOT IMPLEMENTED | No Vault, no KMS, hardcoded paths |
-| Audit Logging | NOT IMPLEMENTED | println! only, no tamper-evident logs |
-| Input Validation | PARTIAL | Basic order field checks exist |
-| Rate Limiting | PARTIAL | Velocity check in risk gate only |
+| Authentication | IMPLEMENTED | Enforces strict JWT validation on gateway and token validation on WebSocket |
+| Authorization | IMPLEMENTED | RBAC (trader and admin roles) in gateway router |
+| Encryption (in transit) | PARTIAL | TLS supported in Go gateway; internal nodes use plain TCP |
+| Encryption (at rest) | NOT IMPLEMENTED | Raw files and standard log files |
+| Secrets Management | PARTIAL | Vault/AWS template stubs; loads keys from environment variables |
+| Audit Logging | IMPLEMENTED | SHA-256 chained tamper-evident logging in compliance service |
+| Input Validation | IMPLEMENTED | Full bounds/restricted checks in risk gate |
+| Rate Limiting | IMPLEMENTED | Token-bucket on gateway API + velocity check in risk gate |
 | Supply Chain Security | NOT IMPLEMENTED | No SBOM, no dependency scanning |
-
-All security features described in this document are aspirational design targets.

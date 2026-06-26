@@ -1,6 +1,6 @@
 """Robin Signal Model — Python port of the C++ LinearSignalModel
 
-Mirrors the exact logic from services/ai-engine/signal_model.cpp:
+Mirrors the exact logic from research/ai-engine/signal_model.cpp:
   - Price momentum (40% weight)
   - Volume pressure (20% weight)
   - Order book imbalance (30% weight)

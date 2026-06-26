@@ -1,13 +1,13 @@
 # Implementation Roadmap (Aspirational)
 
 > [!WARNING]
-> This roadmap outlines future steps required to transition from research prototype to production system. **No items beyond shared memory SPSC ring buffers have been completed.**
+> This roadmap outlines future steps required to transition from research prototype to production system. **Several prototype phases are fully implemented in the current platform.**
 
 ## Phase 1: Hot Path Foundation (Weeks 1-4)
 
 - [x] Implement shared memory SPSC ring buffer (mmap, cache-line aligned)
-- [ ] Build Rust risk gate with lock-free data structures (pre-allocated, no HashMap)
-- [ ] Build C++ matching engine with price-time priority (not FIFO)
+- [x] Build Rust risk gate with lock-free data structures (pre-allocated, no HashMap)
+- [x] Build C++ matching engine with price-time priority (not FIFO)
 - [ ] Implement real network ingestion (UDP multicast, replace mock data)
 - [ ] Integration tests for all hot path components
 
@@ -22,7 +22,7 @@
 ## Phase 3: Compliance & Risk (Weeks 9-12)
 
 - [ ] Build SEC 15c3-5 hard/soft block architecture (production-grade)
-- [ ] Implement immutable audit logging (SHA-256 chained, tamper-evident)
+- [x] Implement immutable audit logging (SHA-256 chained, tamper-evident)
 - [ ] Implement CEO certification workflow
 - [ ] 90-day continuous latency validation framework
 - [ ] Post-trade surveillance integration
@@ -32,7 +32,7 @@
 - [ ] Production KDB+ schema (sym enum, par.txt, TP/RDB/HDB gateway)
 - [ ] Real ONNX inference integration (cold path)
 - [ ] Production security implementation (TLS, Vault, HSM)
-- [ ] Go orchestrator service discovery and health checks
+- [x] Go orchestrator service discovery and health checks
 
 ## Phase 5: Security & Hardening (Weeks 17-20)
 

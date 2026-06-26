@@ -121,7 +121,7 @@ build_ocaml() {
     log "=== Building OCaml Components ==="
     if command -v dune &>/dev/null; then
         local dirs=(
-            "services/portfolio"
+            "research/portfolio"
             "services/compliance"
         )
         for dir in "${dirs[@]}"; do

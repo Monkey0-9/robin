@@ -1,7 +1,7 @@
 """yfinance Market Data Fetcher
 
 Downloads historical market data and builds ModelInput structs
-for the Robin signal model (services/ai-engine/robin_signal_model.py).
+for the Robin signal model (research/ai-engine/robin_signal_model.py).
 
 Usage:
   from services.data_ingestion.market.yfinance_fetcher import YFinanceFetcher

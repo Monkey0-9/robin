@@ -19,9 +19,9 @@ Do NOT file public issues for security vulnerabilities.
 This prototype is explicitly **not** production-ready. Known limitations:
 
 ### Authentication
-- The Go gateway has a Bearer token middleware stub (`jwtAuthMiddleware`). It validates token presence but does **not** verify JWT signatures. Production must integrate a proper JWKS/JWT library (e.g., `golang-jwt/jwt`).
+- The Go gateway enforces strict JWT signature verification in `jwtAuthMiddleware` using the `github.com/golang-jwt/jwt/v5` library, supporting both RSA and HMAC verification.
 - The KDB+ HTTP gateway (`http_gateway.q`) uses a static bearer token from the `ROBIN_KDB_API_TOKEN` environment variable. Production must use mTLS or an OAuth2 service.
-- The WebSocket bridge has no authentication.
+- The WebSocket bridge has authentication via JWT (passed via subprotocol fallback or query parameters).
 
 ### Transport Security
 - TLS is configurable in the Go gateway (`ORCH_TLS_CERT`, `ORCH_TLS_KEY`) but requires external certificate provisioning.

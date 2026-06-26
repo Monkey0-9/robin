@@ -35,7 +35,7 @@ The platform follows a pipeline architecture with three tiers: hot path (<1ms ta
 **Current**: Basic trade and quote table schemas. No sym enumeration, no partitioning config, no TP/RDB/HDB gateway architecture.
 
 ### 6. OCaml Portfolio Optimizer
-**Location**: `services/portfolio/portfolio_opt.ml`
+**Location**: `research/portfolio/portfolio_opt.ml`
 **Current**: Gradient descent optimizer with simplex projection for maximum Sharpe ratio portfolio. VaR calculation with covariance matrix.
 
 ### 7. Go Orchestrator
@@ -45,11 +45,11 @@ The platform follows a pipeline architecture with three tiers: hot path (<1ms ta
 ## Cold Path Components
 
 ### 8. Python Backtester
-**Location**: `services/strategy-engine/backtester.py`
+**Location**: `research/strategy-engine/backtester.py`
 **Current**: Basic vectorized backtesting with buy/sell signals, Sharpe ratio, max drawdown calculation.
 
 ### 9. R Analytics
-**Location**: `services/strategy-engine/risk_analytics.R`
+**Location**: `research/strategy-engine/risk_analytics.R`
 **Current**: GARCH volatility modeling, VaR calculation, SEC CAT report generation stub.
 
 ## Hardware Abstraction
