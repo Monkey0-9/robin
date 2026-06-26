@@ -101,11 +101,11 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y cmake g++-12
       - name: CMake configure + build
         run: |
-          cmake -S services/pricing \
-                -B services/pricing/build \
+          cmake -S research/pricing \
+                -B research/pricing/build \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DCMAKE_CXX_COMPILER=g++-12
-          cmake --build services/pricing/build -j$(nproc)
+          cmake --build research/pricing/build -j$(nproc)
 
   # ============================================================================
   # Python: AI engine validation
@@ -121,7 +121,7 @@ jobs:
       - name: Install deps
         run: pip install numpy
       - name: Validate backtester
-        run: python services/strategy-engine/backtester.py
+        run: python research/strategy-engine/backtester.py
       - name: Validate alternative data loader (if present)
         run: |
           if python -c "import ast; ast.parse(open('services/data-ingestion/alternative/alternative_data_loader.py').read())" 2>/dev/null; then
