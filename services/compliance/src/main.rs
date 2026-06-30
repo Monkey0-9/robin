@@ -64,48 +64,35 @@ const SHM_CAPACITY: usize = 65536;
 #[allow(dead_code)]
 const SHM_MSG_SIZE: usize = 64;
 
-#[allow(dead_code)]
+use std::fs::OpenOptions;
+use memmap2::MmapOptions;
+
 struct ShmReader {
-    mapped_addr: *mut u8,
-    size: usize,
+    mmap: memmap2::MmapMut,
     header: *mut ShmHeader,
     ring: *mut ShmMessage,
 }
 
-#[cfg(target_os = "linux")]
 impl ShmReader {
     fn new(path: &str) -> Result<Self, String> {
         let shm_size = std::mem::size_of::<ShmHeader>() + SHM_CAPACITY * SHM_MSG_SIZE;
-        let cpath = std::ffi::CString::new(path).map_err(|e| e.to_string())?;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(|e| format!("Failed to open shm file: {}", e))?;
 
-        let fd = unsafe {
-            libc::shm_open(cpath.as_ptr(), libc::O_RDWR, 0)
+        let mut mmap = unsafe {
+            MmapOptions::new()
+                .len(shm_size)
+                .map_mut(&file)
+                .map_err(|e| format!("Failed to mmap file: {}", e))?
         };
-        if fd < 0 {
-            return Err(format!("shm_open failed: {}", std::io::Error::last_os_error()));
-        }
 
-        let mapped_addr = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                shm_size,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED,
-                fd,
-                0,
-            )
-        } as *mut u8;
-        if mapped_addr == libc::MAP_FAILED as *mut u8 {
-            unsafe { libc::close(fd) };
-            return Err(format!("mmap failed: {}", std::io::Error::last_os_error()));
-        }
+        let header = mmap.as_mut_ptr() as *mut ShmHeader;
+        let ring = unsafe { mmap.as_mut_ptr().add(std::mem::size_of::<ShmHeader>()) as *mut ShmMessage };
 
-        unsafe { libc::close(fd) };
-
-        let header = mapped_addr as *mut ShmHeader;
-        let ring = unsafe { mapped_addr.add(std::mem::size_of::<ShmHeader>()) as *mut ShmMessage };
-
-        Ok(Self { mapped_addr, size: shm_size, header, ring })
+        Ok(Self { mmap, header, ring })
     }
 
     fn pop(&mut self, msg: &mut ShmMessage) -> bool {
@@ -123,24 +110,6 @@ impl ShmReader {
         }
         true
     }
-}
-
-impl Drop for ShmReader {
-    fn drop(&mut self) {
-        #[cfg(target_os = "linux")]
-        unsafe { libc::munmap(self.mapped_addr as *mut libc::c_void, self.size); }
-    }
-}
-
-// Non-Linux fallback
-#[cfg(not(target_os = "linux"))]
-impl ShmReader {
-    #[allow(dead_code)]
-    fn new(_path: &str) -> Result<Self, String> {
-        Err("SHM requires Linux".to_string())
-    }
-    #[allow(dead_code)]
-    fn pop(&mut self, _msg: &mut ShmMessage) -> bool { false }
 }
 
 // ============================================================================
@@ -248,24 +217,14 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
     // Shared memory buffer for reading OrderMessages
     let mut shm_reader: Option<ShmReader> = None;
 
-    // On Linux: attempt to open shared memory for reading
-    #[cfg(target_os = "linux")]
-    {
-        match ShmReader::new(shm_path) {
-            Ok(reader) => {
-                eprintln!("[COMPLIANCE] Connected to SHM: {shm_path}");
-                shm_reader = Some(reader);
-            }
-            Err(e) => {
-                eprintln!("[COMPLIANCE] SHM open failed ({e}) — running in log-only demo mode");
-            }
+    match ShmReader::new(shm_path) {
+        Ok(reader) => {
+            eprintln!("[COMPLIANCE] Connected to SHM: {shm_path}");
+            shm_reader = Some(reader);
         }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = shm_path;
-        eprintln!("[COMPLIANCE] Non-Linux — running in demo mode (generating synthetic events)");
+        Err(e) => {
+            eprintln!("[COMPLIANCE] SHM open failed ({e}) — running in log-only demo mode");
+        }
     }
 
     let mut synthetic_order_id: u64 = 1;

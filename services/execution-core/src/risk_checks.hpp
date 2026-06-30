@@ -51,18 +51,20 @@ public:
         last_trade_prices_[instrument_id & 4095] = price;
     }
 
-    bool check_order(const Order& order, uint64_t timestamp_ns) {
-        if (kill_switch_active_) return false;
-        if (circuit_breaker_tripped_) return false;
-        if (order.qty > MAX_QTY) return false;
+    bool check_order(const Order& order, uint64_t timestamp_ns, std::string& err_msg) {
+        if (kill_switch_active_) { err_msg = "kill_switch"; return false; }
+        if (circuit_breaker_tripped_) { err_msg = "cb_tripped"; return false; }
+        if (order.qty > MAX_QTY) { err_msg = "qty_max"; return false; }
         for (auto s : restricted_symbols_) {
-            if (s == order.instrument_id) return false;
+            if (s == order.instrument_id) { err_msg = "restricted_symbol"; return false; }
         }
         {
             size_t slot = order.id & 4095;
             auto [old_id, old_ts] = recent_orders_[slot];
-            if (old_id == order.id && (timestamp_ns - old_ts) < DUPLICATE_WINDOW_NS)
+            if (old_id == order.id && (timestamp_ns - old_ts) < DUPLICATE_WINDOW_NS) {
+                err_msg = "duplicate_order";
                 return false;
+            }
         }
         {
             size_t slot = order.instrument_id & 4095;
@@ -71,7 +73,7 @@ public:
                 uint64_t p = order.price;
                 uint64_t min_p = (last * 95) / 100;
                 uint64_t max_p = (last * 105) / 100;
-                if (p < min_p || p > max_p) return false;
+                if (p < min_p || p > max_p) { err_msg = "price_collar"; return false; }
             }
         }
         {
@@ -80,15 +82,17 @@ public:
             int64_t next = (order.side == Side::BID)
                 ? current + static_cast<int64_t>(order.qty)
                 : current - static_cast<int64_t>(order.qty);
-            if (std::abs(next) > POSITION_LIMIT) return false;
+            if (std::abs(next) > POSITION_LIMIT) { err_msg = "position_limit"; return false; }
             positions_[slot].net_position = next;
             positions_[slot].last_update_ns = timestamp_ns;
         }
         {
             size_t lookback = (velocity_head_ + VELOCITY_RING_SIZE - MAX_VELOCITY) % VELOCITY_RING_SIZE;
             uint64_t oldest_ts = velocity_ring_[lookback];
-            if (oldest_ts > 0 && (timestamp_ns - oldest_ts) < VELOCITY_WINDOW_NS)
+            if (oldest_ts > 0 && (timestamp_ns - oldest_ts) < VELOCITY_WINDOW_NS) {
+                err_msg = "velocity_limit";
                 return false;
+            }
         }
         velocity_ring_[velocity_head_] = timestamp_ns;
         velocity_head_ = (velocity_head_ + 1) % VELOCITY_RING_SIZE;

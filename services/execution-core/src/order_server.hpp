@@ -131,16 +131,17 @@ private:
             const char* resp = "{\"status\":\"ok\"}\n";
             ::send(client_sock, resp, (int)std::strlen(resp), 0);
         } else if (request.find("order") != std::string::npos || request.find("id") != std::string::npos) {
-            FillResult fill = process_order_json(request);
+            std::string err_msg;
+            FillResult fill = process_order_json(request, err_msg);
             char resp[512];
             int len = std::snprintf(resp, sizeof(resp),
-                "{\"order_id\":%llu,\"instrument_id\":%u,\"fill_price\":%u,\"fill_qty\":%u,\"status\":\"%s\",\"success\":%s}\n",
+                "{\"order_id\":%llu,\"instrument_id\":%u,\"fill_price\":%u,\"fill_qty\":%u,\"status\":\"%s\",\"success\":%s,\"error\":\"%s\"}\n",
                 (unsigned long long)fill.order_id, fill.instrument_id, fill.fill_price, fill.fill_qty,
                 fill.state == OrderState::FILLED ? "FILLED" :
                 fill.state == OrderState::WORKING ? "WORKING" :
                 fill.state == OrderState::CANCELED ? "CANCELED" :
                 fill.state == OrderState::REJECTED ? "REJECTED" : "UNKNOWN",
-                fill.success ? "true" : "false");
+                fill.success ? "true" : "false", err_msg.c_str());
             ::send(client_sock, resp, len, 0);
         } else {
             const char* resp = "{\"error\":\"unknown command\"}\n";
@@ -154,7 +155,7 @@ private:
 #endif
     }
 
-    FillResult process_order_json(const std::string& json) {
+    FillResult process_order_json(const std::string& json, std::string& err_msg) {
         FillResult result{};
         result.success = false;
         result.state = OrderState::REJECTED;
@@ -226,7 +227,7 @@ private:
         order.type = type;
         order.state = OrderState::NEW;
 
-        if (!risk_.check_order(order, timestamp)) {
+        if (!risk_.check_order(order, timestamp, err_msg)) {
             result.order_id = id;
             result.instrument_id = order.instrument_id;
             result.state = OrderState::REJECTED;
@@ -234,6 +235,7 @@ private:
         }
 
         if (!engine_->submit_order(order)) {
+            err_msg = "queue_full";
             risk_.rollback_position(order);
             result.state = OrderState::REJECTED;
             return result;

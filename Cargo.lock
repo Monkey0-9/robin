@@ -191,6 +191,7 @@ dependencies = [
  "ctrlc",
  "hex",
  "libc",
+ "memmap2",
  "sha2",
 ]
 
@@ -199,6 +200,7 @@ name = "robin-risk-analytics"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "ctrlc",
  "libc",
  "memmap2",
  "serde",

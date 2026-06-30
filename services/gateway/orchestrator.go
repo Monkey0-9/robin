@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"math/rand"
@@ -103,6 +104,7 @@ type MatchingEngineResponse struct {
 	FillQty      uint32 `json:"fill_qty"`
 	Status       string `json:"status"`
 	Success      bool   `json:"success"`
+	Error        string `json:"error"`
 }
 
 // ============================================================================
@@ -557,18 +559,33 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		})
 	}).Methods("GET")
 
+	r.HandleFunc("/live", func(w http.ResponseWriter, req *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok"))
+	}).Methods("GET")
+
+	r.HandleFunc("/ready", func(w http.ResponseWriter, req *http.Request) {
+		if o.failedCount.Load() > 0 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("services failed"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ready"))
+	}).Methods("GET")
+
 	r.HandleFunc("/services", func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(o.GetServices())
 	}).Methods("GET")
 
-	r.Handle("/config", jwtAuthMiddleware(rbacMiddleware("admin")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/config", rateLimitMiddleware(float64(o.GetConfig().MaxOrderRate), jwtAuthMiddleware(rbacMiddleware("admin")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(o.GetConfig())
-	})))).Methods("GET")
+	}))))).Methods("GET")
 
 	// POST /config — hot-reload risk parameters (JWT Admin required)
-	r.Handle("/config", jwtAuthMiddleware(rbacMiddleware("admin")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/config", rateLimitMiddleware(float64(o.GetConfig().MaxOrderRate), jwtAuthMiddleware(rbacMiddleware("admin")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		var body map[string]interface{}
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -587,7 +604,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 
 	// POST /order — submit a new order (JWT Trader required)
 	// Forwards to the matching engine TCP server, or falls back to simulated fill.
-	r.Handle("/order", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/order", rateLimitMiddleware(float64(o.GetConfig().MaxOrderRate), jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		var orderReq OrderRequest
 		if err := json.NewDecoder(req.Body).Decode(&orderReq); err != nil {
 			http.Error(w, `{"error":"invalid order JSON"}`, http.StatusBadRequest)
@@ -635,6 +652,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		var fillQty float64
 		status := "FILLED"
 		engineUsed := false
+		var engineError string
 
 		// Try the matching engine
 		if o.matchClient != nil && o.matchClient.IsEnabled() {
@@ -655,6 +673,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 						status = meResp.Status
 					} else {
 						status = "REJECTED"
+						engineError = meResp.Error
 						o.RecordReject()
 					}
 				}
@@ -707,7 +726,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		respPayload := map[string]interface{}{
 			"status":      status,
 			"exec_id":     execID,
 			"cl_ord_id":   orderReq.ClientOrdID,
@@ -717,7 +736,11 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"fill_price":  fillPrice,
 			"latency_ns":  latencyNs,
 			"engine":      engineUsed,
-		})
+		}
+		if engineError != "" {
+			respPayload["error"] = engineError
+		}
+		json.NewEncoder(w).Encode(respPayload)
 	})))).Methods("POST")
 
 	// WebSocket endpoint — real-time order book + trade notifications
@@ -742,6 +765,141 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"avg_lat_ns": avgLat,
 		})
 	})))).Methods("GET")
+
+	// POST /api/analytics/pricing — Black-Scholes options pricing calculator
+	r.HandleFunc("/api/analytics/pricing", func(w http.ResponseWriter, req *http.Request) {
+		var reqBody struct {
+			Spot   float64 `json:"spot"`
+			Strike float64 `json:"strike"`
+			Vol    float64 `json:"vol"`
+			Rate   float64 `json:"rate"`
+			Time   float64 `json:"time"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&reqBody); err != nil {
+			http.Error(w, `{"error":"invalid request JSON"}`, http.StatusBadRequest)
+			return
+		}
+		if reqBody.Spot <= 0 || reqBody.Strike <= 0 || reqBody.Vol <= 0 || reqBody.Time <= 0 {
+			http.Error(w, `{"error":"spot, strike, vol, and time must be positive numbers"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Black-Scholes Formula
+		d1 := (math.Log(reqBody.Spot/reqBody.Strike) + (reqBody.Rate+reqBody.Vol*reqBody.Vol/2.0)*reqBody.Time) / (reqBody.Vol * math.Sqrt(reqBody.Time))
+		d2 := d1 - reqBody.Vol*math.Sqrt(reqBody.Time)
+
+		// Cumulative Standard Normal Distribution Approximation (Abramowitz & Stegun)
+		var cnd func(float64) float64
+		cnd = func(x float64) float64 {
+			if x < 0 {
+				return 1.0 - cnd(-x)
+			}
+			k := 1.0 / (1.0 + 0.2316419*x)
+			a1, a2, a3, a4, a5 := 0.319381530, -0.356563782, 1.781477937, -1.821255978, 1.330274429
+			n := 1.0 - (1.0/math.Sqrt(2.0*math.Pi))*math.Exp(-0.5*x*x)*(a1*k+a2*k*k+a3*math.Pow(k, 3)+a4*math.Pow(k, 4)+a5*math.Pow(k, 5))
+			return n
+		}
+
+		callPrice := reqBody.Spot*cnd(d1) - reqBody.Strike*math.Exp(-reqBody.Rate*reqBody.Time)*cnd(d2)
+		putPrice := reqBody.Strike*math.Exp(-reqBody.Rate*reqBody.Time)*cnd(-d2) - reqBody.Spot*cnd(-d1)
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"call_price": callPrice,
+			"put_price":  putPrice,
+			"d1":         d1,
+			"d2":         d2,
+		})
+	}).Methods("POST")
+
+	// POST /api/analytics/var — Value-at-Risk & Conditional Value-at-Risk
+	r.HandleFunc("/api/analytics/var", func(w http.ResponseWriter, req *http.Request) {
+		var reqBody struct {
+			Weights    map[string]float64 `json:"weights"`
+			Confidence float64            `json:"confidence"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&reqBody); err != nil {
+			http.Error(w, `{"error":"invalid request JSON"}`, http.StatusBadRequest)
+			return
+		}
+		if reqBody.Confidence <= 0 || reqBody.Confidence >= 1 {
+			reqBody.Confidence = 0.95
+		}
+
+		// Parametric VaR mock based on simulated covariance
+		volMap := map[string]float64{"BTC": 0.65, "ETH": 0.70, "AAPL": 0.25}
+		var portVol float64
+		for sym, w := range reqBody.Weights {
+			vol := volMap[sym]
+			if vol == 0 {
+				vol = 0.30
+			}
+			portVol += w * vol
+		}
+
+		// Z-score approximation
+		zScore := 1.645 // Default 95%
+		if reqBody.Confidence > 0.98 {
+			zScore = 2.33 // 99%
+		}
+
+		varValue := 10000000.0 // Simulated portfolio of $10M
+		varCalc := varValue * portVol * zScore * math.Sqrt(1.0/252.0)
+		cvarCalc := varCalc * (math.Exp(-zScore*zScore/2.0) / (math.Sqrt(2.0*math.Pi) * (1.0 - reqBody.Confidence)))
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"portfolio_value": varValue,
+			"var_1d":          varCalc,
+			"cvar_1d":         cvarCalc,
+			"volatility_ann":  portVol,
+			"confidence":      reqBody.Confidence,
+		})
+	}).Methods("POST")
+
+	// POST /api/ai/chat — Quantitative Multi-Agent Chat Assistant
+	r.HandleFunc("/api/ai/chat", func(w http.ResponseWriter, req *http.Request) {
+		proxyReq, err := http.NewRequest("POST", "http://127.0.0.1:8000/chat", req.Body)
+		if err != nil {
+			http.Error(w, `{"error":"failed to create proxy request"}`, http.StatusInternalServerError)
+			return
+		}
+		proxyReq.Header.Set("Content-Type", "application/json")
+		
+		client := &http.Client{Timeout: 15 * time.Second}
+		proxyResp, err := client.Do(proxyReq)
+		if err != nil {
+			http.Error(w, `{"error":"failed to reach python ai-agent"}`, http.StatusBadGateway)
+			return
+		}
+		defer proxyResp.Body.Close()
+		
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(proxyResp.StatusCode)
+		io.Copy(w, proxyResp.Body)
+	}).Methods("POST")
+
+	// POST /api/ai/trade_decision — Autonomous AI Agent Trade Evaluation
+	r.HandleFunc("/api/ai/trade_decision", func(w http.ResponseWriter, req *http.Request) {
+		proxyReq, err := http.NewRequest("POST", "http://127.0.0.1:8000/trade_decision", req.Body)
+		if err != nil {
+			http.Error(w, `{"error":"failed to create proxy request"}`, http.StatusInternalServerError)
+			return
+		}
+		proxyReq.Header.Set("Content-Type", "application/json")
+		
+		client := &http.Client{Timeout: 15 * time.Second}
+		proxyResp, err := client.Do(proxyReq)
+		if err != nil {
+			http.Error(w, `{"error":"failed to reach python ai-agent"}`, http.StatusBadGateway)
+			return
+		}
+		defer proxyResp.Body.Close()
+		
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(proxyResp.StatusCode)
+		io.Copy(w, proxyResp.Body)
+	}).Methods("POST")
 
 	// Apply middleware chain: requestID → rateLimit → router
 	handler := requestIDMiddleware(rateLimitMiddleware(1000, r))

@@ -4,6 +4,9 @@
 #include <cmath>
 #include <vector>
 #include <array>
+#include <fstream>
+#include <string>
+#include <sstream>
 
 // ============================================================================
 // LinearSignalModel — Feature-based trading signal generator
@@ -55,9 +58,28 @@ public:
     // Returns true always for the linear model since no file is needed.
     bool load(const char* config_path) noexcept {
         std::snprintf(config_path_, sizeof(config_path_), "%s", config_path);
-        // TODO: parse config_path to override LinearWeights fields
-        // For now the default weights are used unconditionally.
-        (void)config_path;
+        
+        std::ifstream infile(config_path_);
+        if (infile.is_open()) {
+            std::string line;
+            while (std::getline(infile, line)) {
+                std::istringstream iss(line);
+                std::string key;
+                if (std::getline(iss, key, '=')) {
+                    float value;
+                    if (iss >> value) {
+                        if (key == "price_momentum_w") weights_.price_momentum_w = value;
+                        else if (key == "ob_imbalance_w") weights_.ob_imbalance_w = value;
+                        else if (key == "volume_pressure_w") weights_.volume_pressure_w = value;
+                        else if (key == "intraday_w") weights_.intraday_w = value;
+                    }
+                }
+            }
+            std::printf("[SIGNAL] Loaded custom weights from %s\n", config_path_);
+        } else {
+            std::printf("[SIGNAL] Failed to open %s. Using default weights.\n", config_path_);
+        }
+
         return true;
     }
 

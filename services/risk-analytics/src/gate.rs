@@ -62,7 +62,7 @@ impl RiskGate {
             pre_trade: PreTradeRiskEvaluator::new(
                 10_000_000_000, // credit_limit
                 1_000_000,      // max_qty
-                1_000_000,      // max_price (placeholder)
+                u32::MAX,       // max_price (placeholder)
                 1,              // min_price
             ),
             circuit_breaker: RiskCircuitBreaker::new(0.10),
@@ -93,15 +93,14 @@ impl RiskGate {
 
     /// Create with custom velocity and credit limits.
     pub fn with_config(
-        shm_path: &str,
+        shm_name: &str,
         credit_limit: u64,
-        max_orders_per_second: usize,
-        position_limit: i64,
+        position_limit: i32,
+        max_qty_per_order: u32,
     ) -> Self {
-        let mut g = Self::new(shm_path);
+        let mut g = Self::new(shm_name);
         g.credit_limit = credit_limit;
-        g.max_velocity = max_orders_per_second;
-        g.position_limit = position_limit;
+        g.position_limit = position_limit as i64;
         g
     }
 

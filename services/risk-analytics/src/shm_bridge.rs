@@ -1,4 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::fs::OpenOptions;
+use memmap2::MmapOptions;
 
 #[repr(C, align(64))]
 pub struct ShmHeader {
@@ -34,9 +36,7 @@ pub struct ShmMessage {
 }
 
 pub struct ShmBridge {
-    pub fd: i32,
-    pub mapped_addr: *mut u8,
-    pub size: usize,
+    pub mmap: memmap2::MmapMut,
     pub header: *mut ShmHeader,
     pub ring: *mut ShmMessage,
 }
@@ -47,89 +47,54 @@ unsafe impl Sync for ShmBridge {}
 impl ShmBridge {
     pub fn new(path: &str, create: bool) -> Result<Self, String> {
         let shm_size = std::mem::size_of::<ShmHeader>() + SHM_CAPACITY * SHM_MSG_SIZE;
-        #[cfg(not(target_os = "linux"))]
-        let _ = shm_size; // Used only on Linux for ftruncate
+        
+        let file = if create {
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .open(path)
+                .map_err(|e| format!("Failed to create shm file: {}", e))?
+        } else {
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(path)
+                .map_err(|e| format!("Failed to open shm file: {}", e))?
+        };
 
-        #[cfg(target_os = "linux")]
-        {
-            let cpath = std::ffi::CString::new(path).map_err(|e| e.to_string())?;
-            let fd = unsafe {
-                libc::shm_open(
-                    cpath.as_ptr(),
-                    if create {
-                        libc::O_CREAT | libc::O_RDWR
-                    } else {
-                        libc::O_RDWR
-                    },
-                    0o600,
-                )
-            };
-            if fd < 0 {
-                return Err(format!(
-                    "shm_open failed: {}",
-                    std::io::Error::last_os_error()
-                ));
-            }
-
-            if create {
-                let ret = unsafe { libc::ftruncate(fd, shm_size as i64) };
-                if ret < 0 {
-                    unsafe { libc::close(fd) };
-                    return Err(format!(
-                        "ftruncate failed: {}",
-                        std::io::Error::last_os_error()
-                    ));
-                }
-            }
-
-            let mapped_addr = unsafe {
-                libc::mmap(
-                    std::ptr::null_mut(),
-                    shm_size,
-                    libc::PROT_READ | libc::PROT_WRITE,
-                    libc::MAP_SHARED,
-                    fd,
-                    0,
-                )
-            } as *mut u8;
-            if mapped_addr == libc::MAP_FAILED as *mut u8 {
-                unsafe { libc::close(fd) };
-                return Err(format!("mmap failed: {}", std::io::Error::last_os_error()));
-            }
-
-            unsafe { libc::close(fd) };
-
-            let header = mapped_addr as *mut ShmHeader;
-            if create {
-                unsafe {
-                    (*header).write_idx = AtomicU64::new(0);
-                    (*header).read_idx = AtomicU64::new(0);
-                    (*header).magic = SHM_MAGIC;
-                    (*header).version = SHM_VERSION;
-                    (*header).size = SHM_CAPACITY as u32;
-                    (*header).pid_writer = std::process::id();
-                    (*header).pid_reader = 0;
-                }
-            }
-
-            let ring =
-                unsafe { mapped_addr.add(std::mem::size_of::<ShmHeader>()) as *mut ShmMessage };
-
-            Ok(Self {
-                fd: -1,
-                mapped_addr,
-                size: shm_size,
-                header,
-                ring,
-            })
+        if create {
+            file.set_len(shm_size as u64)
+                .map_err(|e| format!("Failed to truncate shm file: {}", e))?;
         }
 
-        #[cfg(not(target_os = "linux"))]
-        {
-            let _ = path;
-            let _ = create;
-            Err("Shared memory requires Linux".to_string())
+        let mut mmap = unsafe {
+            MmapOptions::new()
+                .len(shm_size)
+                .map_mut(&file)
+                .map_err(|e| format!("Failed to mmap file: {}", e))?
+        };
+
+        let header = mmap.as_mut_ptr() as *mut ShmHeader;
+        if create {
+            unsafe {
+                (*header).write_idx = AtomicU64::new(0);
+                (*header).read_idx = AtomicU64::new(0);
+                (*header).magic = SHM_MAGIC;
+                (*header).version = SHM_VERSION;
+                (*header).size = SHM_CAPACITY as u32;
+                (*header).pid_writer = std::process::id();
+                (*header).pid_reader = 0;
+            }
         }
+
+        let ring = unsafe { mmap.as_mut_ptr().add(std::mem::size_of::<ShmHeader>()) as *mut ShmMessage };
+
+        Ok(Self {
+            mmap,
+            header,
+            ring,
+        })
     }
 
     #[inline(always)]
@@ -194,23 +159,8 @@ impl ShmBridge {
         header.write_idx.load(Ordering::Relaxed) - header.read_idx.load(Ordering::Relaxed)
     }
 
-    pub fn unlink(_path: &str) {
-        #[cfg(target_os = "linux")]
-        {
-            let cpath = std::ffi::CString::new(_path).unwrap();
-            unsafe { libc::shm_unlink(cpath.as_ptr()) };
-        }
-    }
-}
-
-impl Drop for ShmBridge {
-    fn drop(&mut self) {
-        #[cfg(target_os = "linux")]
-        {
-            if !self.mapped_addr.is_null() {
-                unsafe { libc::munmap(self.mapped_addr as *mut libc::c_void, self.size) };
-            }
-        }
+    pub fn unlink(path: &str) {
+        let _ = std::fs::remove_file(path);
     }
 }
 

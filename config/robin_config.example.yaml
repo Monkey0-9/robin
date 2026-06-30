@@ -1,0 +1,14 @@
+# Robin Platform Sample Configuration
+# This file serves as a reference for configuring the Gateway Orchestrator
+
+max_drawdown_limit: 0.10
+market_data_port: 8080
+order_entry_port: 9090
+max_order_rate: 10000
+max_cancel_rate: 5000
+max_position_limit: 100000
+
+tls:
+  enabled: false
+  cert_file: "/path/to/cert.pem"
+  key_file: "/path/to/key.pem"

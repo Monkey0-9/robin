@@ -20,12 +20,30 @@ public:
     bool load_model(const std::string& onnx_path) {
         onnx_path_ = onnx_path;
 #ifdef USE_ONNX_RUNTIME
-        // TODO: Ort::SessionOptions session_options;
-        // TODO: session_ = std::make_unique<Ort::Session>(env_, onnx_path.c_str(), session_options);
-        // TODO: input_name_ = session_->GetInputName(0, allocator_);
-        // TODO: output_name_ = session_->GetOutputName(0, allocator_);
-        std::printf("[ONNX] Loading model from %s\n", onnx_path.c_str());
-        return false; // Placeholder — replace when ONNX Runtime is linked
+        try {
+            Ort::SessionOptions session_options;
+            session_options.SetIntraOpNumThreads(1);
+            session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+            
+            #if defined(_WIN32)
+            std::wstring wide_path(onnx_path.begin(), onnx_path.end());
+            session_ = std::make_unique<Ort::Session>(env_, wide_path.c_str(), session_options);
+            #else
+            session_ = std::make_unique<Ort::Session>(env_, onnx_path.c_str(), session_options);
+            #endif
+
+            auto input_name_ptr = session_->GetInputNameAllocated(0, allocator_);
+            input_name_ = input_name_ptr.get();
+            
+            auto output_name_ptr = session_->GetOutputNameAllocated(0, allocator_);
+            output_name_ = output_name_ptr.get();
+            
+            std::printf("[ONNX] Successfully loaded model from %s\n", onnx_path.c_str());
+            return true;
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "[ONNX] Exception during load_model: %s\n", e.what());
+            return false;
+        }
 #else
         std::printf("[ONNX] ONNX Runtime not available. Use LinearSignalModel fallback.\n");
         return false;
@@ -46,10 +64,39 @@ public:
             std::fprintf(stderr, "[ONNX] No model loaded.\n");
             return {};
         }
-        // TODO: Build Ort::Value from input, call session_->Run(...)
-        // TODO: Extract and return float outputs
-        std::printf("[ONNX] Inference stub — %zu floats in\n", input.size());
-        return {}; // Placeholder
+        try {
+            std::vector<int64_t> input_shape = {1, static_cast<int64_t>(input.size())};
+            
+            auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+            Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
+                memory_info,
+                const_cast<float*>(input.data()),
+                input.size(),
+                input_shape.data(),
+                input_shape.size()
+            );
+
+            const char* input_names[] = {input_name_.c_str()};
+            const char* output_names[] = {output_name_.c_str()};
+
+            auto output_tensors = session_->Run(
+                Ort::RunOptions{nullptr},
+                input_names,
+                &input_tensor,
+                1,
+                output_names,
+                1
+            );
+
+            float* floatarr = output_tensors.front().GetTensorMutableData<float>();
+            size_t output_count = output_tensors.front().GetTensorTypeAndShapeInfo().GetElementCount();
+            
+            std::vector<float> results(floatarr, floatarr + output_count);
+            return results;
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "[ONNX] Exception during run_inference: %s\n", e.what());
+            return {};
+        }
 #else
         std::fprintf(stderr, "[ONNX] ONNX Runtime not compiled in.\n");
         return {};
@@ -61,11 +108,11 @@ public:
 private:
     std::string onnx_path_;
 #ifdef USE_ONNX_RUNTIME
-    // Ort::Env env_;
-    // std::unique_ptr<Ort::Session> session_;
-    // Ort::AllocatorWithDefaultOptions allocator_;
-    // std::string input_name_;
-    // std::string output_name_;
+    Ort::Env env_{ORT_LOGGING_LEVEL_WARNING, "RobinONNX"};
+    std::unique_ptr<Ort::Session> session_;
+    Ort::AllocatorWithDefaultOptions allocator_;
+    std::string input_name_;
+    std::string output_name_;
 #endif
 };
 

@@ -78,10 +78,20 @@ class AlternativeDataLoader:
                 'endpoint': 'https://api.planet.com/stats',
                 'connected': False,
             },
+            'weather_api': {
+                'api_key': '',  # Set via ROBIN_WEATHER_API_KEY env var
+                'endpoint': 'https://api.weather.com/v3/wx/conditions/current',
+                'connected': False,
+            },
+            'web_traffic_api': {
+                'api_key': '',  # Set via ROBIN_WEB_TRAFFIC_API_KEY env var
+                'endpoint': 'https://api.similarweb.com/v1/website/metrics',
+                'connected': False,
+            },
         }
         # Try to load API keys from environment
         import os
-        for key in ('ais_api', 'sentiment_api', 'satellite_api'):
+        for key in ('ais_api', 'sentiment_api', 'satellite_api', 'weather_api', 'web_traffic_api'):
             env_var = f"ROBIN_{key.upper().replace('_API', '')}_API_KEY"
             api_key = os.environ.get(env_var, '')
             if api_key:
@@ -147,8 +157,8 @@ class AlternativeDataLoader:
         ais_score       = self._safe_fetch('ais_api',       'AIS Shipping')
         satellite_score = self._safe_fetch('satellite_api', 'Satellite Imagery')
         sentiment_score = self._safe_fetch('sentiment_api', 'Social Sentiment')
-        weather_score   = self.NEUTRAL_SCORE  # TODO: connect weather API
-        web_traffic     = self.NEUTRAL_SCORE  # TODO: connect web traffic API
+        weather_score   = self._safe_fetch('weather_api',   'Weather Impact')
+        web_traffic     = self._safe_fetch('web_traffic_api', 'Web Traffic')
 
         features = np.array([
             ais_score,

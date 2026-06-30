@@ -1,0 +1,81 @@
+syntax = "proto3";
+package robin.agents;
+
+message AgentMessage {
+  string agent_id = 1;
+  string message_type = 2;
+  bytes payload = 3;
+  int64 timestamp_ns = 4;
+  string correlation_id = 5;
+}
+
+message SignalBundle {
+  repeated Signal signals = 1;
+  float combined_signal = 2;
+  float confidence = 3;
+  float expected_return = 4;
+  float expected_risk = 5;
+  string model_version = 6;
+}
+
+message Signal {
+  string model_name = 1;
+  float value = 2;
+  float confidence = 3;
+  string direction = 4;  // LONG, SHORT, NEUTRAL
+  int32 horizon_days = 5;
+  map<string, float> metadata = 6;
+}
+
+message OrderRequest {
+  string symbol = 1;
+  string side = 2;  // BUY, SELL
+  double price = 3;
+  double qty = 4;
+  string order_type = 5;  // LIMIT, MARKET, IOC, FOK
+  string strategy_id = 6;
+  string agent_id = 7;
+  int64 timestamp_ns = 8;
+  RiskAssessment risk_assessment = 9;
+}
+
+message RiskAssessment {
+  bool approved = 1;
+  repeated string checks = 2; // Using strings for RiskChecks for simplicity right now
+  float var_95 = 3;
+  float cvar_95 = 4;
+  float max_drawdown = 5;
+  map<string, float> factor_exposures = 6;
+}
+
+message ExecutionReport {
+  string order_id = 1;
+  string status = 2;  // FILLED, PARTIAL, REJECTED, CANCELED
+  double fill_price = 3;
+  double fill_qty = 4;
+  double commission = 5;
+  double slippage = 6;
+  int64 timestamp_ns = 7;
+  string execution_venue = 8;
+}
+
+message PortfolioUpdate {
+  string portfolio_id = 1;
+  repeated Position positions = 2;
+  double total_value = 3;
+  double cash = 4;
+  double var_95 = 5;
+  double cvar_95 = 6;
+  double sharpe_ratio = 7;
+  double max_drawdown = 8;
+}
+
+message Position {
+  string symbol = 1;
+  double qty = 2;
+  double market_price = 3;
+  double market_value = 4;
+  double cost_basis = 5;
+  double unrealized_pnl = 6;
+  double beta = 7;
+}

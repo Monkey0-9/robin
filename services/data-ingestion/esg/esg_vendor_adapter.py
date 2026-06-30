@@ -21,14 +21,30 @@ ESG_GRADE_MAP = {
 REVERSE_GRADE_MAP = {v: k for k, v in ESG_GRADE_MAP.items()}
 
 
+class MSCIEsgClient:
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        logger.debug("MSCIEsgClient initialized")
+
+class SustainalyticsClient:
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        logger.debug("SustainalyticsClient initialized")
+
+class IssEsgClient:
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        logger.debug("IssEsgClient initialized")
+
 class ESGVendorAdapter:
     """Adapter for MSCI ESG, Sustainalytics, and ISS ESG vendor APIs."""
 
     def __init__(self):
-        # TODO: Initialize real vendor SDK clients here
-        # e.g. self.msci_client = MSCIEsgClient(api_key=...)
-        #       self.sustainalytics_client = SustainalyticsClient(api_key=...)
-        #       self.iss_client = IssEsgClient(api_key=...)
+        # Initializing vendor SDK clients (mock implementations)
+        self.msci_client = MSCIEsgClient(api_key="mock_msci_key")
+        self.sustainalytics_client = SustainalyticsClient(api_key="mock_sustainalytics_key")
+        self.iss_client = IssEsgClient(api_key="mock_iss_key")
+
         logger.info("ESGVendorAdapter initialized with stub data. "
                      "Replace with real vendor SDKs for production.")
 

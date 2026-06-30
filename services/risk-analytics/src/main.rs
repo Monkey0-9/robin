@@ -1,31 +1,45 @@
 use std::net::{TcpListener, TcpStream};
 use std::io::{Read, Write};
-use std::sync::Arc;
-use robin_risk::risk_gate_fast::{RiskGateFast, ComplianceThresholds};
-use robin_risk::shm_bridge::ShmBridge;
-use robin_risk::gate::{Order, OrderSide};
+use std::sync::{Arc, Mutex};
+use robin_risk::gate::{RiskGate, Order, OrderSide};
 use serde_json::Value;
 
 fn main() {
     println!("[RISK] Starting Risk Analytics Daemon on port 9092...");
-    let listener = TcpListener::bind("127.0.0.1:9092").unwrap();
-
-    let thresholds = ComplianceThresholds {
-        max_order_value: 10_000_000_000,
-        max_order_qty: 100_000,
-        price_collar_bps: 500,
-        reference_price: 0,
-        restricted_list: [0u32; 128],
-        restricted_count: 0,
-    };
     
-    let gate = Arc::new(RiskGateFast::new(thresholds));
-
+    let mut gate = RiskGate::with_config("robin_risk_match.shm", 10_000_000_000, 100, 100_000);
+    
+    // Attempt to load snapshot
+    let snapshot_path = "positions.bin";
+    if let Ok(count) = gate.load_snapshot(snapshot_path) {
+        println!("[RISK] Loaded {} positions from snapshot.", count);
+    } else {
+        println!("[RISK] No valid snapshot found, starting fresh.");
+    }
+    
     // Set realistic initial reference prices in ticks (price * 10,000)
     gate.update_reference_price(1, 645_000_000); // BTC/USD ~ 64,500
     gate.update_reference_price(2, 34_500_000);  // ETH/USD ~ 3,450
     gate.update_reference_price(3, 1_853_000);   // AAPL ~ 185.30
     gate.update_reference_price(4, 10_850);      // EUR/USD ~ 1.0850
+
+    let gate = Arc::new(Mutex::new(gate));
+    let gate_clone = gate.clone();
+
+    // Setup Ctrl-C handler for snapshot saving
+    ctrlc::set_handler(move || {
+        println!("\n[RISK] Shutdown signal received. Saving snapshot...");
+        if let Ok(g) = gate_clone.lock() {
+            if let Err(e) = g.save_snapshot(snapshot_path) {
+                eprintln!("[RISK] Error saving snapshot: {}", e);
+            } else {
+                println!("[RISK] Snapshot saved successfully.");
+            }
+        }
+        std::process::exit(0);
+    }).expect("Error setting Ctrl-C handler");
+
+    let listener = TcpListener::bind("127.0.0.1:9092").unwrap();
 
     for stream in listener.incoming() {
         match stream {
@@ -40,9 +54,8 @@ fn main() {
     }
 }
 
-fn handle_client(mut client_stream: TcpStream, gate: Arc<RiskGateFast>) {
+fn handle_client(mut client_stream: TcpStream, gate: Arc<Mutex<RiskGate>>) {
     let mut buffer = [0; 4096];
-    let mut shm = ShmBridge::new("/robin_risk_match", true).ok();
 
     while let Ok(size) = client_stream.read(&mut buffer) {
         if size == 0 {
@@ -68,7 +81,7 @@ fn handle_client(mut client_stream: TcpStream, gate: Arc<RiskGateFast>) {
                 OrderSide::Bid
             };
 
-            let order = Order {
+            let mut order = Order {
                 id: 1, // Dummy ID
                 cl_order_id: 1,
                 instrument_id: 1, // Default to 1
@@ -76,24 +89,31 @@ fn handle_client(mut client_stream: TcpStream, gate: Arc<RiskGateFast>) {
                 price,
                 qty,
                 side,
-                timestamp: 0,
+                timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64,
                 account_id: 0,
                 client_id: 0,
                 strategy_id: 0,
                 entry_time_ns: 0,
             };
+            
+            // Generate basic unique ID based on timestamp
+            order.id = (order.timestamp % 1000000000) as u64;
 
-            if !gate.validate_compliance(&order) {
+            let approved = {
+                if let Ok(mut g) = gate.lock() {
+                    g.check_order(&order)
+                } else {
+                    Err(robin_risk::gate::RiskError::KillSwitchActive)
+                }
+            };
+
+            if let Err(e) = approved {
                 let resp = format!(
-                    "{{\"order_id\":0,\"instrument_id\":1,\"fill_price\":0,\"fill_qty\":0,\"status\":\"REJECTED\",\"success\":false}}\n"
+                    "{{\"order_id\":0,\"instrument_id\":1,\"fill_price\":0,\"fill_qty\":0,\"status\":\"REJECTED\",\"success\":false,\"error\":\"{:?}\"}}\n",
+                    e
                 );
                 let _ = client_stream.write_all(resp.as_bytes());
                 continue;
-            }
-
-            // Push to SHM
-            if let Some(shm_bridge) = &mut shm {
-                shm_bridge.forward_order(&order);
             }
 
             // Forward to execution core

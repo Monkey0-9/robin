@@ -1,0 +1,30 @@
+# robin_config.yaml
+# Native IPC and Port Configurations for Robin Multi-Agent Architecture
+
+infrastructure:
+  kafka:
+    enabled: false # Switched to native IPC/RPC for latency
+  redis:
+    enabled: true
+    url: "redis://127.0.0.1:6379"
+  db:
+    postgres_url: "postgres://robin:robin@127.0.0.1:5432/robin"
+
+execution_core:
+  shm_prefix: "/robin_order_ring"
+  dpdk_nic: "0000:01:00.0"
+  port: 9091
+
+risk_gate:
+  shm_prefix: "/robin_risk_ring"
+  port: 9092
+
+agents:
+  meta:
+    host: "127.0.0.1"
+    port: 8080
+    language: "Go"
+  ai_agent:
+    host: "127.0.0.1"
+    port: 8000
+    language: "Python"
