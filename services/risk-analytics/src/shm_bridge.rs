@@ -167,7 +167,7 @@ impl ShmBridge {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::{ShmBridge, ShmMessage};
     use std::mem::MaybeUninit;

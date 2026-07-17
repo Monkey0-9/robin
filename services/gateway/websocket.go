@@ -90,7 +90,12 @@ func (hub *WebSocketHub) handleWebSocket(w http.ResponseWriter, r *http.Request)
 		userID = sub
 	}
 
-	conn, err := upgrader.Upgrade(w, r, nil)
+	header := make(http.Header)
+	if r.Header.Get("Sec-WebSocket-Protocol") != "" {
+		header.Set("Sec-WebSocket-Protocol", "token")
+	}
+
+	conn, err := upgrader.Upgrade(w, r, header)
 	if err != nil {
 		slog.Error("WebSocket upgrade failed", "error", err)
 		return

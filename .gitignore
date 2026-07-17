@@ -39,3 +39,4 @@ __pycache__/
 config_state.json
 *.docx
 doc_*.txt
+*.db

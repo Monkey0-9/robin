@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -819,6 +820,26 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			}
 		}(orderReq.ClientOrdID, instID, orderReq.Price, orderReq.Qty, orderReq.Side, status, fillPrice, fillQty)
 
+		var alpacaOrderID string
+		var alpacaStatus string
+
+		// Also forward to Alpaca Paper API if configured
+		alpacaResp, alpacaErr := o.SendOrderToAlpaca(orderReq.Symbol, orderReq.Qty, orderReq.Side, orderReq.OrderType, orderReq.Price)
+		if alpacaErr == nil {
+			o.logger.Info("Successfully forwarded order to Alpaca Paper API", "response", alpacaResp)
+			var alpacaMap map[string]interface{}
+			if json.Unmarshal([]byte(alpacaResp), &alpacaMap) == nil {
+				if idVal, ok := alpacaMap["id"].(string); ok {
+					alpacaOrderID = idVal
+				}
+				if statusVal, ok := alpacaMap["status"].(string); ok {
+					alpacaStatus = statusVal
+				}
+			}
+		} else {
+			o.logger.Warn("Failed to forward order to Alpaca Paper API", "error", alpacaErr)
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		respPayload := map[string]interface{}{
@@ -834,6 +855,10 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		}
 		if engineError != "" {
 			respPayload["error"] = engineError
+		}
+		if alpacaOrderID != "" {
+			respPayload["alpaca_order_id"] = alpacaOrderID
+			respPayload["alpaca_status"] = alpacaStatus
 		}
 		json.NewEncoder(w).Encode(respPayload)
 	}))))).Methods("POST")
@@ -996,6 +1021,78 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		io.Copy(w, proxyResp.Body)
 	})))).Methods("POST")
 
+	// GET /api/alpaca/account — Fetch Alpaca account details (JWT Trader required)
+	r.Handle("/api/alpaca/account", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		alpacaEndpoint := os.Getenv("ALPACA_API_ENDPOINT")
+		if alpacaEndpoint == "" {
+			alpacaEndpoint = "https://paper-api.alpaca.markets/v2"
+		}
+		keyID := os.Getenv("ALPACA_API_KEY_ID")
+		secretKey := os.Getenv("ALPACA_API_SECRET_KEY")
+
+		if keyID == "" || secretKey == "" {
+			http.Error(w, `{"error":"Alpaca credentials not configured"}`, http.StatusBadRequest)
+			return
+		}
+
+		u := fmt.Sprintf("%s/account", alpacaEndpoint)
+		rReq, err := http.NewRequest("GET", u, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		rReq.Header.Set("APCA-API-KEY-ID", keyID)
+		rReq.Header.Set("APCA-API-SECRET-KEY", secretKey)
+
+		client := &http.Client{}
+		resp, err := client.Do(rReq)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer resp.Body.Close()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	})))).Methods("GET")
+
+	// GET /api/alpaca/positions — Fetch Alpaca positions (JWT Trader required)
+	r.Handle("/api/alpaca/positions", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		alpacaEndpoint := os.Getenv("ALPACA_API_ENDPOINT")
+		if alpacaEndpoint == "" {
+			alpacaEndpoint = "https://paper-api.alpaca.markets/v2"
+		}
+		keyID := os.Getenv("ALPACA_API_KEY_ID")
+		secretKey := os.Getenv("ALPACA_API_SECRET_KEY")
+
+		if keyID == "" || secretKey == "" {
+			http.Error(w, `{"error":"Alpaca credentials not configured"}`, http.StatusBadRequest)
+			return
+		}
+
+		u := fmt.Sprintf("%s/positions", alpacaEndpoint)
+		rReq, err := http.NewRequest("GET", u, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		rReq.Header.Set("APCA-API-KEY-ID", keyID)
+		rReq.Header.Set("APCA-API-SECRET-KEY", secretKey)
+
+		client := &http.Client{}
+		resp, err := client.Do(rReq)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer resp.Body.Close()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	})))).Methods("GET")
+
 	// Apply middleware chain: requestID → rateLimit → router
 	handler := requestIDMiddleware(rateLimitMiddleware(1000, r))
 
@@ -1015,6 +1112,76 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
+}
+
+// SendOrderToAlpaca posts a new order to the Alpaca Paper Trading API
+func (o *Orchestrator) SendOrderToAlpaca(symbol string, qty float64, side string, orderType string, price float64) (string, error) {
+	alpacaEndpoint := os.Getenv("ALPACA_API_ENDPOINT")
+	if alpacaEndpoint == "" {
+		alpacaEndpoint = "https://paper-api.alpaca.markets/v2"
+	}
+	keyID := os.Getenv("ALPACA_API_KEY_ID")
+	secretKey := os.Getenv("ALPACA_API_SECRET_KEY")
+
+	if keyID == "" || secretKey == "" {
+		return "", fmt.Errorf("Alpaca credentials not configured")
+	}
+
+	url := fmt.Sprintf("%s/orders", alpacaEndpoint)
+
+	alpacaSide := "buy"
+	if strings.ToUpper(side) == "SELL" {
+		alpacaSide = "sell"
+	}
+
+	alpacaType := "limit"
+	if strings.ToUpper(orderType) == "MARKET" {
+		alpacaType = "market"
+	}
+
+	reqBody := map[string]interface{}{
+		"symbol":        symbol,
+		"qty":           fmt.Sprintf("%.4f", qty),
+		"side":          alpacaSide,
+		"type":          alpacaType,
+		"time_in_force": "gtc",
+	}
+
+	if alpacaType == "limit" {
+		reqBody["limit_price"] = fmt.Sprintf("%.2f", price)
+	}
+
+	jsonBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonBytes))
+	if err != nil {
+		return "", err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("APCA-API-KEY-ID", keyID)
+	req.Header.Set("APCA-API-SECRET-KEY", secretKey)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		return "", fmt.Errorf("Alpaca API returned status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	return string(bodyBytes), nil
 }
 
 // ============================================================================

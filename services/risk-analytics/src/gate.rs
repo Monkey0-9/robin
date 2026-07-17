@@ -477,7 +477,7 @@ mod tests {
     fn test_reject_fat_finger_qty() {
         let mut gate = RiskGate::new("/tmp/test_shm_ff");
         let order = make_order(2, 15000, 2_000_000 * 100_000_000, OrderSide::Bid, 1_000_000_000);
-        assert!(matches!(gate.check_order(&order), Err(_)));
+        assert!(gate.check_order(&order).is_err());
     }
 
     #[test]

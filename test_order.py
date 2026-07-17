@@ -18,9 +18,9 @@ order_data = {
     "symbol": "BTC/USD",
     "side": "BUY",
     "price": 64000.0,
-    "qty": 1.0,
+    "qty": 0.1,
     "order_type": "LIMIT",
-    "cl_ord_id": "client-test"
+    "cl_ord_id": "client-test-alpaca-1"
 }
 data = json.dumps(order_data).encode("utf-8")
 headers = {
