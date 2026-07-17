@@ -259,7 +259,7 @@ c:\Robin\
 │   │       ├── shm_bridge.rs      POSIX SHM SPSC ring bridge
 │   │       └── config.rs          Rust mirror of shared/config.h
 │   ├── gateway/
-│   │   ├── orchestrator.go        Health probes, hot-reload, rate limit, slog
+│   │   ├── orchestrator.go        Health probes, hot-reload, rate limit, slog, WS Hub, JWT Proxy
 │   │   └── orchestrator_test.go   14 unit tests
 │   ├── compliance/
 │   │   └── src/
@@ -271,5 +271,5 @@ c:\Robin\
 │   ├── ai-engine/                 C++ LinearSignalModel (NOT neural net)
 │   ├── kdb-storage/               Q/KDB+ tick schemas (schema only)
 │   └── kernel/                    GPIO kill switch v2.1.0 (whitelist-aware)
-└── frontend/                      Next.js + Tauri dashboard (UI prototype)
+└── frontend/                      Next.js Dashboard (WebSockets via Go gateway, integrated AI scripts)
 ```

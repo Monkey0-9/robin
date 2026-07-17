@@ -12,18 +12,14 @@ If you've noticed a bug or have a feature request, please make sure you create a
 - Go 1.21+
 - Python 3.10+
 - Node.js (for frontend)
-- Docker & Docker Compose (for KDB+ / PostgreSQL dependencies)
 - Access to an FPGA development board (Optional, for hardware-accelerated matching engine work)
 
 ### Running the Dev Environment
 We have provided sample configuration files and `env.example`.
 Copy `env.example` to `.env` and `config/robin_config.example.yaml` to `config/robin_config.yaml` to get started.
 
-Run the entire stack via Docker:
-```bash
-docker-compose up -d
-```
-Or use the provided `start_all.bat` / `Makefile` scripts for local non-containerized testing.
+Run the entire stack natively:
+Use the provided `start_all.bat` / `Makefile` scripts for local testing.
 
 ## 3. Making Changes
 

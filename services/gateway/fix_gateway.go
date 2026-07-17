@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -221,7 +222,7 @@ func (e *FixEngine) Connect(targetHost string, targetPort int) error {
 	e.targetHost = targetHost
 	e.targetPort = targetPort
 
-	addr := fmt.Sprintf("%s:%d", targetHost, targetPort)
+	addr := net.JoinHostPort(targetHost, strconv.Itoa(targetPort))
 	conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 	if err != nil {
 		return fmt.Errorf("TCP dial failed: %w", err)

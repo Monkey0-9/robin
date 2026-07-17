@@ -25,6 +25,13 @@ pub static VELOCITY_REJECTIONS: AtomicU64 = AtomicU64::new(0);
 pub static POSITION_REJECTIONS: AtomicU64 = AtomicU64::new(0);
 pub static CREDIT_REJECTIONS: AtomicU64 = AtomicU64::new(0);
 
+// Latency histogram buckets (cumulative)
+pub static LATENCY_LE_100: AtomicU64 = AtomicU64::new(0);
+pub static LATENCY_LE_500: AtomicU64 = AtomicU64::new(0);
+pub static LATENCY_LE_1000: AtomicU64 = AtomicU64::new(0);
+pub static LATENCY_LE_5000: AtomicU64 = AtomicU64::new(0);
+pub static LATENCY_LE_10000: AtomicU64 = AtomicU64::new(0);
+
 /// Record a processed order with its gate latency.
 #[inline]
 pub fn record_order(latency_ns: u64, approved: bool) {
@@ -47,6 +54,12 @@ pub fn record_order(latency_ns: u64, approved: bool) {
             Err(v) => cur = v,
         }
     }
+
+    if latency_ns <= 100 { LATENCY_LE_100.fetch_add(1, Ordering::Relaxed); }
+    if latency_ns <= 500 { LATENCY_LE_500.fetch_add(1, Ordering::Relaxed); }
+    if latency_ns <= 1000 { LATENCY_LE_1000.fetch_add(1, Ordering::Relaxed); }
+    if latency_ns <= 5000 { LATENCY_LE_5000.fetch_add(1, Ordering::Relaxed); }
+    if latency_ns <= 10000 { LATENCY_LE_10000.fetch_add(1, Ordering::Relaxed); }
 }
 
 /// Render all metrics in Prometheus text exposition format.
@@ -65,6 +78,12 @@ pub fn render_text() -> String {
     let pos_rej = POSITION_REJECTIONS.load(Ordering::Relaxed);
     let cred_rej = CREDIT_REJECTIONS.load(Ordering::Relaxed);
 
+    let lat_100 = LATENCY_LE_100.load(Ordering::Relaxed);
+    let lat_500 = LATENCY_LE_500.load(Ordering::Relaxed);
+    let lat_1000 = LATENCY_LE_1000.load(Ordering::Relaxed);
+    let lat_5000 = LATENCY_LE_5000.load(Ordering::Relaxed);
+    let lat_10000 = LATENCY_LE_10000.load(Ordering::Relaxed);
+
     format!(
         "# HELP robin_risk_orders_processed_total Total orders through the risk gate\n\
          # TYPE robin_risk_orders_processed_total counter\n\
@@ -72,6 +91,16 @@ pub fn render_text() -> String {
          # HELP robin_risk_orders_rejected_total Total orders rejected by the risk gate\n\
          # TYPE robin_risk_orders_rejected_total counter\n\
          robin_risk_orders_rejected_total {rejected}\n\
+         # HELP robin_risk_gate_latency_ns Gate latency histogram in nanoseconds\n\
+         # TYPE robin_risk_gate_latency_ns histogram\n\
+         robin_risk_gate_latency_ns_bucket{{le=\"100\"}} {lat_100}\n\
+         robin_risk_gate_latency_ns_bucket{{le=\"500\"}} {lat_500}\n\
+         robin_risk_gate_latency_ns_bucket{{le=\"1000\"}} {lat_1000}\n\
+         robin_risk_gate_latency_ns_bucket{{le=\"5000\"}} {lat_5000}\n\
+         robin_risk_gate_latency_ns_bucket{{le=\"10000\"}} {lat_10000}\n\
+         robin_risk_gate_latency_ns_bucket{{le=\"+Inf\"}} {lat_cnt}\n\
+         robin_risk_gate_latency_ns_sum {lat_sum}\n\
+         robin_risk_gate_latency_ns_count {lat_cnt}\n\
          # HELP robin_risk_gate_latency_ns_avg Average gate latency in nanoseconds\n\
          # TYPE robin_risk_gate_latency_ns_avg gauge\n\
          robin_risk_gate_latency_ns_avg {lat_avg}\n\
@@ -146,10 +175,17 @@ mod tests {
         // Reset to a known state
         ORDERS_PROCESSED.store(0, Ordering::Relaxed);
         ORDERS_REJECTED.store(0, Ordering::Relaxed);
+        LATENCY_LE_1000.store(0, Ordering::Relaxed);
+        LATENCY_LE_5000.store(0, Ordering::Relaxed);
+        
         record_order(1500, true);
         record_order(2500, false);
-        assert_eq!(ORDERS_PROCESSED.load(Ordering::Relaxed), 2);
+        record_order(800, true);
+        
+        assert_eq!(ORDERS_PROCESSED.load(Ordering::Relaxed), 3);
         assert_eq!(ORDERS_REJECTED.load(Ordering::Relaxed), 1);
         assert_eq!(LATENCY_MAX_NS.load(Ordering::Relaxed), 2500);
+        assert_eq!(LATENCY_LE_1000.load(Ordering::Relaxed), 1);
+        assert_eq!(LATENCY_LE_5000.load(Ordering::Relaxed), 3);
     }
 }

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-interface Asset {
+export interface Asset {
   symbol: string;
   name: string;
   currentPrice: number;
@@ -8,7 +8,7 @@ interface Asset {
   type: 'crypto' | 'equity' | 'index' | 'fx';
 }
 
-interface Position {
+export interface Position {
   id: string;
   symbol: string;
   side: 'LONG' | 'SHORT';
@@ -18,7 +18,7 @@ interface Position {
   unrealizedPnL: number;
 }
 
-interface Trade {
+export interface Trade {
   id: string;
   symbol: string;
   side: 'BUY' | 'SELL';
@@ -28,18 +28,18 @@ interface Trade {
   timestamp: Date;
 }
 
-interface OrderBookLevel {
+export interface OrderBookLevel {
   price: number;
   size: number;
   total: number;
 }
 
-interface Notification {
+export interface Notification {
   message: string;
   type: 'success' | 'error' | 'info';
 }
 
-interface SystemHealth {
+export interface SystemHealth {
   healthy: number;
   degraded: number;
   failed: number;
@@ -72,14 +72,9 @@ interface TerminalState {
   setSelectedSymbol: (symbol: string) => void;
 }
 
-const WS_URL = 'ws://localhost:8080/ws';
-const GATEWAY_URL = 'http://localhost:8080';
-
-// Dev JWT: HS256, signed with "secret-dev-key", sub=trader123
-// Header: {"alg":"HS256","typ":"JWT"}
-// Payload: {"sub":"trader123","iss":"robin-gateway","aud":"robin-services","iat":1700000000}
-// To regenerate: node -e "const j=require('jsonwebtoken'); console.log(j.sign({sub:'trader123',iss:'robin-gateway',aud:'robin-services'}, 'secret-dev-key'));"
-const JWT_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0cmFkZXIxMjMiLCJpc3MiOiJyb2Jpbi1nYXRld2F5IiwiYXVkIjoicm9iaW4tc2VydmljZXMiLCJpYXQiOjE3MDAwMDAwMDB9.kGfBvfS0FZQn5FHKm7wMhJ1C9XgEFR4UkO5EHVzrT14';
+const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:8080';
+const WS_URL = GATEWAY_URL.replace(/^http/, 'ws') + '/ws';
+const JWT_TOKEN = process.env.NEXT_PUBLIC_GATEWAY_API_TOKEN || '';
 
 function simulatePrice(assets: Asset[], selectedSymbol: string, orderBook: { bids: OrderBookLevel[]; asks: OrderBookLevel[] }) {
   const newAssets = assets.map(a => {
@@ -113,8 +108,8 @@ function createWebSocket(
   onMessage: (data: any) => void,
   onDisconnect: () => void,
 ): WebSocket {
-  const url = `${WS_URL}?token=${JWT_TOKEN}`;
-  const ws = new WebSocket(url);
+  const url = `${WS_URL}`;
+  const ws = new WebSocket(url, ['token', JWT_TOKEN]);
   ws.onopen = () => console.log('WebSocket connected');
   ws.onmessage = (event) => {
     try {
@@ -275,10 +270,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     // Poll the Go Gateway
     setInterval(async () => {
       try {
-        const statsRes = await fetch('http://localhost:8080/stats');
+        const statsRes = await fetch(`${GATEWAY_URL}/stats`, {
+          headers: { Authorization: `Bearer ${JWT_TOKEN}` }
+        });
         const stats = await statsRes.json();
         
-        const healthRes = await fetch('http://localhost:8080/health');
+        const healthRes = await fetch(`${GATEWAY_URL}/health`);
         const health = await healthRes.json();
 
         set({

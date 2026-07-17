@@ -11,6 +11,39 @@ env:
 
 jobs:
   # ============================================================================
+  # Secret Scanning
+  # ============================================================================
+  secret-scan:
+    name: "Secret Scanning"
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ============================================================================
+  # Frontend: Next.js + TypeScript
+  # ============================================================================
+  frontend:
+    name: "Frontend — Next.js"
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: cd frontend && npm ci
+      - name: Typecheck
+        run: cd frontend && npx tsc --noEmit
+      - name: Build
+        run: cd frontend && npm run build
+
+  # ============================================================================
   # Rust: Risk Analytics
   # ============================================================================
   rust-risk:
@@ -119,9 +152,14 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install deps
-        run: pip install numpy
+        run: |
+          python -m venv venv
+          source venv/bin/activate
+          pip install -r requirements.txt
       - name: Validate backtester
-        run: python research/strategy-engine/backtester.py
+        run: |
+          source venv/bin/activate
+          python research/strategy-engine/backtester.py
       - name: Validate alternative data loader (if present)
         run: |
           if python -c "import ast; ast.parse(open('services/data-ingestion/alternative/alternative_data_loader.py').read())" 2>/dev/null; then

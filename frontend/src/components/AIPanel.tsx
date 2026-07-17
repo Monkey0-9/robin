@@ -37,9 +37,14 @@ export default function AIPanel() {
     setIsTyping(true);
 
     try {
-      const res = await fetch('http://localhost:8000/chat', {
+      const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:8080';
+      const JWT_TOKEN = process.env.NEXT_PUBLIC_GATEWAY_API_TOKEN || '';
+      const res = await fetch(`${GATEWAY_URL}/api/ai/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${JWT_TOKEN}`
+        },
         body: JSON.stringify({ message: userMessage })
       });
       const data = await res.json();
@@ -68,9 +73,14 @@ Asks: ${JSON.stringify(orderBook.asks.slice(0, 3))}`;
 
           setAutoTradeStatus('Requesting trade decision...');
           
-          const res = await fetch('http://localhost:8000/trade_decision', {
+          const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:8080';
+          const JWT_TOKEN = process.env.NEXT_PUBLIC_GATEWAY_API_TOKEN || '';
+          const res = await fetch(`${GATEWAY_URL}/api/ai/trade_decision`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${JWT_TOKEN}`
+            },
             body: JSON.stringify({ market_context: context })
           });
           

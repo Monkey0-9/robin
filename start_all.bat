@@ -6,7 +6,7 @@ echo Starting native processes...
 
 cd /d C:\Robin
 
-set ROBIN_GATEWAY_API_TOKEN=super_secret_test_key
+set ROBIN_JWT_SECRET=super_secret_test_key
 
 echo [1/8] Starting Risk Gate (Rust)...
 cd services\risk-analytics

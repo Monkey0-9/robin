@@ -25,97 +25,13 @@ use std::net::TcpListener;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-// ============================================================================
-// Shared Memory Reader (mirrors ShmBridge from risk-analytics)
-// ============================================================================
-
-#[repr(C, align(64))]
-struct ShmHeader {
-    write_idx: AtomicU64,
-    read_idx: AtomicU64,
-    magic: u64,
-    version: u32,
-    size: u32,
-    pid_writer: u32,
-    pid_reader: u32,
-    _pad: [u8; 24],
-}
-
-#[derive(Default, Clone, Copy)]
-#[repr(C, align(64))]
-struct ShmMessage {
-    msg_type: u8,
-    client_id: u32,
-    instrument_id: u32,
-    price: u32,
-    qty: u32,
-    side: u8,
-    flags: u8,
-    order_id: u64,
-    cl_order_id: u64,
-    timestamp_ns: u64,
-    _pad: [u8; 21],
-}
-
-#[allow(dead_code)]
-const SHM_MAGIC: u64 = 0x524f42494e484d5f;
-#[allow(dead_code)]
-const SHM_CAPACITY: usize = 65536;
-#[allow(dead_code)]
-const SHM_MSG_SIZE: usize = 64;
-
-use std::fs::OpenOptions;
-use memmap2::MmapOptions;
-
-struct ShmReader {
-    mmap: memmap2::MmapMut,
-    header: *mut ShmHeader,
-    ring: *mut ShmMessage,
-}
-
-impl ShmReader {
-    fn new(path: &str) -> Result<Self, String> {
-        let shm_size = std::mem::size_of::<ShmHeader>() + SHM_CAPACITY * SHM_MSG_SIZE;
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .map_err(|e| format!("Failed to open shm file: {}", e))?;
-
-        let mut mmap = unsafe {
-            MmapOptions::new()
-                .len(shm_size)
-                .map_mut(&file)
-                .map_err(|e| format!("Failed to mmap file: {}", e))?
-        };
-
-        let header = mmap.as_mut_ptr() as *mut ShmHeader;
-        let ring = unsafe { mmap.as_mut_ptr().add(std::mem::size_of::<ShmHeader>()) as *mut ShmMessage };
-
-        Ok(Self { mmap, header, ring })
-    }
-
-    fn pop(&mut self, msg: &mut ShmMessage) -> bool {
-        let header = unsafe { &*self.header };
-        let read_idx = header.read_idx.load(Ordering::Relaxed);
-        let write_idx = header.write_idx.load(Ordering::Acquire);
-        if read_idx == write_idx {
-            return false;
-        }
-        let slot = (read_idx & (SHM_CAPACITY as u64 - 1)) as usize;
-        unsafe {
-            std::ptr::copy_nonoverlapping(self.ring.add(slot), msg as *mut ShmMessage, 1);
-            std::sync::atomic::fence(Ordering::Release);
-            header.read_idx.store(read_idx + 1, Ordering::Relaxed);
-        }
-        true
-    }
-}
+use robin_risk::shm_bridge::{ShmBridge, ShmMessage};
+use robin_risk::config::{SHM_RISK_TO_MATCH, PORT_COMPLIANCE};
 
 // ============================================================================
 // Configuration
 // ============================================================================
-const DEFAULT_SHM_PATH:   &str = "/robin_risk_match";
+const _DEFAULT_SHM_PATH:  &str = "robin_risk_match.shm"; // Fallback if SHM_RISK_TO_MATCH fails
 const DEFAULT_AUDIT_LOG:  &str = "logs/audit.log";
 const DEFAULT_PORT:       u16  = 9095;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
@@ -215,9 +131,9 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
     eprintln!("[COMPLIANCE]   Audit log:  {audit_log_path}");
 
     // Shared memory buffer for reading OrderMessages
-    let mut shm_reader: Option<ShmReader> = None;
+    let mut shm_reader: Option<ShmBridge> = None;
 
-    match ShmReader::new(shm_path) {
+    match ShmBridge::new(shm_path, false) {
         Ok(reader) => {
             eprintln!("[COMPLIANCE] Connected to SHM: {shm_path}");
             shm_reader = Some(reader);
@@ -229,7 +145,10 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
 
     let mut synthetic_order_id: u64 = 1;
     let mut last_heartbeat = now_ns();
-    let mut shm_buf = ShmMessage::default();
+    
+    // We can't use Default because ShmMessage might not derive Default in robin_risk anymore if they changed it.
+    // Actually we can just initialize it with zeros.
+    let mut shm_buf = unsafe { std::mem::zeroed::<ShmMessage>() };
 
     loop {
         if !RUNNING.load(Ordering::Relaxed) { break; }
@@ -368,9 +287,10 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
 // ============================================================================
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let mut shm_path       = DEFAULT_SHM_PATH.to_string();
+    // Try the shared config path first, then fallback
+    let mut shm_path       = SHM_RISK_TO_MATCH.to_string();
     let mut audit_log_path = DEFAULT_AUDIT_LOG.to_string();
-    let mut port           = DEFAULT_PORT;
+    let mut port           = PORT_COMPLIANCE;
 
     // Simple argument parsing
     let mut i = 1;

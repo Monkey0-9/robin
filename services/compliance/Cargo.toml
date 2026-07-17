@@ -18,6 +18,7 @@ hex  = "0.4"
 ctrlc = "3.4"
 libc = "0.2"
 memmap2 = "0.9"
+robin_risk = { path = "../risk-analytics", package = "robin-risk-analytics" }
 
 [profile.release]
 opt-level      = 3

@@ -192,6 +192,7 @@ dependencies = [
  "hex",
  "libc",
  "memmap2",
+ "robin-risk-analytics",
  "sha2",
 ]
 

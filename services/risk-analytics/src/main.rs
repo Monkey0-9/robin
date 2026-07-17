@@ -70,7 +70,7 @@ fn handle_client(mut client_stream: TcpStream, gate: Arc<Mutex<RiskGate>>) {
         }
 
         // Parse JSON
-        let parsed: Result<Value, _> = serde_json::from_str(&request);
+        let parsed: Result<Value, _> = serde_json::from_str(request);
         if let Ok(v) = parsed {
             let price = v["price"].as_f64().unwrap_or(0.0) as u32;
             let qty = v["qty"].as_f64().unwrap_or(0.0) as u32;
@@ -97,7 +97,7 @@ fn handle_client(mut client_stream: TcpStream, gate: Arc<Mutex<RiskGate>>) {
             };
             
             // Generate basic unique ID based on timestamp
-            order.id = (order.timestamp % 1000000000) as u64;
+            order.id = order.timestamp % 1000000000;
 
             let approved = {
                 if let Ok(mut g) = gate.lock() {

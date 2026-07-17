@@ -96,7 +96,7 @@ impl RiskGate {
         shm_name: &str,
         credit_limit: u64,
         position_limit: i32,
-        max_qty_per_order: u32,
+        _max_qty_per_order: u32,
     ) -> Self {
         let mut g = Self::new(shm_name);
         g.credit_limit = credit_limit;
@@ -247,19 +247,25 @@ impl RiskGate {
     }
 
     // -------------------------------------------------------------------------
-    // Position persistence — crash recovery (Gap 6)
+    // Persistence — crash recovery (Gap 6)
     // -------------------------------------------------------------------------
     //
-    // Format: [magic: u64][count: u64][i64 × count]
-    // Magic: 0x524F42494E504F53 ("ROBINPOS")
+    // V1 Format: [magic: u64][pos_count: u64][i64 × pos_count]
+    // V2 Format: [magic: u64][credit_limit: u64][position_limit: i64]
+    //            [max_velocity: u64][velocity_window_ns: u64][velocity_head: u64]
+    //            [vel_count: u64][u64 × vel_count]
+    //            [pos_count: u64][i64 × pos_count]
+    // V1 Magic: 0x524F42494E504F53 ("ROBINPOS")
+    // V2 Magic: 0x524F42494E505632 ("ROBINPV2")
     // On startup: call load_snapshot() before accepting orders.
     // On SIGTERM/shutdown: call save_snapshot().
     // This is NOT on the hot path; it is only called at startup/shutdown.
     // -------------------------------------------------------------------------
 
-    const SNAPSHOT_MAGIC: u64 = 0x524F42494E504F53; // "ROBINPOS"
+    const SNAPSHOT_MAGIC_V1: u64 = 0x524F42494E504F53; // "ROBINPOS"
+    const SNAPSHOT_MAGIC_V2: u64 = 0x524F42494E505632; // "ROBINPV2"
 
-    /// Save all 4096 instrument positions to a binary snapshot file.
+    /// Save gate state to a binary snapshot file (V2).
     pub fn save_snapshot(&self, path: &str) -> std::io::Result<()> {
         use std::io::Write;
         // Write to a temp file then atomically rename to avoid partial writes
@@ -270,22 +276,34 @@ impl RiskGate {
             .truncate(true)
             .open(&tmp_path)?;
 
-        // Header
-        f.write_all(&Self::SNAPSHOT_MAGIC.to_le_bytes())?;
-        f.write_all(&(self.positions.len() as u64).to_le_bytes())?;
+        // V2 Header
+        f.write_all(&Self::SNAPSHOT_MAGIC_V2.to_le_bytes())?;
+        f.write_all(&self.credit_limit.to_le_bytes())?;
+        f.write_all(&self.position_limit.to_le_bytes())?;
+        f.write_all(&(self.max_velocity as u64).to_le_bytes())?;
+        f.write_all(&self.velocity_window_ns.to_le_bytes())?;
+        f.write_all(&(self.velocity_head as u64).to_le_bytes())?;
+
+        // Velocity ring
+        f.write_all(&(self.velocity_ring.len() as u64).to_le_bytes())?;
+        for &v in self.velocity_ring.iter() {
+            f.write_all(&v.to_le_bytes())?;
+        }
 
         // Position data
+        f.write_all(&(self.positions.len() as u64).to_le_bytes())?;
         for &pos in self.positions.iter() {
             f.write_all(&pos.to_le_bytes())?;
         }
+        
         f.flush()?;
         drop(f);
 
         // Atomic rename
         std::fs::rename(&tmp_path, path)?;
         eprintln!(
-            "[RISK] Position snapshot saved to {path} ({} instruments)",
-            self.positions.len()
+            "[RISK] Risk Gate V2 snapshot saved to {path} ({} instruments, credit limit {}, position limit {})",
+            self.positions.len(), self.credit_limit, self.position_limit
         );
         Ok(())
     }
@@ -300,30 +318,61 @@ impl RiskGate {
         let mut magic_buf = [0u8; 8];
         f.read_exact(&mut magic_buf)?;
         let magic = u64::from_le_bytes(magic_buf);
-        if magic != Self::SNAPSHOT_MAGIC {
-            return Err(std::io::Error::new(
+        
+        let mut u64_buf = [0u8; 8];
+
+        if magic == Self::SNAPSHOT_MAGIC_V1 {
+            // Read V1 count
+            f.read_exact(&mut u64_buf)?;
+            let count = u64::from_le_bytes(u64_buf) as usize;
+            let restore_count = count.min(self.positions.len());
+
+            // Read V1 positions
+            for i in 0..restore_count {
+                f.read_exact(&mut u64_buf)?;
+                self.positions[i] = i64::from_le_bytes(u64_buf);
+            }
+            eprintln!("[RISK] Risk Gate V1 snapshot loaded from {path} ({restore_count} positions restored)");
+            Ok(restore_count)
+        } else if magic == Self::SNAPSHOT_MAGIC_V2 {
+            // Read V2 state
+            f.read_exact(&mut u64_buf)?; self.credit_limit = u64::from_le_bytes(u64_buf);
+            f.read_exact(&mut u64_buf)?; self.position_limit = i64::from_le_bytes(u64_buf);
+            f.read_exact(&mut u64_buf)?; self.max_velocity = u64::from_le_bytes(u64_buf) as usize;
+            f.read_exact(&mut u64_buf)?; self.velocity_window_ns = u64::from_le_bytes(u64_buf);
+            f.read_exact(&mut u64_buf)?; self.velocity_head = u64::from_le_bytes(u64_buf) as usize;
+
+            // Velocity ring
+            f.read_exact(&mut u64_buf)?;
+            let vel_count = u64::from_le_bytes(u64_buf) as usize;
+            let restore_vel = vel_count.min(self.velocity_ring.len());
+            for i in 0..restore_vel {
+                f.read_exact(&mut u64_buf)?;
+                self.velocity_ring[i] = u64::from_le_bytes(u64_buf);
+            }
+            // Skip any extra velocity entries we don't have space for
+            for _ in restore_vel..vel_count {
+                f.read_exact(&mut u64_buf)?;
+            }
+
+            // Positions
+            f.read_exact(&mut u64_buf)?;
+            let pos_count = u64::from_le_bytes(u64_buf) as usize;
+            let restore_pos = pos_count.min(self.positions.len());
+            for i in 0..restore_pos {
+                f.read_exact(&mut u64_buf)?;
+                self.positions[i] = i64::from_le_bytes(u64_buf);
+            }
+
+            eprintln!("[RISK] Risk Gate V2 snapshot loaded from {path} (credit={}, pos={}, vel_head={})",
+                self.credit_limit, self.position_limit, self.velocity_head);
+            Ok(restore_pos)
+        } else {
+            Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!("invalid snapshot magic: 0x{:016X}", magic),
-            ));
+            ))
         }
-
-        // Read count
-        let mut count_buf = [0u8; 8];
-        f.read_exact(&mut count_buf)?;
-        let count = u64::from_le_bytes(count_buf) as usize;
-        let restore_count = count.min(self.positions.len());
-
-        // Read positions
-        let mut pos_buf = [0u8; 8];
-        for i in 0..restore_count {
-            f.read_exact(&mut pos_buf)?;
-            self.positions[i] = i64::from_le_bytes(pos_buf);
-        }
-
-        eprintln!(
-            "[RISK] Position snapshot loaded from {path} ({restore_count} instruments restored)"
-        );
-        Ok(restore_count)
     }
 }
 
@@ -504,5 +553,35 @@ mod tests {
         assert_eq!(gate.get_position(1), 1000);
         gate.rollback_position(&order);
         assert_eq!(gate.get_position(1), 0);
+    }
+
+    #[test]
+    fn test_v2_snapshot_persistence() {
+        let mut gate = RiskGate::with_config("/tmp/test_shm_snap", 888_888_888, 555_555, 1_000_000);
+        
+        // Mutate some state
+        let order1 = make_order(1, 10000, 50, OrderSide::Bid, 2_000_000_000);
+        assert!(gate.check_order(&order1).is_ok());
+        
+        gate.velocity_head = 42;
+        gate.max_velocity = 80;
+        gate.velocity_window_ns = 5_000_000_000;
+        
+        let path = "/tmp/test_gate_snap.bin";
+        gate.save_snapshot(path).expect("Failed to save snapshot");
+        
+        // Load into a fresh instance
+        let mut gate2 = RiskGate::new("/tmp/test_shm_snap2");
+        let count = gate2.load_snapshot(path).expect("Failed to load snapshot");
+        
+        assert_eq!(count, 4096);
+        assert_eq!(gate2.credit_limit, 888_888_888);
+        assert_eq!(gate2.position_limit, 555_555);
+        assert_eq!(gate2.max_velocity, 80);
+        assert_eq!(gate2.velocity_window_ns, 5_000_000_000);
+        assert_eq!(gate2.velocity_head, 42);
+        assert_eq!(gate2.get_position(1), 50);
+        
+        let _ = std::fs::remove_file(path);
     }
 }

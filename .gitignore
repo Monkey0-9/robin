@@ -30,3 +30,12 @@ CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
 Makefile
+
+# Cache, binaries, state and junk files
+__pycache__/
+*.pyc
+*.shm
+*.tsbuildinfo
+config_state.json
+*.docx
+doc_*.txt

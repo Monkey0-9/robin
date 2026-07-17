@@ -1,5 +1,6 @@
 {
     "serverpulse.ai.enabled": true,
     "serverpulse.ai.optInShown": true,
-    "cmake.sourceDirectory": "C:/Robin"
+    "cmake.sourceDirectory": "C:/Robin",
+    "codaro.compliance.workspaceHash": "7ee36c191d6cf43ddc0f78922c5fb9d7"
 }

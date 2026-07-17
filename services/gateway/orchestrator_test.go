@@ -76,8 +76,8 @@ func TestGetConfig_DefaultValues(t *testing.T) {
 	if cfg.MaxDrawdownLimit != 0.10 {
 		t.Errorf("expected default drawdown 0.10, got %f", cfg.MaxDrawdownLimit)
 	}
-	if cfg.MaxOrderRate != 10000 {
-		t.Errorf("expected default order rate 10000, got %d", cfg.MaxOrderRate)
+	if cfg.MaxOrderRate != 100 {
+		t.Errorf("expected default order rate 100, got %d", cfg.MaxOrderRate)
 	}
 }
 

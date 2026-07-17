@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/mux"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/cors"
 )
@@ -35,7 +38,7 @@ type MatchingEngineClient struct {
 
 func NewMatchingEngineClient(host string, port int) *MatchingEngineClient {
 	return &MatchingEngineClient{
-		addr:    fmt.Sprintf("%s:%d", host, port),
+		addr:    net.JoinHostPort(host, strconv.Itoa(port)),
 		enabled: false,
 	}
 }
@@ -193,6 +196,7 @@ type Orchestrator struct {
 	wg            sync.WaitGroup
 	logger        *slog.Logger
 	wsHub         *WebSocketHub
+	db            *sql.DB
 
 	orderCount  atomic.Uint64
 	rejectCount atomic.Uint64
@@ -205,20 +209,53 @@ func NewOrchestrator() *Orchestrator {
 	orch := &Orchestrator{
 		services: make(map[string]*ServiceHealth),
 		config: HotReloadConfig{
-			MaxDrawdownLimit: 0.10,
-			MarketDataPort:   8080,
-			OrderEntryPort:   9090,
-			MaxOrderRate:     10000,
+			MaxDrawdownLimit: DrawdownLimit,
+			MarketDataPort:   PortMarketData,
+			OrderEntryPort:   PortOrchestrator,
+			MaxOrderRate:     MaxOrdersPerSec,
 			MaxCancelRate:    5000,
-			MaxPositionLimit: 100000,
+			MaxPositionLimit: PositionLimit,
 		},
 		shutdownCh:  make(chan struct{}),
 		logger:      slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})),
 		wsHub:       NewWebSocketHub(),
-		matchClient: NewMatchingEngineClient("127.0.0.1", 9092), // Route to Risk Analytics instead of Execution Core
+		matchClient: NewMatchingEngineClient("127.0.0.1", PortRiskHealth), // Route to Risk Analytics instead of Execution Core
 	}
 	orch.loadConfig()
+	orch.initDB()
 	return orch
+}
+
+func (o *Orchestrator) initDB() {
+	db, err := sql.Open("sqlite3", "robin.db")
+	if err != nil {
+		o.logger.Error("failed to open sqlite database", "error", err)
+		return
+	}
+
+	// Optimize SQLite for concurrent access
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(1 * time.Hour)
+
+	o.db = db
+
+	schemaBytes, err := os.ReadFile("../../schema_sqlite.sql")
+	if err != nil {
+		schemaBytes, err = os.ReadFile("schema_sqlite.sql")
+	}
+	if err != nil {
+		o.logger.Error("failed to read schema_sqlite.sql", "error", err)
+		return
+	}
+
+	_, err = db.Exec(string(schemaBytes))
+	if err != nil {
+		o.logger.Error("failed to execute schema_sqlite.sql", "error", err)
+		return
+	}
+
+	o.logger.Info("SQLite database initialized successfully")
 }
 
 func (o *Orchestrator) RegisterService(name string, addr string) {
@@ -427,6 +464,9 @@ func (o *Orchestrator) RecordLatency(ns uint64) { o.latencySum.Add(ns) }
 func (o *Orchestrator) Shutdown() {
 	close(o.shutdownCh)
 	o.wg.Wait()
+	if o.db != nil {
+		o.db.Close()
+	}
 	o.logger.Info("orchestrator shutdown complete")
 }
 
@@ -600,7 +640,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"status": "reloaded"})
-	})))).Methods("POST")
+	}))))).Methods("POST")
 
 	// POST /order — submit a new order (JWT Trader required)
 	// Forwards to the matching engine TCP server, or falls back to simulated fill.
@@ -724,6 +764,57 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"latency_ns", latencyNs,
 		)
 
+		// Async database persistence
+		go func(clOrdID string, instID uint64, price float64, qty float64, side string, status string, fPx float64, fQty float64) {
+			if o.db == nil {
+				return
+			}
+			sideInt := 0
+			if side == "SELL" {
+				sideInt = 1
+			}
+			now := time.Now().UnixNano()
+
+			tx, err := o.db.Begin()
+			if err != nil {
+				o.logger.Error("failed to begin db transaction", "error", err)
+				return
+			}
+			defer tx.Rollback()
+
+			res, err := tx.Exec(`
+				INSERT INTO orders (cl_order_id, instrument_id, price, qty, side, status, account_id, client_id, strategy_id, created_at_ns, updated_at_ns)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				clOrdID, instID, int(price*10000), int(qty*10000), sideInt, status, 1, 1, 1, now, now,
+			)
+			if err != nil {
+				o.logger.Error("failed to insert order to db", "error", err)
+				return
+			}
+
+			if status == "FILLED" {
+				orderDBID, err := res.LastInsertId()
+				if err != nil {
+					o.logger.Error("failed to get last insert id for order", "error", err)
+					return
+				}
+
+				_, err = tx.Exec(`
+					INSERT INTO trades (order_id, instrument_id, execution_price, execution_qty, side, maker_taker, executed_at_ns)
+					VALUES (?, ?, ?, ?, ?, ?, ?)`,
+					orderDBID, instID, int(fPx*10000), int(fQty*10000), sideInt, "TAKER", now,
+				)
+				if err != nil {
+					o.logger.Error("failed to insert trade to db", "error", err)
+					return
+				}
+			}
+
+			if err := tx.Commit(); err != nil {
+				o.logger.Error("failed to commit db transaction", "error", err)
+			}
+		}(orderReq.ClientOrdID, instID, orderReq.Price, orderReq.Qty, orderReq.Side, status, fillPrice, fillQty)
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		respPayload := map[string]interface{}{
@@ -741,7 +832,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			respPayload["error"] = engineError
 		}
 		json.NewEncoder(w).Encode(respPayload)
-	})))).Methods("POST")
+	}))))).Methods("POST")
 
 	// WebSocket endpoint — real-time order book + trade notifications
 	r.HandleFunc("/ws", o.wsHub.handleWebSocket)
@@ -858,7 +949,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	}).Methods("POST")
 
 	// POST /api/ai/chat — Quantitative Multi-Agent Chat Assistant
-	r.HandleFunc("/api/ai/chat", func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/api/ai/chat", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		proxyReq, err := http.NewRequest("POST", "http://127.0.0.1:8000/chat", req.Body)
 		if err != nil {
 			http.Error(w, `{"error":"failed to create proxy request"}`, http.StatusInternalServerError)
@@ -877,10 +968,10 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(proxyResp.StatusCode)
 		io.Copy(w, proxyResp.Body)
-	}).Methods("POST")
+	})))).Methods("POST")
 
 	// POST /api/ai/trade_decision — Autonomous AI Agent Trade Evaluation
-	r.HandleFunc("/api/ai/trade_decision", func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/api/ai/trade_decision", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		proxyReq, err := http.NewRequest("POST", "http://127.0.0.1:8000/trade_decision", req.Body)
 		if err != nil {
 			http.Error(w, `{"error":"failed to create proxy request"}`, http.StatusInternalServerError)
@@ -899,7 +990,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(proxyResp.StatusCode)
 		io.Copy(w, proxyResp.Body)
-	}).Methods("POST")
+	})))).Methods("POST")
 
 	// Apply middleware chain: requestID → rateLimit → router
 	handler := requestIDMiddleware(rateLimitMiddleware(1000, r))
