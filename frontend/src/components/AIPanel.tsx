@@ -41,7 +41,7 @@ export default function AIPanel() {
       const JWT_TOKEN = process.env.NEXT_PUBLIC_GATEWAY_API_TOKEN || '';
       const res = await fetch(`${GATEWAY_URL}/api/ai/chat`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${JWT_TOKEN}`
         },
@@ -77,7 +77,7 @@ Asks: ${JSON.stringify(orderBook.asks.slice(0, 3))}`;
           const JWT_TOKEN = process.env.NEXT_PUBLIC_GATEWAY_API_TOKEN || '';
           const res = await fetch(`${GATEWAY_URL}/api/ai/trade_decision`, {
             method: 'POST',
-            headers: { 
+            headers: {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${JWT_TOKEN}`
             },

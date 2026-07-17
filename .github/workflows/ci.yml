@@ -14,7 +14,7 @@ jobs:
   # Secret Scanning
   # ============================================================================
   secret-scan:
-    name: "Secret Scanning"
+    name: Secret Scanning
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -29,7 +29,7 @@ jobs:
   # Frontend: Next.js + TypeScript
   # ============================================================================
   frontend:
-    name: "Frontend — Next.js"
+    name: Frontend — Next.js
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +47,7 @@ jobs:
   # Rust: Risk Analytics
   # ============================================================================
   rust-risk:
-    name: "Rust — Risk Analytics"
+    name: Rust — Risk Analytics
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -65,7 +65,7 @@ jobs:
   # Rust: Compliance
   # ============================================================================
   rust-compliance:
-    name: "Rust — Compliance"
+    name: Rust — Compliance
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -83,7 +83,7 @@ jobs:
   # Go: Gateway Orchestrator
   # ============================================================================
   go-gateway:
-    name: "Go — Gateway Orchestrator"
+    name: Go — Gateway Orchestrator
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -101,7 +101,7 @@ jobs:
   # C++: Execution Core
   # ============================================================================
   cpp-execution:
-    name: "C++ — Execution Core"
+    name: C++ — Execution Core
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -126,7 +126,7 @@ jobs:
   # C++: Pricing
   # ============================================================================
   cpp-pricing:
-    name: "C++ — Pricing"
+    name: C++ — Pricing
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -144,7 +144,7 @@ jobs:
   # Python: AI engine validation
   # ============================================================================
   python-validation:
-    name: "Python — AI Engine"
+    name: Python — AI Engine
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -172,7 +172,7 @@ jobs:
   # Formatting & Sanity
   # ============================================================================
   rust-fmt:
-    name: "Rust — Format Check"
+    name: Rust — Format Check
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -183,7 +183,7 @@ jobs:
       - run: cd services/compliance     && cargo fmt -- --check
 
   go-fmt:
-    name: "Go — Format Check"
+    name: Go — Format Check
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4

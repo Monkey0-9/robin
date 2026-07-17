@@ -145,7 +145,7 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
 
     let mut synthetic_order_id: u64 = 1;
     let mut last_heartbeat = now_ns();
-    
+
     // We can't use Default because ShmMessage might not derive Default in robin_risk anymore if they changed it.
     // Actually we can just initialize it with zeros.
     let mut shm_buf = unsafe { std::mem::zeroed::<ShmMessage>() };

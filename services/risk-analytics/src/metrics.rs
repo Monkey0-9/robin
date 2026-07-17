@@ -177,11 +177,11 @@ mod tests {
         ORDERS_REJECTED.store(0, Ordering::Relaxed);
         LATENCY_LE_1000.store(0, Ordering::Relaxed);
         LATENCY_LE_5000.store(0, Ordering::Relaxed);
-        
+
         record_order(1500, true);
         record_order(2500, false);
         record_order(800, true);
-        
+
         assert_eq!(ORDERS_PROCESSED.load(Ordering::Relaxed), 3);
         assert_eq!(ORDERS_REJECTED.load(Ordering::Relaxed), 1);
         assert_eq!(LATENCY_MAX_NS.load(Ordering::Relaxed), 2500);
