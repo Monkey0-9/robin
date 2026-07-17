@@ -77,8 +77,8 @@ fn handle_client(mut client_stream: TcpStream, gate: Arc<Mutex<RiskGate>>) {
         // Parse JSON
         let parsed: Result<Value, _> = serde_json::from_str(request);
         if let Ok(v) = parsed {
-            let price = (v["price"].as_f64().unwrap_or(0.0) * 100_000_000.0) as u64;
-            let qty = (v["qty"].as_f64().unwrap_or(0.0) * 100_000_000.0) as u64;
+            let price = v["price"].as_u64().unwrap_or(0);
+            let qty = v["qty"].as_u64().unwrap_or(0);
             let side_str = v["side"].as_str().unwrap_or("BUY");
             let side = if side_str.eq_ignore_ascii_case("SELL") || side_str.eq_ignore_ascii_case("ASK") {
                 OrderSide::Ask
