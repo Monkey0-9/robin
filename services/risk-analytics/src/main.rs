@@ -7,7 +7,12 @@ use serde_json::Value;
 fn main() {
     println!("[RISK] Starting Risk Analytics Daemon on port 9092...");
     
-    let mut gate = RiskGate::with_config("robin_risk_match.shm", 10_000_000_000, 100, 100_000);
+    let mut gate = RiskGate::with_config(
+        "robin_risk_match.shm",
+        1_000_000_000_000_000_000u64, // credit limit ($10B scaled by 1e8)
+        100 * 100_000_000,           // position limit (100 contracts scaled by 1e8)
+        100_000 * 100_000_000,       // max qty per order (100k contracts scaled by 1e8)
+    );
     
     // Attempt to load snapshot
     let snapshot_path = "positions.bin";
@@ -17,11 +22,11 @@ fn main() {
         println!("[RISK] No valid snapshot found, starting fresh.");
     }
     
-    // Set realistic initial reference prices in ticks (price * 10,000)
-    gate.update_reference_price(1, 645_000_000); // BTC/USD ~ 64,500
-    gate.update_reference_price(2, 34_500_000);  // ETH/USD ~ 3,450
-    gate.update_reference_price(3, 1_853_000);   // AAPL ~ 185.30
-    gate.update_reference_price(4, 10_850);      // EUR/USD ~ 1.0850
+    // Set realistic initial reference prices in ticks (price * 100,000,000)
+    gate.update_reference_price(1, 6_450_000_000_000); // BTC/USD ~ 64,500
+    gate.update_reference_price(2, 345_000_000_000);  // ETH/USD ~ 3,450
+    gate.update_reference_price(3, 18_530_000_000);   // AAPL ~ 185.30
+    gate.update_reference_price(4, 108_500_000);      // EUR/USD ~ 1.0850
 
     let gate = Arc::new(Mutex::new(gate));
     let gate_clone = gate.clone();
@@ -72,8 +77,8 @@ fn handle_client(mut client_stream: TcpStream, gate: Arc<Mutex<RiskGate>>) {
         // Parse JSON
         let parsed: Result<Value, _> = serde_json::from_str(request);
         if let Ok(v) = parsed {
-            let price = v["price"].as_f64().unwrap_or(0.0) as u32;
-            let qty = v["qty"].as_f64().unwrap_or(0.0) as u32;
+            let price = (v["price"].as_f64().unwrap_or(0.0) * 100_000_000.0) as u64;
+            let qty = (v["qty"].as_f64().unwrap_or(0.0) * 100_000_000.0) as u64;
             let side_str = v["side"].as_str().unwrap_or("BUY");
             let side = if side_str.eq_ignore_ascii_case("SELL") || side_str.eq_ignore_ascii_case("ASK") {
                 OrderSide::Ask

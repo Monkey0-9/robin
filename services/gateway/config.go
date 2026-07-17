@@ -25,21 +25,21 @@ const (
 
 // Service TCP health-check ports
 const (
-	PortOrchestrator     = 8080
-	PortExecutionHealth  = 9091
-	PortRiskHealth       = 9092
-	PortMarketData       = 9093
-	PortPortfolio        = 9094
-	PortCompliance       = 9095
+	PortOrchestrator    = 8080
+	PortExecutionHealth = 9091
+	PortRiskHealth      = 9092
+	PortMarketData      = 9093
+	PortPortfolio       = 9094
+	PortCompliance      = 9095
 )
 
 // Risk defaults
 const (
-	PositionLimit     = 100000
-	CreditLimit       = 10000000000
-	MaxOrdersPerSec   = 100
-	PriceCollarBPS    = 500
-	DrawdownLimit     = 0.10
+	PositionLimit   = 100000
+	CreditLimit     = 10000000000
+	MaxOrdersPerSec = 100
+	PriceCollarBPS  = 500
+	DrawdownLimit   = 0.10
 )
 
 // Market data multicast group + port (UDP)

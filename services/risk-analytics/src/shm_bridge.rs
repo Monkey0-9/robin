@@ -5,13 +5,15 @@ use memmap2::MmapOptions;
 #[repr(C, align(64))]
 pub struct ShmHeader {
     pub write_idx: AtomicU64,
+    _pad1: [u8; 56],
     pub read_idx: AtomicU64,
+    _pad2: [u8; 56],
     pub magic: u64,
     pub version: u32,
     pub size: u32,
     pub pid_writer: u32,
     pub pid_reader: u32,
-    _pad: [u8; 24],
+    _pad3: [u8; 40],
 }
 
 pub const SHM_MAGIC: u64 = 0x524f42494e484d5f;
@@ -25,14 +27,14 @@ pub struct ShmMessage {
     pub msg_type: u8,
     pub client_id: u32,
     pub instrument_id: u32,
-    pub price: u32,
-    pub qty: u32,
+    pub price: u64,
+    pub qty: u64,
     pub side: u8,
     pub flags: u8,
     pub order_id: u64,
     pub cl_order_id: u64,
     pub timestamp_ns: u64,
-    pub _pad: [u8; 21],
+    pub _pad: [u8; 13],
 }
 
 pub struct ShmBridge {
@@ -149,7 +151,7 @@ impl ShmBridge {
             order_id: order.id,
             cl_order_id: order.cl_order_id,
             timestamp_ns: order.timestamp,
-            _pad: [0u8; 21],
+            _pad: [0u8; 13],
         };
         self.push(&msg)
     }
@@ -168,6 +170,7 @@ impl ShmBridge {
 #[cfg(test)]
 mod tests {
     use super::{ShmBridge, ShmMessage};
+    use std::mem::MaybeUninit;
 
     #[test]
     #[cfg(target_os = "linux")]
@@ -186,7 +189,7 @@ mod tests {
             order_id: 1,
             cl_order_id: 1001,
             timestamp_ns: 1234567890,
-            _pad: [0u8; 21],
+            _pad: [0u8; 13],
         };
 
         assert!(bridge.push(&msg));

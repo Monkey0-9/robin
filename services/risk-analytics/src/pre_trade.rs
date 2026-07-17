@@ -3,9 +3,9 @@ use crate::gate::Order;
 #[derive(Clone)]
 pub struct PreTradeRiskEvaluator {
     pub max_notional_limit: u64,
-    pub max_qty_per_order: u32,
-    pub price_bound_upper: u32,
-    pub price_bound_lower: u32,
+    pub max_qty_per_order: u64,
+    pub price_bound_upper: u64,
+    pub price_bound_lower: u64,
     pub restricted_instruments: [u32; 64],
     pub restricted_count: usize,
 }
@@ -13,9 +13,9 @@ pub struct PreTradeRiskEvaluator {
 impl PreTradeRiskEvaluator {
     pub fn new(
         max_notional_limit: u64,
-        max_qty_per_order: u32,
-        price_bound_upper: u32,
-        price_bound_lower: u32,
+        max_qty_per_order: u64,
+        price_bound_upper: u64,
+        price_bound_lower: u64,
     ) -> Self {
         Self {
             max_notional_limit,
@@ -46,7 +46,7 @@ impl PreTradeRiskEvaluator {
             return Err("ORDER_QTY_LIMIT_EXCEEDED");
         }
 
-        let notional = (order.price as u64) * (order.qty as u64);
+        let notional = order.price.saturating_mul(order.qty) / 100_000_000;
         if notional > self.max_notional_limit {
             return Err("NOTIONAL_LIMIT_EXCEEDED");
         }

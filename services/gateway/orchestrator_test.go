@@ -107,7 +107,7 @@ func TestHealthEndpoint(t *testing.T) {
 func TestServicesEndpoint(t *testing.T) {
 	orch := newTestOrch()
 	orch.RegisterService("Alpha", "127.0.0.1:9001")
-	orch.RegisterService("Beta",  "127.0.0.1:9002")
+	orch.RegisterService("Beta", "127.0.0.1:9002")
 	srv := orch.setupHTTPServer(0)
 	req := httptest.NewRequest("GET", "/services", nil)
 	w := httptest.NewRecorder()
@@ -165,7 +165,6 @@ func TestConfigPostEndpoint(t *testing.T) {
 		t.Errorf("config not updated: expected 0.15, got %f", cfg.MaxDrawdownLimit)
 	}
 }
-
 
 func TestConfigPostEndpoint_Unauthorized(t *testing.T) {
 	orch := newTestOrch()
@@ -282,10 +281,10 @@ func TestServiceStatusString(t *testing.T) {
 		s    ServiceStatus
 		want string
 	}{
-		{StatusActive,   "ACTIVE"},
+		{StatusActive, "ACTIVE"},
 		{StatusDegraded, "DEGRADED"},
-		{StatusFailed,   "FAILED"},
-		{StatusUnknown,  "UNKNOWN"},
+		{StatusFailed, "FAILED"},
+		{StatusUnknown, "UNKNOWN"},
 	}
 	for _, tc := range cases {
 		if got := tc.s.String(); got != tc.want {
@@ -308,10 +307,10 @@ func TestJWTAuthMiddleware_JWTVerification(t *testing.T) {
 	// Set up keys
 	hmacSecret := []byte("my-test-secret-key-123456789")
 	authenticator := &jwtAuthenticator{
-		hmacKey:   hmacSecret,
-		useHMAC:   true,
-		issuer:    "robin-gateway",
-		audience:  "robin-services",
+		hmacKey:  hmacSecret,
+		useHMAC:  true,
+		issuer:   "robin-gateway",
+		audience: "robin-services",
 	}
 
 	// Create a valid signed token

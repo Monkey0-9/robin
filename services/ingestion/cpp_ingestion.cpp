@@ -71,29 +71,31 @@ struct ITCHOrderCancel {
     uint32_t cancelled_shares;
 };
 
-struct ShmHeader {
-    std::atomic<uint64_t> write_idx;
-    std::atomic<uint64_t> read_idx;
-    uint64_t magic;
+struct alignas(64) ShmHeader {
+    alignas(64) std::atomic<uint64_t> write_idx;
+    uint8_t pad1_[56];
+    alignas(64) std::atomic<uint64_t> read_idx;
+    uint8_t pad2_[56];
+    alignas(64) uint64_t magic;
     uint32_t version;
     uint32_t size;
     uint32_t pid_writer;
     uint32_t pid_reader;
-    uint8_t pad_[24];
+    uint8_t pad3_[40];
 };
 
 struct ShmMessage {
     uint8_t msg_type;
     uint32_t client_id;
     uint32_t instrument_id;
-    uint32_t price;
-    uint32_t qty;
+    uint64_t price;
+    uint64_t qty;
     uint8_t side;
     uint8_t flags;
     uint64_t order_id;
     uint64_t cl_order_id;
     uint64_t timestamp_ns;
-    uint8_t _pad[21];
+    uint8_t _pad[13];
 };
 #pragma pack(pop)
 
@@ -150,7 +152,13 @@ public:
             }
         }
         if (fd >= 0) {
-            shm_mapped_ = mmap(nullptr, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+            shm_mapped_ = mmap(nullptr, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_LOCKED | MAP_HUGETLB, fd, 0);
+            if (shm_mapped_ == MAP_FAILED) {
+                shm_mapped_ = mmap(nullptr, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_LOCKED, fd, 0);
+            }
+            if (shm_mapped_ == MAP_FAILED) {
+                shm_mapped_ = mmap(nullptr, SHM_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+            }
             close(fd);
             if (shm_mapped_ == MAP_FAILED) {
                 shm_mapped_ = nullptr;

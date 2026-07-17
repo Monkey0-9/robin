@@ -151,18 +151,18 @@ public:
     }
 
     // Best bid (highest buy price), 0 if no bids
-    uint32_t best_bid() const noexcept {
-        return (bid_count_ > 0) ? bids_[0].price : 0u;
+    int64_t best_bid() const noexcept {
+        return (bid_count_ > 0) ? bids_[0].price : 0;
     }
 
     // Best ask (lowest sell price), 0 if no asks
-    uint32_t best_ask() const noexcept {
-        return (ask_count_ > 0) ? asks_[0].price : 0u;
+    int64_t best_ask() const noexcept {
+        return (ask_count_ > 0) ? asks_[0].price : 0;
     }
 
     // Spread in price ticks, 0 if one side is empty
-    uint32_t spread() const noexcept {
-        if (bid_count_ == 0 || ask_count_ == 0) return 0u;
+    int64_t spread() const noexcept {
+        if (bid_count_ == 0 || ask_count_ == 0) return 0;
         return asks_[0].price - bids_[0].price;
     }
 
@@ -173,12 +173,12 @@ public:
 
 private:
     struct PriceLevel {
-        uint32_t      price = 0;
+        int64_t      price = 0;
         OrderQueue<256> queue;
     };
 
     bool can_fully_fill(const Order& order) const noexcept {
-        uint32_t needed = order.qty;
+        int64_t needed = order.qty;
         bool is_bid = (order.side == Side::BID);
         const PriceLevel* levels = is_bid ? asks_ : bids_;
         size_t count = is_bid ? ask_count_ : bid_count_;
@@ -192,7 +192,7 @@ private:
             for (size_t j = q.head; j < q.tail && needed > 0; j++) {
                 const auto& e = q.entries[j & (256 - 1)];
                 if (e.qty == 0) continue; // Soft-canceled
-                uint32_t fill = (needed < e.qty) ? needed : e.qty;
+                int64_t fill = (needed < e.qty) ? needed : e.qty;
                 needed -= fill;
             }
         }
@@ -200,14 +200,14 @@ private:
     }
 
     // Find insertion position for a new bid price level (descending order)
-    size_t find_insert_pos_bid(uint32_t price) const noexcept {
+    size_t find_insert_pos_bid(int64_t price) const noexcept {
         size_t pos = bid_count_;
         while (pos > 0 && bids_[pos - 1].price < price) pos--;
         return pos;
     }
 
     // Find insertion position for a new ask price level (ascending order)
-    size_t find_insert_pos_ask(uint32_t price) const noexcept {
+    size_t find_insert_pos_ask(int64_t price) const noexcept {
         size_t pos = ask_count_;
         while (pos > 0 && asks_[pos - 1].price > price) pos--;
         return pos;
@@ -268,7 +268,7 @@ private:
                     q.pop_front();
                     continue;
                 }
-                uint32_t fill_qty = (order.qty < resting->qty) ? order.qty : resting->qty;
+                int64_t fill_qty = (order.qty < resting->qty) ? order.qty : resting->qty;
                 Trade t{};
                 t.trade_id     = static_cast<uint64_t>(instrument_id_) * 1000000ULL
                                  + (order.side == Side::BID ? order.id : resting->id);

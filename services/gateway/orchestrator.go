@@ -28,12 +28,12 @@ import (
 
 // MatchingEngineClient manages a TCP connection to the C++ matching engine.
 type MatchingEngineClient struct {
-	mu       sync.Mutex
-	addr     string
-	conn     net.Conn
-	reader   *bufio.Reader
-	enabled  bool
-	lastErr  string
+	mu      sync.Mutex
+	addr    string
+	conn    net.Conn
+	reader  *bufio.Reader
+	enabled bool
+	lastErr string
 }
 
 func NewMatchingEngineClient(host string, port int) *MatchingEngineClient {
@@ -96,15 +96,15 @@ func (c *MatchingEngineClient) HealthCheck() bool {
 	return err == nil && strings.Contains(resp, "ok")
 }
 
-func (c *MatchingEngineClient) IsEnabled() bool { c.mu.Lock(); defer c.mu.Unlock(); return c.enabled }
+func (c *MatchingEngineClient) IsEnabled() bool   { c.mu.Lock(); defer c.mu.Unlock(); return c.enabled }
 func (c *MatchingEngineClient) LastError() string { c.mu.Lock(); defer c.mu.Unlock(); return c.lastErr }
 
 // OrderResponse from the matching engine
 type MatchingEngineResponse struct {
 	OrderID      uint64 `json:"order_id"`
 	InstrumentID uint32 `json:"instrument_id"`
-	FillPrice    uint32 `json:"fill_price"`
-	FillQty      uint32 `json:"fill_qty"`
+	FillPrice    int64  `json:"fill_price"`
+	FillQty      int64  `json:"fill_qty"`
 	Status       string `json:"status"`
 	Success      bool   `json:"success"`
 	Error        string `json:"error"`
@@ -176,7 +176,7 @@ type HotReloadConfig struct {
 // OrderRequest is the JSON body for POST /order
 type OrderRequest struct {
 	Symbol      string  `json:"symbol"`
-	Side        string  `json:"side"`   // BUY or SELL
+	Side        string  `json:"side"` // BUY or SELL
 	Price       float64 `json:"price"`
 	Qty         float64 `json:"qty"`
 	OrderType   string  `json:"order_type"` // LIMIT or MARKET
@@ -456,9 +456,9 @@ func (o *Orchestrator) GetServices() []*ServiceHealth {
 	return result
 }
 
-func (o *Orchestrator) RecordOrder()          { o.orderCount.Add(1) }
-func (o *Orchestrator) RecordReject()         { o.rejectCount.Add(1) }
-func (o *Orchestrator) RecordTrade()          { o.tradeCount.Add(1) }
+func (o *Orchestrator) RecordOrder()            { o.orderCount.Add(1) }
+func (o *Orchestrator) RecordReject()           { o.rejectCount.Add(1) }
+func (o *Orchestrator) RecordTrade()            { o.tradeCount.Add(1) }
 func (o *Orchestrator) RecordLatency(ns uint64) { o.latencySum.Add(ns) }
 
 func (o *Orchestrator) Shutdown() {
@@ -672,10 +672,14 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		// Map symbol to instrument_id
 		instID := uint64(1)
 		switch orderReq.Symbol {
-		case "BTC/USD": instID = 1
-		case "ETH/USD": instID = 2
-		case "AAPL":    instID = 3
-		case "EUR/USD": instID = 4
+		case "BTC/USD":
+			instID = 1
+		case "ETH/USD":
+			instID = 2
+		case "AAPL":
+			instID = 3
+		case "EUR/USD":
+			instID = 4
 		}
 
 		side := "BID"
@@ -698,7 +702,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		if o.matchClient != nil && o.matchClient.IsEnabled() {
 			matchJSON := fmt.Sprintf(
 				`{"id":%d,"instrument_id":%d,"price":%.0f,"qty":%.0f,"side":"%s","type":"%s"}`,
-				orderID, instID, orderReq.Price*10000, orderReq.Qty, side, orderType,
+				orderID, instID, orderReq.Price*100000000, orderReq.Qty*100000000, side, orderType,
 			)
 			resp, err := o.matchClient.SendOrderJSON(matchJSON)
 			if err == nil {
@@ -707,8 +711,8 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 					engineUsed = true
 					if meResp.Success {
 						if meResp.FillPrice > 0 {
-							fillPrice = float64(meResp.FillPrice) / 10000.0
-							fillQty = float64(meResp.FillQty)
+							fillPrice = float64(meResp.FillPrice) / 100000000.0
+							fillQty = float64(meResp.FillQty) / 100000000.0
 						}
 						status = meResp.Status
 					} else {
@@ -785,7 +789,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			res, err := tx.Exec(`
 				INSERT INTO orders (cl_order_id, instrument_id, price, qty, side, status, account_id, client_id, strategy_id, created_at_ns, updated_at_ns)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				clOrdID, instID, int(price*10000), int(qty*10000), sideInt, status, 1, 1, 1, now, now,
+				clOrdID, instID, int64(price*100000000), int64(qty*100000000), sideInt, status, 1, 1, 1, now, now,
 			)
 			if err != nil {
 				o.logger.Error("failed to insert order to db", "error", err)
@@ -802,7 +806,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 				_, err = tx.Exec(`
 					INSERT INTO trades (order_id, instrument_id, execution_price, execution_qty, side, maker_taker, executed_at_ns)
 					VALUES (?, ?, ?, ?, ?, ?, ?)`,
-					orderDBID, instID, int(fPx*10000), int(fQty*10000), sideInt, "TAKER", now,
+					orderDBID, instID, int64(fPx*100000000), int64(fQty*100000000), sideInt, "TAKER", now,
 				)
 				if err != nil {
 					o.logger.Error("failed to insert trade to db", "error", err)
@@ -818,15 +822,15 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		respPayload := map[string]interface{}{
-			"status":      status,
-			"exec_id":     execID,
-			"cl_ord_id":   orderReq.ClientOrdID,
-			"symbol":      orderReq.Symbol,
-			"side":        orderReq.Side,
-			"qty":         fillQty,
-			"fill_price":  fillPrice,
-			"latency_ns":  latencyNs,
-			"engine":      engineUsed,
+			"status":     status,
+			"exec_id":    execID,
+			"cl_ord_id":  orderReq.ClientOrdID,
+			"symbol":     orderReq.Symbol,
+			"side":       orderReq.Side,
+			"qty":        fillQty,
+			"fill_price": fillPrice,
+			"latency_ns": latencyNs,
+			"engine":     engineUsed,
 		}
 		if engineError != "" {
 			respPayload["error"] = engineError
@@ -840,11 +844,11 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	r.Handle("/metrics", promhttp.Handler())
 
 	r.Handle("/stats", jwtAuthMiddleware(rbacMiddleware("admin")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		orders   := o.orderCount.Load()
-		rejects  := o.rejectCount.Load()
-		trades   := o.tradeCount.Load()
-		latSum   := o.latencySum.Load()
-		avgLat   := uint64(0)
+		orders := o.orderCount.Load()
+		rejects := o.rejectCount.Load()
+		trades := o.tradeCount.Load()
+		latSum := o.latencySum.Load()
+		avgLat := uint64(0)
 		if trades > 0 {
 			avgLat = latSum / trades
 		}
@@ -956,7 +960,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			return
 		}
 		proxyReq.Header.Set("Content-Type", "application/json")
-		
+
 		client := &http.Client{Timeout: 15 * time.Second}
 		proxyResp, err := client.Do(proxyReq)
 		if err != nil {
@@ -964,7 +968,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			return
 		}
 		defer proxyResp.Body.Close()
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(proxyResp.StatusCode)
 		io.Copy(w, proxyResp.Body)
@@ -978,7 +982,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			return
 		}
 		proxyReq.Header.Set("Content-Type", "application/json")
-		
+
 		client := &http.Client{Timeout: 15 * time.Second}
 		proxyResp, err := client.Do(proxyReq)
 		if err != nil {
@@ -986,7 +990,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			return
 		}
 		defer proxyResp.Body.Close()
-		
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(proxyResp.StatusCode)
 		io.Copy(w, proxyResp.Body)

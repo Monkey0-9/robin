@@ -36,8 +36,8 @@ typedef int socket_t;
 struct FillResult {
     uint64_t order_id;
     uint32_t instrument_id;
-    uint32_t fill_price;
-    uint32_t fill_qty;
+    int64_t fill_price;
+    int64_t fill_qty;
     OrderState state;
     bool success;
 };
@@ -135,8 +135,8 @@ private:
             FillResult fill = process_order_json(request, err_msg);
             char resp[512];
             int len = std::snprintf(resp, sizeof(resp),
-                "{\"order_id\":%llu,\"instrument_id\":%u,\"fill_price\":%u,\"fill_qty\":%u,\"status\":\"%s\",\"success\":%s,\"error\":\"%s\"}\n",
-                (unsigned long long)fill.order_id, fill.instrument_id, fill.fill_price, fill.fill_qty,
+                "{\"order_id\":%llu,\"instrument_id\":%u,\"fill_price\":%lld,\"fill_qty\":%lld,\"status\":\"%s\",\"success\":%s,\"error\":\"%s\"}\n",
+                (unsigned long long)fill.order_id, fill.instrument_id, (long long)fill.fill_price, (long long)fill.fill_qty,
                 fill.state == OrderState::FILLED ? "FILLED" :
                 fill.state == OrderState::WORKING ? "WORKING" :
                 fill.state == OrderState::CANCELED ? "CANCELED" :
@@ -161,7 +161,7 @@ private:
         result.state = OrderState::REJECTED;
 
         uint64_t id = 0, instrument_id = 1;
-        uint32_t price = 0, qty = 0;
+        int64_t price = 0, qty = 0;
         Side side = Side::BID;
         OrderType type = OrderType::LIMIT;
         uint64_t timestamp = 0;
@@ -196,8 +196,8 @@ private:
         uint64_t temp;
         extract_uint64("id", id);
         if (extract_uint64("instrument_id", temp)) instrument_id = temp;
-        if (extract_uint64("price", temp)) price = (uint32_t)temp;
-        if (extract_uint64("qty", temp)) qty = (uint32_t)temp;
+        if (extract_uint64("price", temp)) price = (int64_t)temp;
+        if (extract_uint64("qty", temp)) qty = (int64_t)temp;
         if (extract_uint64("timestamp", temp)) timestamp = temp;
         std::string side_str, type_str;
         extract_str("side", side_str);

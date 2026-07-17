@@ -192,8 +192,8 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
                 }
 
                 // FINRA 3110: principal approval for large orders
-                let order_value = shm_buf.price as u64 * shm_buf.qty as u64;
-                if shm_buf.qty >= 10_000 || order_value >= 10_000_000 {
+                let order_value = (shm_buf.price as u64).saturating_mul(shm_buf.qty as u64) / 100_000_000;
+                if shm_buf.qty >= 10_000 * 100_000_000 || order_value >= 10_000_000 * 100_000_000 {
                     eprintln!("[COMPLIANCE] FINRA 3110: Principal approval required for OrderID={} (Qty={}, Value={})",
                               shm_buf.order_id, shm_buf.qty, order_value);
                 }
@@ -254,7 +254,7 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
                     eprintln!("[COMPLIANCE] SPOOFING ALERT on order {synthetic_order_id}");
                 }
 
-                let order_value = event.price as u64 * event.qty as u64;
+                let order_value = event.price * event.qty;
                 if event.qty >= 10_000 || order_value >= 10_000_000 {
                     eprintln!("[COMPLIANCE] FINRA 3110: Principal approval required for large order {} (Qty: {}, Value: {})", synthetic_order_id, event.qty, order_value);
                 }

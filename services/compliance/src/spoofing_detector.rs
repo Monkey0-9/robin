@@ -4,8 +4,8 @@ use std::collections::HashMap;
 pub struct OrderEvent {
     pub order_id: u64,
     pub symbol: String,
-    pub price: u32,
-    pub qty: u32,
+    pub price: u64,
+    pub qty: u64,
     pub event_type: &'static str,
     pub timestamp_ns: u64,
 }
@@ -35,11 +35,11 @@ impl SpoofingDetector {
         history.retain(|e| e.timestamp_ns >= threshold);
 
         let large_news: Vec<&OrderEvent> = history.iter()
-            .filter(|e| e.event_type == "NEW" && e.qty >= 10000)
+            .filter(|e| e.event_type == "NEW" && e.qty >= 10000 * 100_000_000)
             .collect();
 
         let large_cancels: Vec<&OrderEvent> = history.iter()
-            .filter(|e| e.event_type == "CANCEL" && e.qty >= 10000)
+            .filter(|e| e.event_type == "CANCEL" && e.qty >= 10000 * 100_000_000)
             .collect();
 
         for cancel in &large_cancels {
@@ -87,13 +87,13 @@ mod tests {
         let mut detector = SpoofingDetector::new(5_000_000_000);
 
         detector.process_order_event(OrderEvent {
-            order_id: 1, symbol: "AAPL".into(), price: 50000,
-            qty: 50000, event_type: "NEW", timestamp_ns: 1000,
+            order_id: 1, symbol: "AAPL".into(), price: 50000 * 100_000_000,
+            qty: 50000 * 100_000_000, event_type: "NEW", timestamp_ns: 1000,
         });
 
         let detected = detector.process_order_event(OrderEvent {
-            order_id: 1, symbol: "AAPL".into(), price: 50000,
-            qty: 50000, event_type: "CANCEL", timestamp_ns: 1500,
+            order_id: 1, symbol: "AAPL".into(), price: 50000 * 100_000_000,
+            qty: 50000 * 100_000_000, event_type: "CANCEL", timestamp_ns: 1500,
         });
 
         assert!(detected);

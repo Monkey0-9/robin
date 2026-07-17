@@ -60,18 +60,18 @@ impl RiskGate {
     pub fn new(shm_path: &str) -> Self {
         Self {
             pre_trade: PreTradeRiskEvaluator::new(
-                10_000_000_000, // credit_limit
-                1_000_000,      // max_qty
-                u32::MAX,       // max_price (placeholder)
-                1,              // min_price
+                10_000_000_000 * 100_000_000, // credit_limit
+                1_000_000 * 100_000_000,      // max_qty
+                u64::MAX,                     // max_price (placeholder)
+                1,                            // min_price
             ),
             circuit_breaker: RiskCircuitBreaker::new(0.10),
             kill_switch: HardwareKillSwitch::new(),
             fast_gate: RiskGateFast::new(ComplianceThresholds {
-                max_order_value: 10_000_000_000,
-                max_order_qty: 1_000_000,
+                max_order_value: 10_000_000_000 * 100_000_000,
+                max_order_qty: 1_000_000 * 100_000_000,
                 price_collar_bps: 500,
-                reference_price: 50_000,
+                reference_price: 50_000 * 100_000_000,
                 restricted_list: [0u32; 128],
                 restricted_count: 0,
             }),
@@ -79,7 +79,7 @@ impl RiskGate {
             hedging: HedgingEngine::new(),
             tax_engine: TaxEngine::new(Vec::new()),
             orders_processed: AtomicU64::new(0),
-            credit_limit: 10_000_000_000,   // 10 billion price-units
+            credit_limit: 10_000_000_000 * 100_000_000,   // 10 billion price-units
             duplicate_window_ns: 1_000_000, // 1 ms
             recent_orders: vec![(0u64, 0u64); 4096].into_boxed_slice(),
             positions: vec![0i64; 4096].into_boxed_slice(),
@@ -87,7 +87,7 @@ impl RiskGate {
             velocity_head: 0,
             velocity_window_ns: 1_000_000_000, // 1 second
             max_velocity: 100,                 // max 100 orders per second
-            position_limit: 100_000,
+            position_limit: 100_000 * 100_000_000,
         }
     }
 
@@ -95,12 +95,12 @@ impl RiskGate {
     pub fn with_config(
         shm_name: &str,
         credit_limit: u64,
-        position_limit: i32,
-        _max_qty_per_order: u32,
+        position_limit: i64,
+        _max_qty_per_order: u64,
     ) -> Self {
         let mut g = Self::new(shm_name);
         g.credit_limit = credit_limit;
-        g.position_limit = position_limit as i64;
+        g.position_limit = position_limit;
         g
     }
 
@@ -125,7 +125,7 @@ impl RiskGate {
             .map_err(|_| RiskError::FatFinger)?;
 
         // HARD BLOCK 4: Order value limit (price × qty > credit_limit)
-        let order_value = (order.price as u64).saturating_mul(order.qty as u64);
+        let order_value = order.price.saturating_mul(order.qty) / 100_000_000;
         if order_value > self.credit_limit {
             return Err(RiskError::CreditLimit);
         }
@@ -147,7 +147,7 @@ impl RiskGate {
             if last > 0 {
                 let min_price = (last * 95) / 100;
                 let max_price = (last * 105) / 100;
-                let p = order.price as u64;
+                let p = order.price;
                 if p < min_price || p > max_price {
                     return Err(RiskError::PriceCollar);
                 }
@@ -243,7 +243,7 @@ impl RiskGate {
         let slot = (instrument_id & 4095) as usize;
         LAST_TRADE_PRICES[slot].store(price, Ordering::Relaxed);
         self.fast_gate
-            .update_reference_price(instrument_id, price as u32);
+            .update_reference_price(instrument_id, price);
     }
 
     // -------------------------------------------------------------------------
@@ -393,8 +393,8 @@ pub struct Order {
     pub cl_order_id: u64,
     pub instrument_id: u32,
     pub symbol: [u8; 8],
-    pub price: u32,
-    pub qty: u32,
+    pub price: u64,
+    pub qty: u64,
     pub side: OrderSide,
     pub timestamp: u64,
     pub account_id: u32,
@@ -429,7 +429,7 @@ pub enum RiskError {
 mod tests {
     use super::*;
 
-    fn make_order(id: u64, price: u32, qty: u32, side: OrderSide, ts: u64) -> Order {
+    fn make_order(id: u64, price: u64, qty: u64, side: OrderSide, ts: u64) -> Order {
         Order {
             id,
             cl_order_id: id + 1000,
@@ -476,18 +476,28 @@ mod tests {
     #[test]
     fn test_reject_fat_finger_qty() {
         let mut gate = RiskGate::new("/tmp/test_shm_ff");
-        let order = make_order(2, 15000, 2_000_000, OrderSide::Bid, 1_000_000_000);
+        let order = make_order(2, 15000, 2_000_000 * 100_000_000, OrderSide::Bid, 1_000_000_000);
         assert!(matches!(gate.check_order(&order), Err(_)));
     }
 
     #[test]
     fn test_reject_credit_limit() {
         // Use a gate with credit_limit=1_000_000.
-        // Order: price=2000, qty=1000 → notional=2_000_000 > credit_limit=1_000_000
-        // qty=1000 < max_qty=1_000_000 (ok), price=2000 < price_bound_upper=1_000_000 (ok)
+        // Order: price=20_000_000, qty=10_000_000 → notional=2_000_000 > credit_limit=1_000_000
         // So pre_trade passes, but gate credit check fails.
-        let mut gate = RiskGate::with_config("/tmp/test_shm_credit", 1_000_000, 100, 100_000);
-        let order = make_order(3, 2_000, 1_000, OrderSide::Bid, 1_000_000_000);
+        let mut gate = RiskGate::with_config(
+            "/tmp/test_shm_credit",
+            1_000_000, // credit limit
+            1_000_000 * 100_000_000, // position limit (high to avoid tripping it)
+            1_000_000 * 100_000_000, // max qty
+        );
+        let order = make_order(
+            3,
+            20_000_000,
+            10_000_000,
+            OrderSide::Bid,
+            1_000_000_000,
+        );
         assert_eq!(gate.check_order(&order), Err(RiskError::CreditLimit));
     }
 
@@ -496,20 +506,20 @@ mod tests {
         let mut gate = RiskGate::new("/tmp/test_shm_pos");
         let o1 = Order {
             instrument_id: 5,
-            ..make_order(10, 50000, 80_000, OrderSide::Bid, 1000)
+            ..make_order(10, 50000 * 100_000_000, 80_000 * 100_000_000, OrderSide::Bid, 1000)
         };
         assert_eq!(gate.check_order(&o1), Ok(OrderStatus::Approved));
 
         let o2 = Order {
             instrument_id: 5,
-            ..make_order(11, 50000, 30_000, OrderSide::Bid, 2000)
+            ..make_order(11, 50000 * 100_000_000, 30_000 * 100_000_000, OrderSide::Bid, 2000)
         };
         assert_eq!(gate.check_order(&o2), Err(RiskError::PositionLimit));
 
         // Sell reduces position — should pass
         let o3 = Order {
             instrument_id: 5,
-            ..make_order(12, 50000, 20_000, OrderSide::Ask, 3000)
+            ..make_order(12, 50000 * 100_000_000, 20_000 * 100_000_000, OrderSide::Ask, 3000)
         };
         assert_eq!(gate.check_order(&o3), Ok(OrderStatus::Approved));
     }

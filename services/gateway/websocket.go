@@ -20,17 +20,32 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+type wsClient struct {
+	conn   *websocket.Conn
+	send   chan []byte
+	userID string
+}
+
+func (c *wsClient) writePump() {
+	defer func() {
+		c.conn.Close()
+	}()
+	for msg := range c.send {
+		if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			slog.Warn("WebSocket write error", "user", c.userID, "error", err)
+			return
+		}
+	}
+}
+
 // WebSocketHub manages a set of connected WebSocket clients and supports
 // broadcasting order-book updates, trade notifications, and other real-time events.
 type WebSocketHub struct {
-	mu      sync.RWMutex
-	clients map[*websocket.Conn]string // conn -> user identifier (from JWT)
+	clients sync.Map // conn -> *wsClient
 }
 
 func NewWebSocketHub() *WebSocketHub {
-	return &WebSocketHub{
-		clients: make(map[*websocket.Conn]string),
-	}
+	return &WebSocketHub{}
 }
 
 // handleWebSocket upgrades an HTTP connection to WebSocket after JWT validation.
@@ -81,10 +96,20 @@ func (hub *WebSocketHub) handleWebSocket(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	hub.mu.Lock()
-	hub.clients[conn] = userID
-	count := len(hub.clients)
-	hub.mu.Unlock()
+	client := &wsClient{
+		conn:   conn,
+		send:   make(chan []byte, 256),
+		userID: userID,
+	}
+
+	hub.clients.Store(conn, client)
+	go client.writePump()
+
+	count := 0
+	hub.clients.Range(func(_, _ interface{}) bool {
+		count++
+		return true
+	})
 
 	slog.Info("WebSocket client connected", "user", userID, "total_clients", count)
 
@@ -94,11 +119,15 @@ func (hub *WebSocketHub) handleWebSocket(w http.ResponseWriter, r *http.Request)
 // readPump reads messages from the WebSocket connection until it is closed.
 func (hub *WebSocketHub) readPump(conn *websocket.Conn, userID string) {
 	defer func() {
-		hub.mu.Lock()
-		delete(hub.clients, conn)
-		count := len(hub.clients)
-		hub.mu.Unlock()
-		conn.Close()
+		if val, ok := hub.clients.LoadAndDelete(conn); ok {
+			client := val.(*wsClient)
+			close(client.send)
+		}
+		count := 0
+		hub.clients.Range(func(_, _ interface{}) bool {
+			count++
+			return true
+		})
 		slog.Info("WebSocket client disconnected", "user", userID, "total_clients", count)
 	}()
 
@@ -123,14 +152,14 @@ type OrderBookUpdate struct {
 }
 
 type OrderBookPayload struct {
-	Symbol string            `json:"symbol"`
-	Bids   [][2]float64      `json:"bids"` // [price, size]
-	Asks   [][2]float64      `json:"asks"` // [price, size]
+	Symbol string       `json:"symbol"`
+	Bids   [][2]float64 `json:"bids"` // [price, size]
+	Asks   [][2]float64 `json:"asks"` // [price, size]
 }
 
 type TradeNotification struct {
-	Type string           `json:"type"`
-	Data TradePayload     `json:"data"`
+	Type string       `json:"type"`
+	Data TradePayload `json:"data"`
 }
 
 type TradePayload struct {
@@ -171,18 +200,17 @@ func (hub *WebSocketHub) broadcast(v interface{}) {
 		return
 	}
 
-	hub.mu.RLock()
-	defer hub.mu.RUnlock()
-
-	for conn := range hub.clients {
-		if err := conn.WriteMessage(websocket.TextMessage, data); err != nil {
-			slog.Warn("WebSocket write error, closing connection", "error", err)
-			conn.Close()
-			go func(c *websocket.Conn) {
-				hub.mu.Lock()
-				delete(hub.clients, c)
-				hub.mu.Unlock()
-			}(conn)
+	hub.clients.Range(func(key, value interface{}) bool {
+		client := value.(*wsClient)
+		select {
+		case client.send <- data:
+		default:
+			slog.Warn("WebSocket client buffer full, dropping connection", "user", client.userID)
+			if val, ok := hub.clients.LoadAndDelete(key); ok {
+				c := val.(*wsClient)
+				close(c.send)
+			}
 		}
-	}
+		return true
+	})
 }

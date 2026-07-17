@@ -1,18 +1,18 @@
 use crate::gate::{Order, OrderSide};
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub struct ComplianceThresholds {
     pub max_order_value: u64,
-    pub max_order_qty: u32,
+    pub max_order_qty: u64,
     pub price_collar_bps: u32, // e.g. 500 = ±5%
-    pub reference_price: u32,  // Updated dynamically via update_reference_price()
+    pub reference_price: u64,  // Updated dynamically via update_reference_price()
     pub restricted_list: [u32; 128],
     pub restricted_count: usize,
 }
 
 pub struct RiskGateFast {
     thresholds: ComplianceThresholds,
-    reference_prices: Box<[AtomicU32]>, // Live-updated reference prices per instrument
+    reference_prices: Box<[AtomicU64]>, // Live-updated reference prices per instrument
     failed_checks_count: AtomicU64,
     total_checks_count: AtomicU64,
 }
@@ -22,7 +22,7 @@ impl RiskGateFast {
         let init_price = thresholds.reference_price;
         let mut prices = Vec::with_capacity(4096);
         for _ in 0..4096 {
-            prices.push(AtomicU32::new(init_price));
+            prices.push(AtomicU64::new(init_price));
         }
         Self {
             thresholds,
@@ -35,7 +35,7 @@ impl RiskGateFast {
     /// Update the reference price used for price collar checks.
     /// Called after each matched trade to keep collars current.
     #[inline]
-    pub fn update_reference_price(&self, instrument_id: u32, price: u32) {
+    pub fn update_reference_price(&self, instrument_id: u32, price: u64) {
         let slot = (instrument_id & 4095) as usize;
         self.reference_prices[slot].store(price, Ordering::Relaxed);
     }
@@ -54,7 +54,7 @@ impl RiskGateFast {
         }
 
         // Order value check
-        let order_value = (order.price as u64).saturating_mul(order.qty as u64);
+        let order_value = order.price.saturating_mul(order.qty) / 100_000_000;
         if order_value > self.thresholds.max_order_value {
             self.failed_checks_count.fetch_add(1, Ordering::Relaxed);
             return false;
@@ -68,9 +68,9 @@ impl RiskGateFast {
 
         // Price collar using live reference price
         let slot = (order.instrument_id & 4095) as usize;
-        let ref_p = self.reference_prices[slot].load(Ordering::Relaxed) as u64;
+        let ref_p = self.reference_prices[slot].load(Ordering::Relaxed);
         if ref_p > 0 {
-            let order_p = order.price as u64;
+            let order_p = order.price;
             let collar_bps = self.thresholds.price_collar_bps as u64;
             let max_allowed = ref_p.saturating_mul(10000 + collar_bps) / 10000;
             let min_allowed = ref_p.saturating_mul(10000u64.saturating_sub(collar_bps)) / 10000;
@@ -122,7 +122,7 @@ mod tests {
         })
     }
 
-    fn make_order(id: u64, instrument_id: u32, price: u32, qty: u32, side: OrderSide) -> Order {
+    fn make_order(id: u64, instrument_id: u32, price: u64, qty: u64, side: OrderSide) -> Order {
         Order {
             id,
             cl_order_id: id + 1000,

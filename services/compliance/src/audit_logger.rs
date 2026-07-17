@@ -7,8 +7,8 @@ pub struct AuditRecord {
     pub timestamp_ns: u64,
     pub order_id: u64,
     pub action: &'static str,
-    pub price: u32,
-    pub qty: u32,
+    pub price: u64,
+    pub qty: u64,
     pub client_id: u32,
     pub instrument_id: u32,
 }

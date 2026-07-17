@@ -37,8 +37,8 @@ enum class OrderType : uint8_t {
 
 struct Order {
     uint64_t id;
-    uint32_t price;       // Scaled (e.g., *10000)
-    uint32_t qty;
+    int64_t price;       // Scaled (e.g., *1e8)
+    int64_t qty;
     uint32_t instrument_id;
     uint32_t client_id;
     Side side;
@@ -52,8 +52,8 @@ struct Trade {
     uint64_t buy_order_id;
     uint64_t sell_order_id;
     uint32_t instrument_id;
-    uint32_t price;
-    uint32_t qty;
+    int64_t price;
+    int64_t qty;
     uint64_t timestamp;
 };
 

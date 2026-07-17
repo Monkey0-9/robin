@@ -117,7 +117,7 @@ func Logon(sender, target string, seqNum int) *FixMessage {
 	m.TargetCompID = target
 	m.MsgSeqNum = seqNum
 	m.SendingTime = time.Now().UTC().Format("20060102-15:04:05.000")
-	m.Fields[98] = "0"  // EncryptMethod
+	m.Fields[98] = "0"   // EncryptMethod
 	m.Fields[108] = "30" // HeartBtInt
 	return m
 }
@@ -143,14 +143,14 @@ func NewOrderSingle(sender, target string, seqNum int, clOrdID, symbol, side, or
 	m.TargetCompID = target
 	m.MsgSeqNum = seqNum
 	m.SendingTime = time.Now().UTC().Format("20060102-15:04:05.000")
-	m.Fields[11] = clOrdID         // ClOrdID
-	m.Fields[55] = symbol          // Symbol
-	m.Fields[54] = side            // Side (1=Buy, 2=Sell)
-	m.Fields[40] = ordType         // OrdType (1=Market, 2=Limit)
+	m.Fields[11] = clOrdID                       // ClOrdID
+	m.Fields[55] = symbol                        // Symbol
+	m.Fields[54] = side                          // Side (1=Buy, 2=Sell)
+	m.Fields[40] = ordType                       // OrdType (1=Market, 2=Limit)
 	m.Fields[38] = fmt.Sprintf("%.0f", orderQty) // OrderQty
 	m.Fields[44] = fmt.Sprintf("%.2f", price)    // Price
-	m.Fields[59] = timeInForce     // TimeInForce (0=Day, 1=GTC, etc.)
-	m.Fields[60] = m.SendingTime   // TransactTime
+	m.Fields[59] = timeInForce                   // TimeInForce (0=Day, 1=GTC, etc.)
+	m.Fields[60] = m.SendingTime                 // TransactTime
 	return m
 }
 
@@ -164,15 +164,15 @@ func ExecutionReport(sender, target string, seqNum int, clOrdID, orderID, execID
 	m.TargetCompID = target
 	m.MsgSeqNum = seqNum
 	m.SendingTime = time.Now().UTC().Format("20060102-15:04:05.000")
-	m.Fields[11] = clOrdID    // ClOrdID
-	m.Fields[37] = orderID    // OrderID
-	m.Fields[17] = execID     // ExecID
-	m.Fields[150] = execType  // ExecType (0=New, F=Fill, etc.)
-	m.Fields[39] = ordStatus  // OrdStatus (0=New, 2=Fill, etc.)
-	m.Fields[55] = symbol     // Symbol
-	m.Fields[54] = side       // Side
-	m.Fields[32] = fmt.Sprintf("%.0f", lastQty)  // LastQty
-	m.Fields[31] = fmt.Sprintf("%.2f", lastPx)   // LastPx
+	m.Fields[11] = clOrdID                         // ClOrdID
+	m.Fields[37] = orderID                         // OrderID
+	m.Fields[17] = execID                          // ExecID
+	m.Fields[150] = execType                       // ExecType (0=New, F=Fill, etc.)
+	m.Fields[39] = ordStatus                       // OrdStatus (0=New, 2=Fill, etc.)
+	m.Fields[55] = symbol                          // Symbol
+	m.Fields[54] = side                            // Side
+	m.Fields[32] = fmt.Sprintf("%.0f", lastQty)    // LastQty
+	m.Fields[31] = fmt.Sprintf("%.2f", lastPx)     // LastPx
 	m.Fields[151] = fmt.Sprintf("%.0f", leavesQty) // LeavesQty
 	return m
 }
@@ -184,21 +184,21 @@ type LogonCallback func()
 type DisconnectCallback func(error)
 
 type FixEngine struct {
-	mu              sync.Mutex
-	conn            net.Conn
-	reader          *bufio.Reader
-	connected       bool
-	stopped         atomic.Bool
-	targetHost      string
-	targetPort      int
-	senderCompID    string
-	targetCompID    string
-	seqNum          int
-	heartBtInt      int
-	onExecReport    ExecutionReportCallback
-	onLogon         LogonCallback
-	onDisconnect    DisconnectCallback
-	logger          *slog.Logger
+	mu           sync.Mutex
+	conn         net.Conn
+	reader       *bufio.Reader
+	connected    bool
+	stopped      atomic.Bool
+	targetHost   string
+	targetPort   int
+	senderCompID string
+	targetCompID string
+	seqNum       int
+	heartBtInt   int
+	onExecReport ExecutionReportCallback
+	onLogon      LogonCallback
+	onDisconnect DisconnectCallback
+	logger       *slog.Logger
 }
 
 func NewFixEngine(senderCompID, targetCompID string) *FixEngine {

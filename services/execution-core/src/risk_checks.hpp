@@ -18,13 +18,13 @@ struct PositionRecord {
 
 class RiskEngine {
 public:
-    static constexpr uint32_t MAX_QTY = 1000000;
+    static constexpr int64_t MAX_QTY = 1000000 * 100000000LL;
     static constexpr uint64_t PRICE_COLLAR_BPS = 500;
     static constexpr uint64_t VELOCITY_WINDOW_NS = 1000000000ULL;
     static constexpr size_t MAX_VELOCITY = 100;
     static constexpr size_t VELOCITY_RING_SIZE = 512;
     static constexpr size_t POSITIONS_SIZE = 4096;
-    static constexpr int64_t POSITION_LIMIT = 100000;
+    static constexpr int64_t POSITION_LIMIT = 100000 * 100000000LL;
     static constexpr uint64_t DUPLICATE_WINDOW_NS = 1000000ULL;
 
     RiskEngine() : velocity_head_(0), kill_switch_active_(false), circuit_breaker_tripped_(false) {
@@ -47,7 +47,7 @@ public:
         }
     }
 
-    void update_reference_price(uint32_t instrument_id, uint32_t price) {
+    void update_reference_price(uint32_t instrument_id, int64_t price) {
         last_trade_prices_[instrument_id & 4095] = price;
     }
 
@@ -68,11 +68,11 @@ public:
         }
         {
             size_t slot = order.instrument_id & 4095;
-            uint64_t last = last_trade_prices_[slot];
+            int64_t last = last_trade_prices_[slot];
             if (last > 0) {
-                uint64_t p = order.price;
-                uint64_t min_p = (last * 95) / 100;
-                uint64_t max_p = (last * 105) / 100;
+                int64_t p = order.price;
+                int64_t min_p = (last * 95) / 100;
+                int64_t max_p = (last * 105) / 100;
                 if (p < min_p || p > max_p) { err_msg = "price_collar"; return false; }
             }
         }
@@ -118,7 +118,7 @@ private:
     std::vector<uint64_t> velocity_ring_;
     size_t velocity_head_;
     uint32_t restricted_symbols_[128];
-    uint64_t last_trade_prices_[4096];
+    int64_t last_trade_prices_[4096];
     bool kill_switch_active_;
     bool circuit_breaker_tripped_;
 };

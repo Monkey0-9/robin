@@ -31,7 +31,7 @@ func TestDeterministicReplay(t *testing.T) {
 	orch := NewOrchestrator()
 	orch.matchClient = nil // Force simulated fills
 	server := orch.setupHTTPServer(0)
-	
+
 	traderToken := generateTestToken("trader")
 	adminToken := generateTestToken("admin")
 
