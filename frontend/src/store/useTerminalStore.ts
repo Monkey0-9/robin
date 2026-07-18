@@ -56,6 +56,10 @@ interface TerminalState {
   balance: number;
   equity: number;
   marginUtilization: number;
+  routingMode: string;
+  screenerAssets: any[];
+  heatmapSectors: any[];
+  sorQuotes: any[];
   
   orderBook: {
     bids: OrderBookLevel[];
@@ -70,6 +74,10 @@ interface TerminalState {
   showNotification: (msg: string, type: 'success' | 'error' | 'info') => void;
   submitOrder: (symbol: string, side: 'BUY' | 'SELL', price: number, size: number, isMarket: boolean) => void;
   setSelectedSymbol: (symbol: string) => void;
+  setRoutingMode: (mode: string) => void;
+  fetchScreenerData: () => Promise<void>;
+  fetchHeatmapData: () => Promise<void>;
+  fetchSorPrices: (symbol: string) => Promise<void>;
 }
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:8080';
@@ -129,7 +137,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   assets: [
     { symbol: 'BTC/USD', name: 'Bitcoin / US Dollar', currentPrice: 64500.50, dailyChangePct: 2.4, type: 'crypto' },
     { symbol: 'ETH/USD', name: 'Ethereum / US Dollar', currentPrice: 3450.20, dailyChangePct: -1.2, type: 'crypto' },
+    { symbol: 'SOL/USD', name: 'Solana / US Dollar', currentPrice: 145.00, dailyChangePct: 5.7, type: 'crypto' },
     { symbol: 'AAPL', name: 'Apple Inc.', currentPrice: 185.30, dailyChangePct: 0.5, type: 'equity' },
+    { symbol: 'MSFT', name: 'Microsoft Corp.', currentPrice: 420.00, dailyChangePct: -0.3, type: 'equity' },
+    { symbol: 'TSLA', name: 'Tesla Inc.', currentPrice: 175.00, dailyChangePct: -1.8, type: 'equity' },
+    { symbol: 'NVDA', name: 'NVIDIA Corp.', currentPrice: 120.00, dailyChangePct: 4.1, type: 'equity' },
     { symbol: 'EUR/USD', name: 'Euro / US Dollar', currentPrice: 1.0850, dailyChangePct: 0.1, type: 'fx' },
   ],
   selectedSymbol: 'BTC/USD',
@@ -140,6 +152,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   balance: 100000,
   equity: 100000,
   marginUtilization: 0,
+  routingMode: 'AUTO',
+  screenerAssets: [],
+  heatmapSectors: [],
+  sorQuotes: [],
 
   orderBook: { bids: [], asks: [] },
   systemHealth: { healthy: 0, degraded: 0, failed: 0, latencyNs: 65000 },
@@ -232,40 +248,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
     connect();
 
-    // Simulate live ticking data as fallback when WebSocket is disconnected
-    setInterval(() => {
-      if (!wsConnected) {
-        set((state) => {
-          const { assets: newAssets, orderBook } = simulatePrice(
-            state.assets, state.selectedSymbol, state.orderBook
-          );
-
-          let totalUnrealized = 0;
-          let totalMargin = 0;
-          const newPositions = state.positions.map(p => {
-            const currentAsset = newAssets.find(a => a.symbol === p.symbol);
-            const currentPrice = currentAsset ? currentAsset.currentPrice : p.entryPrice;
-            const pnl = p.side === 'LONG'
-              ? (currentPrice - p.entryPrice) * p.size
-              : (p.entryPrice - currentPrice) * p.size;
-            totalUnrealized += pnl;
-            totalMargin += p.marginRequired;
-            return { ...p, unrealizedPnL: pnl };
-          });
-
-          const newEquity = state.balance + totalUnrealized;
-          const marginUtil = newEquity > 0 ? (totalMargin / newEquity) * 100 : 0;
-
-          return {
-            assets: newAssets,
-            positions: newPositions,
-            equity: newEquity,
-            marginUtilization: marginUtil,
-            orderBook,
-          };
-        });
-      }
-    }, 500);
+    // Price ticking fallback removed to preserve real-time data integrity.
 
     // Poll the Go Gateway
     setInterval(async () => {
@@ -289,6 +272,26 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       } catch (e) {
         set({ systemHealth: { healthy: 0, degraded: 0, failed: 5, latencyNs: 0 } });
       }
+    }, 2000);
+
+    // Initial triggers for screener, heatmap, and quotes
+    get().fetchScreenerData();
+    get().fetchHeatmapData();
+    get().fetchSorPrices(get().selectedSymbol);
+
+    // Fetch screener data every 5 seconds
+    setInterval(() => {
+      get().fetchScreenerData();
+    }, 5000);
+
+    // Fetch heatmap data every 10 seconds
+    setInterval(() => {
+      get().fetchHeatmapData();
+    }, 10000);
+
+    // Fetch SOR prices every 2 seconds
+    setInterval(() => {
+      get().fetchSorPrices(get().selectedSymbol);
     }, 2000);
   },
 
@@ -317,6 +320,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
           qty: size,
           order_type: isMarket ? 'MARKET' : 'LIMIT',
           cl_ord_id: clOrdId,
+          exchange: state.routingMode,
         }),
         signal: AbortSignal.timeout(3000),
       });
@@ -324,6 +328,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       if (res.ok) {
         const fill = await res.json();
         const fillPrice = fill.fill_price ?? price;
+        const routedExchange = fill.routed_exchange || 'Robin Pools';
+        const priceImprovement = fill.price_improvement_bps || 0.0;
+
         set((s) => {
           const newPosition = {
             id: fill.exec_id ?? clOrdId,
@@ -333,6 +340,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             entryPrice: fillPrice,
             marginRequired,
             unrealizedPnL: 0,
+            routedExchange,
           };
           const newTrade = {
             id: fill.exec_id ?? clOrdId,
@@ -342,9 +350,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             price: fillPrice,
             realizedPnL: 0,
             timestamp: new Date(),
+            routedExchange,
+            priceImprovement,
           };
           s.showNotification(
-            `Order FILLED via Gateway: ${side} ${size} ${symbol} @ $${fillPrice.toFixed(2)}`,
+            `Order FILLED via ${routedExchange}: ${side} ${size} ${symbol} @ $${fillPrice.toFixed(2)} (+${priceImprovement.toFixed(1)}bps saved)`,
             'success'
           );
           return {
@@ -355,40 +365,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         });
         return;
       }
-    } catch {
-      // Gateway unreachable — fall back to local simulation
+    } catch (e) {
+      state.showNotification('Order Execution Failed: Gateway Offline / Server Unreachable', 'error');
     }
-
-    // Local simulation fallback (gateway offline)
-    set((s) => {
-      const newPosition = {
-        id: clOrdId,
-        symbol,
-        side: (side === 'BUY' ? 'LONG' : 'SHORT') as 'LONG' | 'SHORT',
-        size,
-        entryPrice: price,
-        marginRequired,
-        unrealizedPnL: 0,
-      };
-      const newTrade = {
-        id: clOrdId,
-        symbol,
-        side: side as 'BUY' | 'SELL',
-        qty: size,
-        price,
-        realizedPnL: 0,
-        timestamp: new Date(),
-      };
-      s.showNotification(
-        `Order FILLED (sim): ${side} ${size} ${symbol} @ $${price.toFixed(2)}`,
-        'success'
-      );
-      return {
-        balance: s.balance - marginRequired,
-        positions: [...s.positions, newPosition],
-        tradeHistory: [newTrade, ...s.tradeHistory],
-      };
-    });
   },
 
   dismissNotification: () => set({ notification: null }),
@@ -399,10 +378,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       get().showNotification('No trades to export', 'info');
       return;
     }
-    const header = 'ID,Symbol,Side,Qty,Price,RealizedPnL,Timestamp\n';
+    const header = 'ID,Symbol,Side,Qty,Price,RealizedPnL,Timestamp,RoutedExchange,PriceImprovementBps\n';
     const rows = tradeHistory
-      .map((t) =>
-        [t.id, t.symbol, t.side, t.qty, t.price, t.realizedPnL, t.timestamp.toISOString()].join(',')
+      .map((t: any) =>
+        [t.id, t.symbol, t.side, t.qty, t.price, t.realizedPnL, t.timestamp.toISOString(), t.routedExchange || '', t.priceImprovement || 0].join(',')
       )
       .join('\n');
     const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
@@ -418,5 +397,47 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   },
 
   showNotification: (message, type) => set({ notification: { message, type } }),
-  setSelectedSymbol: (symbol) => set({ selectedSymbol: symbol }),
+  setSelectedSymbol: (symbol) => {
+    set({ selectedSymbol: symbol });
+    get().fetchSorPrices(symbol);
+  },
+
+  setRoutingMode: (mode) => set({ routingMode: mode }),
+
+  fetchScreenerData: async () => {
+    try {
+      const res = await fetch(`${GATEWAY_URL}/api/screener`);
+      if (res.ok) {
+        const data = await res.json();
+        set({ screenerAssets: data });
+      }
+    } catch (e) {
+      console.error("Failed to fetch screener data", e);
+    }
+  },
+
+  fetchHeatmapData: async () => {
+    try {
+      const res = await fetch(`${GATEWAY_URL}/api/heatmap`);
+      if (res.ok) {
+        const data = await res.json();
+        set({ heatmapSectors: data });
+      }
+    } catch (e) {
+      console.error("Failed to fetch heatmap data", e);
+    }
+  },
+
+  fetchSorPrices: async (symbol) => {
+    try {
+      const res = await fetch(`${GATEWAY_URL}/api/sor/prices?symbol=${encodeURIComponent(symbol)}`);
+      if (res.ok) {
+        const data = await res.json();
+        set({ sorQuotes: data });
+      }
+    } catch (e) {
+      console.error("Failed to fetch SOR prices", e);
+    }
+  },
 }));
+

@@ -182,6 +182,7 @@ type OrderRequest struct {
 	Qty         float64 `json:"qty"`
 	OrderType   string  `json:"order_type"` // LIMIT or MARKET
 	ClientOrdID string  `json:"cl_ord_id"`
+	Exchange    string  `json:"exchange"` // AUTO (Best Price) or specific exchange
 }
 
 type Orchestrator struct {
@@ -693,7 +694,18 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			orderType = "MARKET"
 		}
 
-		fillPrice := orderReq.Price
+		// Run SOR selection
+		prefExchange := orderReq.Exchange
+		if prefExchange == "" {
+			prefExchange = "AUTO"
+		}
+		routing := RouteOrder(orderReq.Symbol, orderReq.Side, orderReq.Price, prefExchange)
+
+		fillPrice := routing.FillPrice
+		routedExchange := routing.RoutedExchange
+		priceImprovement := routing.PriceImprovementBps
+		exchangesSearched := routing.ExchangesSearched
+
 		var fillQty float64
 		status := "FILLED"
 		engineUsed := false
@@ -703,7 +715,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		if o.matchClient != nil && o.matchClient.IsEnabled() {
 			matchJSON := fmt.Sprintf(
 				`{"id":%d,"instrument_id":%d,"price":%.0f,"qty":%.0f,"side":"%s","type":"%s"}`,
-				orderID, instID, orderReq.Price*100000000, orderReq.Qty*100000000, side, orderType,
+				orderID, instID, fillPrice*100000000, orderReq.Qty*100000000, side, orderType,
 			)
 			resp, err := o.matchClient.SendOrderJSON(matchJSON)
 			if err == nil {
@@ -729,14 +741,6 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 
 		// Fallback: simulated fill
 		if !engineUsed {
-			if orderReq.OrderType == "MARKET" || fillPrice == 0 {
-				slippage := orderReq.Price * 0.00005
-				if orderReq.Side == "BUY" {
-					fillPrice = orderReq.Price + slippage
-				} else {
-					fillPrice = orderReq.Price - slippage
-				}
-			}
 			fillQty = orderReq.Qty
 		}
 
@@ -843,15 +847,19 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		respPayload := map[string]interface{}{
-			"status":     status,
-			"exec_id":    execID,
-			"cl_ord_id":  orderReq.ClientOrdID,
-			"symbol":     orderReq.Symbol,
-			"side":       orderReq.Side,
-			"qty":        fillQty,
-			"fill_price": fillPrice,
-			"latency_ns": latencyNs,
-			"engine":     engineUsed,
+			"status":                 status,
+			"exec_id":                execID,
+			"cl_ord_id":              orderReq.ClientOrdID,
+			"symbol":                 orderReq.Symbol,
+			"side":                   orderReq.Side,
+			"qty":                    fillQty,
+			"fill_price":             fillPrice,
+			"latency_ns":             latencyNs,
+			"engine":                 engineUsed,
+			"routed_exchange":        routedExchange,
+			"price_improvement_bps":  priceImprovement,
+			"exchanges_searched":     exchangesSearched,
+			"execution_summary":      fmt.Sprintf("Routed via %s (%d exchanges searched, +%.1fbps savings)", routedExchange, exchangesSearched, priceImprovement),
 		}
 		if engineError != "" {
 			respPayload["error"] = engineError
@@ -1020,6 +1028,141 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.WriteHeader(proxyResp.StatusCode)
 		io.Copy(w, proxyResp.Body)
 	})))).Methods("POST")
+
+	// GET /api/ai/macro_feed — Fetch real-time macro news feed from python agent
+	r.HandleFunc("/api/ai/macro_feed", func(w http.ResponseWriter, req *http.Request) {
+		proxyReq, err := http.NewRequest("GET", "http://127.0.0.1:8000/macro_news", nil)
+		if err != nil {
+			http.Error(w, `{"error":"failed to create proxy request"}`, http.StatusInternalServerError)
+			return
+		}
+		client := &http.Client{Timeout: 5 * time.Second}
+		proxyResp, err := client.Do(proxyReq)
+		if err != nil {
+			http.Error(w, `{"error":"failed to reach python ai-agent"}`, http.StatusBadGateway)
+			return
+		}
+		defer proxyResp.Body.Close()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.WriteHeader(proxyResp.StatusCode)
+		io.Copy(w, proxyResp.Body)
+	}).Methods("GET")
+
+	// GET /api/sor/prices — Fetch real-time simulated prices across major exchanges
+	r.HandleFunc("/api/sor/prices", func(w http.ResponseWriter, req *http.Request) {
+		symbol := req.URL.Query().Get("symbol")
+		if symbol == "" {
+			symbol = "BTC/USD"
+		}
+
+		basePrice := 64500.0
+		switch symbol {
+		case "BTC/USD":
+			basePrice = 64500.0
+		case "ETH/USD":
+			basePrice = 3450.0
+		case "SOL/USD":
+			basePrice = 145.0
+		case "AAPL":
+			basePrice = 185.30
+		case "MSFT":
+			basePrice = 420.0
+		case "TSLA":
+			basePrice = 175.0
+		case "NVDA":
+			basePrice = 120.0
+		case "EUR/USD":
+			basePrice = 1.0850
+		}
+
+		quotes := GenerateQuotes(symbol, basePrice)
+		displayExchanges := []string{"NYSE", "NASDAQ", "LSE", "Xetra", "Tradegate"}
+		var result []ExchangeQuote
+		for _, name := range displayExchanges {
+			for _, q := range quotes {
+				if q.Exchange == name {
+					result = append(result, q)
+					break
+				}
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(result)
+	}).Methods("GET")
+
+	// GET /api/screener — Fetch assets list with screener metrics
+	r.HandleFunc("/api/screener", func(w http.ResponseWriter, req *http.Request) {
+		type ScreenerAsset struct {
+			Symbol        string  `json:"symbol"`
+			Name          string  `json:"name"`
+			AssetClass    string  `json:"asset_class"`
+			Price         float64 `json:"price"`
+			MarketCapBill float64 `json:"market_cap_bill"`
+			PeRatio       float64 `json:"pe_ratio"`
+			DivYield      float64 `json:"div_yield"`
+			Country       string  `json:"country"`
+		}
+		assets := []ScreenerAsset{
+			{"BTC/USD", "Bitcoin", "Crypto", 64500.5, 1260.5, 0.0, 0.0, "Global"},
+			{"ETH/USD", "Ethereum", "Crypto", 3450.2, 412.3, 0.0, 0.0, "Global"},
+			{"SOL/USD", "Solana", "Crypto", 145.0, 62.8, 0.0, 0.0, "Global"},
+			{"AAPL", "Apple Inc.", "Equities", 185.30, 2890.0, 28.5, 0.52, "US"},
+			{"MSFT", "Microsoft Corp.", "Equities", 420.0, 3120.0, 35.2, 0.71, "US"},
+			{"TSLA", "Tesla Inc.", "Equities", 175.0, 560.0, 60.1, 0.0, "US"},
+			{"NVDA", "NVIDIA Corp.", "Equities", 120.0, 2980.0, 72.4, 0.03, "US"},
+			{"EUR/USD", "Euro / US Dollar", "FX", 1.0850, 0.0, 0.0, 0.0, "EU"},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(assets)
+	}).Methods("GET")
+
+	// GET /api/heatmap — Fetch sector-wise daily change heatmap data
+	r.HandleFunc("/api/heatmap", func(w http.ResponseWriter, req *http.Request) {
+		type HeatmapNode struct {
+			Name   string  `json:"name"`
+			Value  float64 `json:"value"`
+			Change float64 `json:"change"`
+		}
+		type HeatmapSector struct {
+			SectorName string        `json:"sector_name"`
+			Nodes      []HeatmapNode `json:"nodes"`
+		}
+		heatmap := []HeatmapSector{
+			{
+				SectorName: "Technology",
+				Nodes: []HeatmapNode{
+					{"AAPL", 2890.0, 0.52},
+					{"MSFT", 3120.0, -0.34},
+					{"NVDA", 2980.0, 4.12},
+				},
+			},
+			{
+				SectorName: "Automotive",
+				Nodes: []HeatmapNode{
+					{"TSLA", 560.0, -1.85},
+				},
+			},
+			{
+				SectorName: "Cryptocurrency",
+				Nodes: []HeatmapNode{
+					{"BTC/USD", 1260.5, 2.45},
+					{"ETH/USD", 412.3, -1.18},
+					{"SOL/USD", 62.8, 5.76},
+				},
+			},
+			{
+				SectorName: "Foreign Exchange",
+				Nodes: []HeatmapNode{
+					{"EUR/USD", 150.0, 0.08},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(heatmap)
+	}).Methods("GET")
 
 	// GET /api/alpaca/account — Fetch Alpaca account details (JWT Trader required)
 	r.Handle("/api/alpaca/account", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {

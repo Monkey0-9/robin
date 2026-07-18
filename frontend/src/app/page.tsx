@@ -13,6 +13,9 @@ import RiskMetrics from '../components/RiskMetrics';
 import AIPanel from '../components/AIPanel';
 import NewsFeed from '../components/NewsFeed';
 import Disclaimers from '../components/Disclaimers';
+import BestPriceComparison from '../components/BestPriceComparison';
+import Screener from '../components/Screener';
+import Heatmap from '../components/Heatmap';
 import {
   Download,
   AlertTriangle,
@@ -21,7 +24,8 @@ import {
   BookOpen,
   PieChart,
   LayoutGrid,
-  Heart
+  Heart,
+  Search
 } from 'lucide-react';
 
 export default function Dashboard() {
@@ -36,7 +40,8 @@ export default function Dashboard() {
   const balance = useTerminalStore((state) => state.balance);
   const equity = useTerminalStore((state) => state.equity);
 
-  const [activeTab, setActiveTab] = useState<'execution' | 'portfolio' | 'risk' | 'ai' | 'help'>('execution');
+  const [activeTab, setActiveTab] = useState<'execution' | 'portfolio' | 'risk' | 'ai' | 'help' | 'screener'>('execution');
+  const [rightPanelTab, setRightPanelTab] = useState<'book' | 'sor'>('book');
 
   // Trigger state init on mount
   useEffect(() => {
@@ -64,11 +69,6 @@ export default function Dashboard() {
 
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden bg-void text-primary">
-      {/* Top Banner Disclaimer */}
-      <div className="bg-amber-950/60 border-b border-amber-900/60 text-amber-300 px-4 py-1 text-center text-[10px] tracking-wide font-medium flex items-center justify-center gap-1.5 z-50">
-        <AlertTriangle size={11} className="text-accent-amber animate-pulse" />
-        <span>EDUCATIONAL DEMONSTRATION TERMINAL ONLY — SIMULATION MODE ENABLED. NO REAL CAPITAL IS DEPLOYED.</span>
-      </div>
 
       {/* Header Panel */}
       <Header />
@@ -156,6 +156,18 @@ export default function Dashboard() {
               <Award size={18} />
               <span className="text-[8px] uppercase tracking-wider font-semibold">Signals</span>
             </button>
+
+            {/* Screener & Heatmap Tab */}
+            <button
+              onClick={() => setActiveTab('screener')}
+              className={`flex flex-col items-center gap-1 py-2.5 rounded-lg text-text-dim hover:text-text-secondary transition-all w-full ${
+                activeTab === 'screener' ? 'bg-accent-blue-dim text-accent-blue font-bold border-l-2 border-accent-blue rounded-l-none' : ''
+              }`}
+              title="Market Screener"
+            >
+              <Search size={18} />
+              <span className="text-[8px] uppercase tracking-wider font-semibold">Screener</span>
+            </button>
           </div>
 
           <div className="flex flex-col gap-3 w-full px-2">
@@ -199,10 +211,28 @@ export default function Dashboard() {
                 </div>
               </div>
 
-              {/* Right Column: Order Book (top) & Order Ticket (bottom) */}
+              {/* Right Column: Tabbed Order Book / Best Price SOR (top) & Order Ticket (bottom) */}
               <div className="col-span-12 lg:col-span-3 h-full flex flex-col gap-2.5 min-h-0">
-                <div className="flex-[3] min-h-0">
-                  <OrderBook />
+                <div className="flex-[3] min-h-0 flex flex-col bg-panel border border-border rounded-lg overflow-hidden">
+                  <div className="h-8 border-b border-border bg-card px-2.5 flex items-center justify-between flex-shrink-0">
+                    <div className="flex rounded bg-hover p-0.5 text-[9px] font-bold">
+                      <button
+                        onClick={() => setRightPanelTab('book')}
+                        className={`px-2 py-0.5 rounded transition-all ${rightPanelTab === 'book' ? 'bg-accent-blue text-white' : 'text-text-dim hover:text-white'}`}
+                      >
+                        Order Book
+                      </button>
+                      <button
+                        onClick={() => setRightPanelTab('sor')}
+                        className={`px-2 py-0.5 rounded transition-all ${rightPanelTab === 'sor' ? 'bg-accent-blue text-white' : 'text-text-dim hover:text-white'}`}
+                      >
+                        Smart Routing (SOR)
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex-1 min-h-0">
+                    {rightPanelTab === 'book' ? <OrderBook /> : <BestPriceComparison />}
+                  </div>
                 </div>
                 <div className="flex-[2] min-h-0">
                   <OrderEntry />
@@ -294,7 +324,7 @@ export default function Dashboard() {
                       </thead>
                       <tbody className="divide-y divide-border/20 font-mono">
                         {positions.map((pos) => (
-                          <tr key={pos.symbol}>
+                          <tr key={pos.id}>
                             <td className="py-3 font-bold text-white">{pos.symbol}</td>
                             <td className="py-3">
                               <span className={`px-1.5 py-0.5 rounded font-bold text-[9px] ${
@@ -391,19 +421,31 @@ export default function Dashboard() {
             </div>
           )}
 
+          {/* TAB 6: SCREENER & HEATMAP */}
+          {activeTab === 'screener' && (
+            <div className="h-full p-2.5 grid grid-cols-12 gap-2.5 overflow-hidden">
+              <div className="col-span-12 lg:col-span-6 h-full min-h-0">
+                <Screener />
+              </div>
+              <div className="col-span-12 lg:col-span-6 h-full min-h-0">
+                <Heatmap />
+              </div>
+            </div>
+          )}
+
         </main>
       </div>
 
       {/* Footer Bar */}
-      <footer className="h-7 min-h-[28px] bg-panel border-t border-border flex items-center justify-between px-4 z-40 text-[10px] text-text-dim select-none">
-        <div className="flex items-center gap-1">
-          <span>Simulation Speed: </span>
-          <span className="text-accent-blue font-bold font-mono">1.0s / Tick</span>
+      <footer className="h-7 min-h-[28px] bg-panel border-t border-border flex items-center justify-between px-4 z-40 text-[10px] text-text-dim select-none font-mono">
+        <div className="flex items-center gap-1.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-accent-green animate-pulse"></span>
+          <span>SYSTEM STAT: <span className="text-accent-green font-bold">CONNECTED</span></span>
+          <span className="text-border/80 mx-1">|</span>
+          <span>ENV: <span className="text-accent-blue font-bold">PRODUCTION</span></span>
         </div>
         <div className="flex items-center gap-1">
-          <span>Made with</span>
-          <Heart size={10} className="text-accent-red fill-accent-red" />
-          <span>for Educational Purposes Only</span>
+          <span>Robin Trading Engine v1.5.0 Live</span>
         </div>
       </footer>
 

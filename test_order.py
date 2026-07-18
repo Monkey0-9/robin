@@ -13,7 +13,8 @@ token = jwt.encode({
     "role": "trader"
 }, secret, algorithm="HS256")
 
-url = "http://localhost:8080/order"
+port = os.environ.get("ORCH_PORT", "8080")
+url = f"http://localhost:{port}/order"
 order_data = {
     "symbol": "BTC/USD",
     "side": "BUY",

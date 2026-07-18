@@ -33,7 +33,7 @@ export default function Header() {
         </div>
         <div className='flex items-center gap-2 px-3 py-1.5 rounded-md bg-hover border border-border text-text-secondary'>
           <User size={14} className='text-accent-blue' />
-          <span>Demo User</span>
+          <span>Trader Account</span>
         </div>
       </div>
     </header>

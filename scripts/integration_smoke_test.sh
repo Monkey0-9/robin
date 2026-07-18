@@ -79,8 +79,9 @@ fi
 # ============================================================================
 # Start orchestrator
 # ============================================================================
-log "Starting orchestrator on :18080..."
-ROBIN_GATEWAY_API_TOKEN="smoke-test-secret" ORCH_PORT=18080 "$ORCH_BIN" > /tmp/orch.log 2>&1 &
+export ROBIN_GATEWAY_API_TOKEN="smoke-test-secret"
+export ORCH_PORT=18080
+"$ORCH_BIN" > /tmp/orch.log 2>&1 &
 PIDS+=($!)
 sleep 1
 

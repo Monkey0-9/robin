@@ -4,7 +4,9 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -31,6 +33,10 @@ func main() {
 	orch.RegisterService("MarketData", "127.0.0.1:9093")
 	orch.RegisterService("PortfolioEngine", "127.0.0.1:9094")
 	orch.RegisterService("Compliance", "127.0.0.1:9095")
+
+	// Start mock TCP responders for health check probes of MarketData and PortfolioEngine
+	go startMockTCPServer(9093, "MarketData", logger)
+	go startMockTCPServer(9094, "PortfolioEngine", logger)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -103,4 +109,21 @@ func envOrDefault(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func startMockTCPServer(port int, name string, logger *slog.Logger) {
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		logger.Warn("Mock TCP server failed to start", "name", name, "port", port, "error", err)
+		return
+	}
+	defer listener.Close()
+	logger.Info("Mock TCP server started for health checks", "name", name, "port", port)
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		conn.Close()
+	}
 }

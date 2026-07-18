@@ -3,7 +3,7 @@ import { Send } from 'lucide-react';
 import { useTerminalStore } from '../store/useTerminalStore';
 
 export default function OrderEntry() {
-  const { selectedSymbol, assets, submitOrder, balance } = useTerminalStore();
+  const { selectedSymbol, assets, submitOrder, balance, routingMode, setRoutingMode } = useTerminalStore();
   const currentPrice = assets.find(a => a.symbol === selectedSymbol)?.currentPrice || 0;
   
   const [side, setSide] = useState<'BUY' | 'SELL'>('BUY');
@@ -42,6 +42,22 @@ export default function OrderEntry() {
           <div className='flex flex-col gap-1'>
             <label className='text-[10px] text-text-dim uppercase'>Size</label>
             <input type='number' step='0.1' className='bg-card border border-border rounded px-2 py-1.5 text-sm font-mono text-white focus:outline-none focus:border-accent-blue' value={sizeStr} onChange={e => setSizeStr(e.target.value)} />
+          </div>
+          <div className='flex flex-col gap-1'>
+            <label className='text-[10px] text-text-dim uppercase'>Exchange Routing</label>
+            <select
+              value={routingMode}
+              onChange={e => setRoutingMode(e.target.value)}
+              className='bg-card border border-border rounded px-2 py-1.5 text-xs font-mono text-white focus:outline-none focus:border-accent-blue cursor-pointer'
+            >
+              <option value="AUTO">Best Price (Auto-Route)</option>
+              <option value="NYSE">NYSE</option>
+              <option value="NASDAQ">NASDAQ</option>
+              <option value="Xetra">Xetra</option>
+              <option value="Tradegate">Tradegate</option>
+              <option value="LSE">LSE</option>
+              <option value="Robin Pools">Robin Pools (Dark Pool)</option>
+            </select>
           </div>
         </div>
         <div className='mt-auto space-y-2'>

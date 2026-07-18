@@ -20,7 +20,7 @@ cd ..\..
 
 echo [3/8] Starting Go Meta-Agent Gateway...
 cd services\gateway
-start "Robin Go Meta-Agent" cmd /c "go run orchestrator.go main.go auth.go config.go tracing.go websocket.go fix_gateway.go ai_prompt.go"
+start "Robin Go Meta-Agent" cmd /c "go run ."
 cd ..\..
 
 echo [4/4] Starting Unified Python AI Agent...
