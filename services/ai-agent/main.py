@@ -145,62 +145,79 @@ async def get_macro_news():
     import xml.etree.ElementTree as ET
     import email.utils
     from datetime import datetime, timezone
-    try:
-        url = "https://finance.yahoo.com/news/rssindex"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as response:
-            xml_data = response.read()
-        
-        root = ET.fromstring(xml_data)
-        raw_items = []
-        for item in root.findall(".//item"):
-            title = item.find("title").text if item.find("title") is not None else ""
-            pub_date_str = item.find("pubDate").text if item.find("pubDate") is not None else ""
+    
+    urls = [
+        "https://finance.yahoo.com/news/rssindex",
+        "https://www.cnbc.com/id/10001147/device/rss/rss.html",
+        "https://www.cnbc.com/id/100003114/device/rss/rss.html"
+    ]
+    
+    raw_items = []
+    seen_titles = set()
+    
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=4) as response:
+                xml_data = response.read()
             
-            dt = None
-            if pub_date_str:
-                try:
-                    dt = email.utils.parsedate_to_datetime(pub_date_str)
-                except Exception:
-                    pass
-            if not dt:
-                dt = datetime.now(timezone.utc)
-            raw_items.append((dt, title))
-            
-        # Sort by date descending (newest first)
-        raw_items.sort(key=lambda x: x[0], reverse=True)
-        
-        now = datetime.now(timezone.utc)
-        news_items = []
-        for dt, title in raw_items[:15]:
-            diff = now.date() - dt.date()
-            if diff.days == 0:
-                date_label = "Today"
-            elif diff.days == 1:
-                date_label = "Yesterday"
-            else:
-                date_label = dt.strftime("%b %d")
+            root = ET.fromstring(xml_data)
+            for item in root.findall(".//item"):
+                title = item.find("title").text if item.find("title") is not None else ""
+                pub_date_str = item.find("pubDate").text if item.find("pubDate") is not None else ""
                 
-            time_str = f"{date_label}, {dt.strftime('%H:%M')}"
+                if not title:
+                    continue
+                    
+                norm_title = title.strip().lower()
+                if norm_title in seen_titles:
+                    continue
+                seen_titles.add(norm_title)
+                
+                dt = None
+                if pub_date_str:
+                    try:
+                        dt = email.utils.parsedate_to_datetime(pub_date_str)
+                    except Exception:
+                        pass
+                if not dt:
+                    dt = datetime.now(timezone.utc)
+                raw_items.append((dt, title))
+        except Exception:
+            continue
             
+    raw_items.sort(key=lambda x: x[0], reverse=True)
+    
+    now = datetime.now(timezone.utc)
+    news_items = []
+    for dt, title in raw_items[:25]:
+        diff = now.date() - dt.date()
+        if diff.days == 0:
+            date_label = "Today"
+        elif diff.days == 1:
+            date_label = "Yesterday"
+        else:
+            date_label = dt.strftime("%b %d")
+            
+        time_str = f"{date_label}, {dt.strftime('%H:%M')}"
+        
+        impact = "medium"
+        lowered_title = title.lower()
+        if any(w in lowered_title for w in ["fed", "rate", "inflation", "cpi", "gdp", "ecb", "powell", "hike", "cut", "central bank"]):
+            impact = "high"
+        elif any(w in lowered_title for w in ["stock", "market", "trade", "dollar", "crypto", "nasdaq", "dow", "s&p"]):
             impact = "medium"
-            lowered_title = title.lower()
-            if any(w in lowered_title for w in ["fed", "rate", "inflation", "cpi", "gdp", "ecb", "powell", "hike", "cut"]):
-                impact = "high"
-            elif any(w in lowered_title for w in ["stock", "market", "trade", "dollar", "crypto"]):
-                impact = "medium"
-            else:
-                impact = "low"
-                
-            news_items.append({
-                "time": time_str,
-                "text": title,
-                "impact": impact
-            })
-        if len(news_items) > 0:
-            return news_items
-    except Exception:
-        pass
+        else:
+            impact = "low"
+            
+        news_items.append({
+            "time": time_str,
+            "text": title,
+            "impact": impact
+        })
+        
+    if len(news_items) > 0:
+        return news_items
         
     return [
         { "time": "Today, 10:42", "text": "Fed Chairman leaves rates unchanged, cites persistent inflation metrics.", "impact": "high" },
