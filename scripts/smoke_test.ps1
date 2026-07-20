@@ -16,12 +16,15 @@ Write-Host "[TEST] Starting risk-analytics on :9092..."
 Start-Process -FilePath ".\target\release\robin-risk-daemon.exe" -RedirectStandardOutput "risk_out.log" -RedirectStandardError "risk_err.log" -NoNewWindow
 
 Write-Host "[TEST] Starting orchestrator on :18080..."
-if (-not $env:ROBIN_GATEWAY_API_TOKEN) {
-    Write-Error "ROBIN_GATEWAY_API_TOKEN environment variable must be set"
-    exit 1
+if (-not $env:ROBIN_JWT_PUBKEY_FILE) {
+    $env:ROBIN_JWT_PUBKEY_FILE = ".\config\keys\public.pem"
 }
+$env:ORCH_MTLS_ENABLED="1"
+$env:ORCH_TLS_CERT=".\config\certs\server.crt"
+$env:ORCH_TLS_KEY=".\config\certs\server.key"
+$env:ORCH_CA_CERT=".\config\certs\ca.crt"
 $env:ORCH_PORT="18080"
-Start-Process -FilePath ".\build\orchestrator.exe" -RedirectStandardOutput "orch_out.log" -RedirectStandardError "orch_err.log" -NoNewWindow
+Start-Process -FilePath ".\services\gateway\build\orchestrator.exe" -RedirectStandardOutput "orch_out.log" -RedirectStandardError "orch_err.log" -NoNewWindow
 
 Write-Host "[TEST] Waiting for services to start..."
 Start-Sleep -Seconds 5
