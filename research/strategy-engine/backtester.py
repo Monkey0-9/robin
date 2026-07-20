@@ -189,7 +189,8 @@ def run_backtest_with_yfinance(
     signal_threshold: float = 0.05,
 ):
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    _yf_mod = _import_from_path("yfinance_fetcher", os.path.join(root, "data-ingestion", "market", "yfinance_fetcher.py"))
+    services_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "services"))
+    _yf_mod = _import_from_path("yfinance_fetcher", os.path.join(services_dir, "data-ingestion", "market", "yfinance_fetcher.py"))
     YFinanceFetcher = _yf_mod.YFinanceFetcher
     _sm_mod = _import_from_path("robin_signal_model", os.path.join(root, "ai-engine", "robin_signal_model.py"))
     RobinSignalModel = _sm_mod.RobinSignalModel
