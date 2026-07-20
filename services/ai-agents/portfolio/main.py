@@ -8,5 +8,5 @@ def health():
     return {"status": "online", "agent": "portfolio"}
 
 if __name__ == "__main__":
-    print(f"Starting portfolio on port 8003...")
+    print("Starting portfolio on port 8003...")
     uvicorn.run(app, host="0.0.0.0", port=8003)

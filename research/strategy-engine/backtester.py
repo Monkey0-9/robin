@@ -10,6 +10,9 @@ Realistic backtester with:
 NOTE: This is a research tool only. It does NOT constitute investment advice.
       Simulated results are NOT indicative of future performance.
 """
+import os
+import sys
+import asyncio
 import numpy as np
 from typing import List, Optional
 from dataclasses import dataclass, field
@@ -168,7 +171,8 @@ class StrategyBacktester:
 
 
 def _import_from_path(module_name, file_path):
-    import importlib.util, sys
+    import importlib.util
+    import sys
     spec = importlib.util.spec_from_file_location(module_name, file_path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = mod
@@ -201,7 +205,7 @@ def run_backtest_with_yfinance(
 
     df = data[symbol]
     prices = df["close"].values
-    volumes = df["volume"].values
+    # volumes = df["volume"].values
 
     model_inputs = YFinanceFetcher.build_model_inputs(df)
     price_w = model_inputs["price_features"]
@@ -253,16 +257,107 @@ def run_backtest_with_yfinance(
     return result
 
 
+def run_backtest_with_100yr_parquet(
+    symbol: str = "BTC/USD",
+    initial_capital: float = 1_000_000.0,
+    commission_bps: float = 2.0,
+    impact_bps: float = 5.0,
+    adv_usd: float = 50_000_000.0,
+):
+    ai_agent_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "services", "ai-agent")
+    )
+    sys.path.insert(0, ai_agent_path)
+    from data_engine import DataEngine
+    from orchestrator import HardwareConstrainedOrchestrator
+
+    engine = DataEngine(symbols=[symbol])
+    try:
+        df = engine.load_dataset(symbol)
+    except FileNotFoundError:
+        print(f"Dataset for {symbol} not found. Generating 100-year dataset first...")
+        engine.generate_100_year_dataset()
+        df = engine.load_dataset(symbol)
+
+    prices = df["close"].values
+    macro_sentiments = df["macro_sentiment"].values
+
+    orchestrator = HardwareConstrainedOrchestrator()
+    signals = np.zeros(len(prices), dtype=np.int8)
+
+    print(f"Running 100-year backtest over {len(prices):,} trading days for {symbol}...")
+
+    # Step through historical data using sequential orchestrator logic
+    for i in range(0, len(prices), 10):  # Sample every 10 periods for high-performance backtest
+        curr_price = prices[i]
+        macro_sent = macro_sentiments[i]
+        market_summary = f"Price: {curr_price}, MacroSentiment: {macro_sent:.2f}"
+        headlines = [f"Market update for {symbol} at step {i}"]
+
+        sig = asyncio.run(
+            orchestrator.execute_sequential_pipeline(
+                market_summary, headlines, curr_price
+            )
+        )
+
+        if sig and sig.get("action") != "HOLD":
+            action = sig.get("action")
+            val = 1 if action == "BUY" else (-1 if action == "SELL" else 0)
+            signals[i : min(i + 10, len(prices))] = val
+
+    bt = StrategyBacktester(
+        initial_capital=initial_capital,
+        commission_bps=commission_bps,
+        slippage_model=SlippageModel(impact_bps=impact_bps, adv_usd=adv_usd),
+    )
+    result = bt.run_backtest(prices, signals)
+
+    print(f"\n {'='*58}")
+    print(f"  100-Year Backtest: {symbol} — Local AI Orchestrator")
+    print(f" {'='*58}")
+    print(f"  Capital:     ${result.final_capital:>14,.2f}")
+    print(f"  Return:      {result.total_return:>+14.2%}")
+    print(f"  Sharpe:      {result.sharpe_ratio:>14.3f}")
+    print(f"  Sortino:     {result.sortino_ratio:>14.3f}")
+    print(f"  Calmar:      {result.calmar_ratio:>14.3f}")
+    print(f"  Max DD:      {result.max_drawdown:>14.2%}")
+    print(f"  Trades:      {result.total_trades:>14d}")
+    print(f"  Commission:  ${result.total_commission:>14,.2f}")
+    print(f"  Slippage:    ${result.total_slippage:>14,.2f}")
+    print(f"  Total cost:  ${result.total_commission + result.total_slippage:>14,.2f}")
+    print(f" {'='*58}\n")
+
+    return result
+
+
 if __name__ == "__main__":
     import argparse
+
     parser = argparse.ArgumentParser(description="Robin Strategy Backtester")
-    parser.add_argument("--yfinance", action="store_true", help="Use yfinance data + Robin signal model")
-    parser.add_argument("--symbol", default="SPY", help="Symbol for yfinance backtest")
-    parser.add_argument("--period", default="2y", help="Yahoo Finance period (1mo, 3mo, 6mo, 1y, 2y, 5y)")
-    parser.add_argument("--synthetic", action="store_true", help="Run with synthetic data (legacy mode)")
+    parser.add_argument(
+        "--yfinance",
+        action="store_true",
+        help="Use yfinance data + Robin signal model",
+    )
+    parser.add_argument(
+        "--parquet-100yr",
+        action="store_true",
+        help="Run backtest on 100-year Delta+ZSTD dataset",
+    )
+    parser.add_argument("--symbol", default="BTC/USD", help="Symbol for backtest")
+    parser.add_argument(
+        "--period",
+        default="2y",
+        help="Yahoo Finance period (1mo, 3mo, 6mo, 1y, 2y, 5y)",
+    )
+    parser.add_argument(
+        "--synthetic", action="store_true", help="Run with synthetic data (legacy mode)"
+    )
     args = parser.parse_args()
 
-    if args.yfinance:
+    if args.parquet_100yr:
+        run_backtest_with_100yr_parquet(symbol=args.symbol)
+    elif args.yfinance:
         run_backtest_with_yfinance(symbol=args.symbol, period=args.period)
     else:
         np.random.seed(42)
@@ -287,3 +382,4 @@ if __name__ == "__main__":
         print(f"Commission:  ${r.total_commission:>14,.2f}")
         print(f"Slippage:    ${r.total_slippage:>14,.2f}")
         print(f"Total cost:  ${r.total_commission + r.total_slippage:>14,.2f}")
+

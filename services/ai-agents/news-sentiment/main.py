@@ -8,5 +8,5 @@ def health():
     return {"status": "online", "agent": "news-sentiment"}
 
 if __name__ == "__main__":
-    print(f"Starting news-sentiment on port 8006...")
+    print("Starting news-sentiment on port 8006...")
     uvicorn.run(app, host="0.0.0.0", port=8006)

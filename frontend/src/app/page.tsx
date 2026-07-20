@@ -11,8 +11,10 @@ import PositionsTable from '../components/PositionsTable';
 import OrdersTable from '../components/OrdersTable';
 import RiskMetrics from '../components/RiskMetrics';
 import AIPanel from '../components/AIPanel';
+import AIAutonomousPanel from '../components/AIAutonomousPanel';
 import NewsFeed from '../components/NewsFeed';
 import Disclaimers from '../components/Disclaimers';
+import ComplianceDashboard from '../components/ComplianceDashboard';
 import BestPriceComparison from '../components/BestPriceComparison';
 import Screener from '../components/Screener';
 import Heatmap from '../components/Heatmap';
@@ -25,7 +27,8 @@ import {
   PieChart,
   LayoutGrid,
   Heart,
-  Search
+  Search,
+  ShieldAlert
 } from 'lucide-react';
 
 export default function Dashboard() {
@@ -40,7 +43,7 @@ export default function Dashboard() {
   const balance = useTerminalStore((state) => state.balance);
   const equity = useTerminalStore((state) => state.equity);
 
-  const [activeTab, setActiveTab] = useState<'execution' | 'portfolio' | 'risk' | 'ai' | 'help' | 'screener'>('execution');
+  const [activeTab, setActiveTab] = useState<'execution' | 'portfolio' | 'risk' | 'ai' | 'help' | 'screener' | 'compliance'>('execution');
   const [rightPanelTab, setRightPanelTab] = useState<'book' | 'sor'>('book');
 
   // Trigger state init on mount
@@ -143,6 +146,18 @@ export default function Dashboard() {
             >
               <Activity size={18} />
               <span className="text-[8px] uppercase tracking-wider font-semibold">Risk</span>
+            </button>
+
+            {/* Compliance tab */}
+            <button
+              onClick={() => setActiveTab('compliance')}
+              className={`flex flex-col items-center gap-1 py-2.5 rounded-lg text-text-dim hover:text-text-secondary transition-all w-full ${
+                activeTab === 'compliance' ? 'bg-accent-blue-dim text-accent-blue font-bold border-l-2 border-accent-blue rounded-l-none' : ''
+              }`}
+              title="Compliance"
+            >
+              <ShieldAlert size={18} />
+              <span className="text-[8px] uppercase tracking-wider font-semibold">Comp</span>
             </button>
 
             {/* AI Signal Pane */}
@@ -402,12 +417,17 @@ export default function Dashboard() {
 
           {/* TAB 4: AI SIGNAL & NEWS FEED */}
           {activeTab === 'ai' && (
-            <div className="h-full p-2.5 grid grid-cols-12 gap-2.5 overflow-hidden">
-              <div className="col-span-12 md:col-span-6 h-full min-h-0">
-                <AIPanel />
+            <div className="h-full p-2.5 flex flex-col gap-2.5 overflow-hidden">
+              <div className="flex-[2] min-h-0">
+                <AIAutonomousPanel />
               </div>
-              <div className="col-span-12 md:col-span-6 h-full min-h-0">
-                <NewsFeed />
+              <div className="flex-[3] grid grid-cols-12 gap-2.5 min-h-0">
+                <div className="col-span-12 md:col-span-6 h-full min-h-0">
+                  <AIPanel />
+                </div>
+                <div className="col-span-12 md:col-span-6 h-full min-h-0">
+                  <NewsFeed />
+                </div>
               </div>
             </div>
           )}

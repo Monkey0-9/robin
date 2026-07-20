@@ -1,5 +1,4 @@
 import json
-import os
 
 SCHEMA_PATH = "config_schema.json"
 CPP_PATH = "config.h"

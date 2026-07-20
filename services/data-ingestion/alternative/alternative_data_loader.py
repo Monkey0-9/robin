@@ -2,11 +2,11 @@ import time
 import logging
 import functools
 import numpy as np
-import pandas as pd
 import requests
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 from dataclasses import dataclass
+
 
 logger = logging.getLogger(__name__)
 
@@ -185,7 +185,8 @@ if __name__ == "__main__":
 
     status = loader.get_source_status()
     for src, connected in status.items():
-        print(f"  {'✓' if connected else '✗'} {src}: {'connected' if connected else 'no API key'}")
+        symbol = "[OK]" if connected else "[X]"
+        print(f"  {symbol} {src}: {'connected' if connected else 'no API key'}")
 
     features = loader.create_feature_vector(datetime.now())
     print(f"\nFeature vector ({len(features)} dims): {features}")

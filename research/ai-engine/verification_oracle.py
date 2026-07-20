@@ -2,7 +2,7 @@
 # Validates model predictions against KDB+ tick data
 
 import numpy as np
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 from dataclasses import dataclass
 
 @dataclass

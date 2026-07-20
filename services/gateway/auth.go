@@ -51,19 +51,18 @@ func newJWTAuthenticator() *jwtAuthenticator {
 		}
 	}
 
-	// Fallback to HMAC with ROBIN_GATEWAY_API_TOKEN
-	hmacSecret := os.Getenv("ROBIN_GATEWAY_API_TOKEN")
-	if hmacSecret != "" {
-		auth.hmacKey = []byte(hmacSecret)
-		auth.useHMAC = true
-		slog.Info("JWT authenticator initialized with HMAC key")
-		return auth
+	// Fallback to HMAC ONLY in test environments
+	if os.Getenv("ROBIN_TEST_MODE") == "1" {
+		hmacSecret := os.Getenv("ROBIN_GATEWAY_API_TOKEN")
+		if hmacSecret != "" {
+			auth.hmacKey = []byte(hmacSecret)
+			auth.useHMAC = true
+			slog.Warn("JWT authenticator running in TEST mode with symmetric HMAC fallback")
+			return auth
+		}
 	}
 
-	// Under test environments (or if no key is configured), we don't call os.Exit(1) immediately.
-	// Instead, we log a warning. When verify() is called on an unconfigured authenticator,
-	// it will return an error, which is safe.
-	slog.Warn("no JWT key configured (set ROBIN_JWT_PUBKEY or ROBIN_GATEWAY_API_TOKEN). Authentication will fail on verify.")
+	slog.Warn("no RS256 public key configured (set ROBIN_JWT_PUBKEY or ROBIN_JWT_PUBKEY_FILE). Authentication will fail on verify.")
 	return auth
 }
 

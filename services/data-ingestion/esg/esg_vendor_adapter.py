@@ -8,7 +8,6 @@ ESG Grade Scale:
 """
 
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -108,3 +107,12 @@ class ESGVendorAdapter:
         logger.debug("Compliance check: %s grade=%s (ord=%d) >= min=%s (ord=%d) -> %s",
                      symbol, grade_str, actual, min_grade, required, compliant)
         return compliant
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    adapter = ESGVendorAdapter()
+    res = adapter.fetch_ratings(["AAPL", "TSLA", "BTCUSD", "UNKNOWN"])
+    print("Fetched Ratings:", res)
+    print("AAPL compliant with 'A'?", adapter.is_compliant("AAPL", "A"))
+    print("BTCUSD compliant with 'BBB'?", adapter.is_compliant("BTCUSD", "BBB"))

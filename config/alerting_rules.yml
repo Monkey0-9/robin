@@ -1,0 +1,311 @@
+---
+# ============================================================================
+# Robin Trading Platform — Prometheus Alerting Rules
+# ============================================================================
+# Covers all 47-gap institutional requirements:
+# Regulatory (SEC 15c3-5, FINRA 3110, MiFID II), Operational Resilience,
+# Security, Observability, and AI/ML guardrails.
+#
+# Load into Alertmanager:
+#   alertmanager --config.file=alertmanager.yml
+# Configure rule_files in prometheus.yml:
+#   rule_files:
+#     - "config/alerting_rules.yml"
+# ============================================================================
+
+groups:
+  # ==========================================================================
+  # Group 1: Regulatory Kill Switch (CRITICAL — SEC 15c3-5)
+  # ==========================================================================
+  - name: kill_switch
+    rules:
+      - alert: RobinSystemKillSwitchActive
+        expr: robin_kill_switch_system_halted == 1
+        for: 0s  # Immediate — no tolerance
+        labels:
+          severity: critical
+          regulation: SEC_15c3-5
+          team: trading_ops
+        annotations:
+          summary: Robin SYSTEM KILL SWITCH is ACTIVE — all orders blocked
+          description: |
+            The system-level kill switch has been activated.
+            All order processing is halted until manually reset via dual-person authorization.
+            Regulation: SEC Rule 15c3-5 (Market Access Rule)
+          runbook: https://docs.robin.internal/runbooks/kill-switch-reset
+
+      - alert: RobinAlgoKillSwitchActive
+        expr: robin_kill_switch_algo_halted_total > 0
+        for: 0s
+        labels:
+          severity: warning
+          regulation: SEC_15c3-5
+        annotations:
+          summary: "{{ $value }} algorithm(s) are kill-switched"
+          description: One or more strategy/algorithm-level kill switches are active.
+
+  # ==========================================================================
+  # Group 2: Circuit Breaker (CRITICAL)
+  # ==========================================================================
+  - name: circuit_breaker
+    rules:
+      - alert: RobinCircuitBreakerTripped
+        expr: robin_circuit_breaker_tripped == 1
+        for: 0s
+        labels:
+          severity: critical
+          team: risk
+        annotations:
+          summary: Robin circuit breaker TRIPPED — drawdown limit exceeded
+          description: |
+            The risk circuit breaker has tripped.
+            Daily drawdown limit exceeded. Orders are blocked.
+            Manual admin reset required. Investigate drawdown cause before reset.
+
+      - alert: RobinDrawdownApproachingLimit
+        expr: robin_daily_drawdown_bps > 800  # Alert at 80% of 10% limit
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Drawdown approaching circuit breaker threshold ({{ $value }} bps)"
+          description: "Current drawdown is {{ $value }}bps, approaching 1000bps limit."
+
+  # ==========================================================================
+  # Group 3: Compliance Certification (SEC 15c3-5 Annual)
+  # ==========================================================================
+  - name: compliance_certification
+    rules:
+      - alert: RobinCEOCertificationExpired
+        expr: robin_compliance_cert_days_until_expiry < 0
+        for: 0s
+        labels:
+          severity: critical
+          regulation: SEC_15c3-5
+          team: compliance
+        annotations:
+          summary: SEC 15c3-5 CEO Annual Certification has EXPIRED
+          description: |
+            The CEO annual certification required by SEC Rule 15c3-5 §(e)(2) has expired.
+            Trading may need to be suspended until certification is renewed.
+            Contact: compliance@robin.internal
+
+      - alert: RobinCEOCertificationExpiringSoon30d
+        expr: robin_compliance_cert_days_until_expiry <= 30 and robin_compliance_cert_days_until_expiry > 0
+        for: 1h
+        labels:
+          severity: critical
+          regulation: SEC_15c3-5
+        annotations:
+          summary: "CEO Certification expires in {{ $value }} days"
+          description: "SEC 15c3-5 annual CEO certification expires soon. Renew immediately."
+
+      - alert: RobinCEOCertificationExpiringSoon60d
+        expr: robin_compliance_cert_days_until_expiry <= 60 and robin_compliance_cert_days_until_expiry > 30
+        for: 1h
+        labels:
+          severity: warning
+          regulation: SEC_15c3-5
+        annotations:
+          summary: "CEO Certification expires in {{ $value }} days"
+          description: "Plan annual certification renewal."
+
+      - alert: RobinCEOCertificationExpiringSoon90d
+        expr: robin_compliance_cert_days_until_expiry <= 90 and robin_compliance_cert_days_until_expiry > 60
+        for: 6h
+        labels:
+          severity: info
+          regulation: SEC_15c3-5
+        annotations:
+          summary: "CEO Certification expires in {{ $value }} days — begin review"
+
+  # ==========================================================================
+  # Group 4: Order Latency (MiFID II RTS 25, institutional SLAs)
+  # ==========================================================================
+  - name: order_latency
+    rules:
+      - alert: RobinOrderLatencyP99High
+        expr: histogram_quantile(0.99, rate(robin_order_latency_ns_bucket[5m])) > 10_000_000  # 10ms
+        for: 2m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Order p99 latency > 10ms (current: {{ $value | humanizeDuration }})"
+          description: |
+            p99 order-to-response latency has exceeded 10ms for 2 minutes.
+            Target: <1ms p99. Investigate matching engine or DB contention.
+
+      - alert: RobinOrderLatencyP999High
+        expr: histogram_quantile(0.999, rate(robin_order_latency_ns_bucket[5m])) > 50_000_000  # 50ms
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: Order p999 latency > 50ms
+          description: Tail latency spike detected. Possible GC pause or disk I/O issue.
+
+  # ==========================================================================
+  # Group 5: Post-Trade Surveillance Alerts
+  # ==========================================================================
+  - name: surveillance
+    rules:
+      - alert: RobinSurveillanceAlertsUnreviewed
+        expr: robin_surveillance_alerts_unreviewed_total > 10
+        for: 30m
+        labels:
+          severity: warning
+          regulation: FINRA_4560
+          team: compliance
+        annotations:
+          summary: "{{ $value }} unreviewed surveillance alerts"
+          description: |
+            Post-trade surveillance has generated {{ $value }} unreviewed alerts.
+            Review at /api/surveillance/alerts.
+            Types may include: WASH_TRADE, LAYERING, SPOOFING, MARKING_THE_CLOSE.
+
+      - alert: RobinSurveillanceAlertsCritical
+        expr: robin_surveillance_alerts_type{type="WASH_TRADE"} > 0
+        for: 0s
+        labels:
+          severity: critical
+          regulation: SEC_9a-1
+          team: compliance
+        annotations:
+          summary: Wash trading alert detected
+          description: Potential wash trading detected. Immediate compliance review required.
+
+  # ==========================================================================
+  # Group 6: Time Synchronization (MiFID II RTS 25)
+  # ==========================================================================
+  - name: time_sync
+    rules:
+      - alert: RobinTimeSyncDegraded
+        expr: robin_time_sync_offset_ns > 100_000  # 100µs
+        for: 5m
+        labels:
+          severity: warning
+          regulation: MiFID_II_RTS25
+          team: infrastructure
+        annotations:
+          summary: "Clock offset {{ $value }}ns exceeds MiFID II RTS 25 limit (100µs)"
+          description: |
+            NTP/PTP time synchronization has degraded.
+            MiFID II RTS 25 requires gateway timestamps within 100µs of UTC.
+            Check NTP server connectivity and PTP grandmaster status.
+
+      - alert: RobinTimeSyncPoor
+        expr: robin_time_sync_offset_ns > 1_000_000  # 1ms
+        for: 2m
+        labels:
+          severity: critical
+          regulation: MiFID_II_RTS25
+        annotations:
+          summary: Clock offset > 1ms — MiFID II RTS 25 VIOLATION
+          description: Timestamp accuracy is critically degraded. Investigate NTP/PTP.
+
+  # ==========================================================================
+  # Group 7: Service Health
+  # ==========================================================================
+  - name: service_health
+    rules:
+      - alert: RobinServiceHealthFailed
+        expr: robin_services_failed_total > 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "{{ $value }} Robin service(s) in FAILED state"
+          description: |
+            One or more downstream services (ExecutionCore, RiskAnalytics, etc.) are unhealthy.
+            Check /services endpoint and service logs.
+
+      - alert: RobinServiceHealthDegraded
+        expr: robin_services_degraded_total > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value }} services degraded for >5 minutes"
+
+  # ==========================================================================
+  # Group 8: AI/ML Model Risk
+  # ==========================================================================
+  - name: ai_model_risk
+    rules:
+      - alert: RobinAIKillSwitchActive
+        expr: robin_ai_kill_switch_active == 1
+        for: 0s
+        labels:
+          severity: warning
+          team: quant
+        annotations:
+          summary: AI trading signal generation is DISABLED
+          description: The AI model kill switch is active. AI signals are not being generated.
+
+      - alert: RobinAIPerformanceDrift
+        expr: robin_ai_drift_alerts_total > 0
+        for: 0s
+        labels:
+          severity: warning
+          team: quant
+        annotations:
+          summary: AI model performance drift detected
+          description: |
+            Model accuracy has dropped >20% from baseline.
+            Model retraining has been flagged.
+            Review /api/ai/model/status for details.
+
+      - alert: RobinAIFallbackRateHigh
+        expr: robin_ai_fallback_rate_pct > 10
+        for: 5m
+        labels:
+          severity: warning
+          team: quant
+        annotations:
+          summary: "AI inference fallback rate: {{ $value }}%"
+          description: More than 10% of AI inferences are timing out (>200ms). Model or hardware issue.
+
+  # ==========================================================================
+  # Group 9: Best Execution (MiFID II Article 27)
+  # ==========================================================================
+  - name: best_execution
+    rules:
+      - alert: RobinFillRateLow
+        expr: robin_fill_rate_percent < 90
+        for: 10m
+        labels:
+          severity: warning
+          regulation: MiFID_II_Art27
+        annotations:
+          summary: "Order fill rate below 90% (current: {{ $value }}%)"
+          description: Fill rate degradation may indicate routing or liquidity issues.
+
+      - alert: RobinSlippageHigh
+        expr: robin_avg_slippage_bps > 10
+        for: 5m
+        labels:
+          severity: warning
+          regulation: MiFID_II_Art27
+        annotations:
+          summary: "Average slippage {{ $value }}bps exceeds 10bps threshold"
+          description: Best execution quality degraded. Review exchange routing.
+
+  # ==========================================================================
+  # Group 10: Supervisory Workflow (FINRA 3110)
+  # ==========================================================================
+  - name: supervisory
+    rules:
+      - alert: RobinSupervisoryOrdersPendingTooLong
+        expr: robin_supervisory_pending_total > 5
+        for: 5m
+        labels:
+          severity: warning
+          regulation: FINRA_3110
+        annotations:
+          summary: "{{ $value }} orders awaiting principal approval for >5min"
+          description: |
+            Multiple orders awaiting FINRA 3110 principal approval.
+            Auto-rejection occurs after 5 minutes. Review /api/supervisory/pending.

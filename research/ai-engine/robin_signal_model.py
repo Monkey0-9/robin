@@ -126,4 +126,4 @@ if __name__ == "__main__":
     out = model.compute(inp)
 
     print(f"Alpha={out.alpha_signal:.4f} Volatility={out.volatility_estimate:.4f} SpreadBps={out.spread_estimate:.4f} Confidence={out.confidence:.4f}")
-    print(f"Expected:  Alpha~0.0049  Volatility~0.0002  SpreadBps~0.1853  Confidence~0.4860")
+    print("Expected:  Alpha~0.0049  Volatility~0.0002  SpreadBps~0.1853  Confidence~0.4860")

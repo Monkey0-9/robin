@@ -219,3 +219,9 @@ func (hub *WebSocketHub) broadcast(v interface{}) {
 		return true
 	})
 }
+
+// BroadcastJSON sends any JSON-serializable payload to all connected clients.
+// Used by kill switch, circuit breaker, and other compliance event emitters.
+func (hub *WebSocketHub) BroadcastJSON(v interface{}) {
+	hub.broadcast(v)
+}
