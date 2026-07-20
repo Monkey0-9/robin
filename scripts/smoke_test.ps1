@@ -16,7 +16,10 @@ Write-Host "[TEST] Starting risk-analytics on :9092..."
 Start-Process -FilePath ".\target\release\robin-risk-daemon.exe" -RedirectStandardOutput "risk_out.log" -RedirectStandardError "risk_err.log" -NoNewWindow
 
 Write-Host "[TEST] Starting orchestrator on :18080..."
-$env:ROBIN_GATEWAY_API_TOKEN="smoke-test-secret"
+if (-not $env:ROBIN_GATEWAY_API_TOKEN) {
+    Write-Error "ROBIN_GATEWAY_API_TOKEN environment variable must be set"
+    exit 1
+}
 $env:ORCH_PORT="18080"
 Start-Process -FilePath ".\build\orchestrator.exe" -RedirectStandardOutput "orch_out.log" -RedirectStandardError "orch_err.log" -NoNewWindow
 

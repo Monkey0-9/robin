@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,19 +13,22 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-func generateTestToken(role string) string {
-	jwtAuth.useHMAC = true
-	jwtAuth.hmacKey = []byte("test-secret")
-	jwtAuth.publicKey = nil
+var testPrivateKey *rsa.PrivateKey
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+func init() {
+	testPrivateKey, _ = rsa.GenerateKey(rand.Reader, 2048)
+	jwtAuth.publicKey = &testPrivateKey.PublicKey
+}
+
+func generateTestToken(role string) string {
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
 		"sub":  "test-user",
 		"role": role,
 		"iss":  "robin-gateway",
 		"aud":  "robin-services",
 		"exp":  time.Now().Add(time.Hour).Unix(),
 	})
-	tokenString, _ := token.SignedString(jwtAuth.hmacKey)
+	tokenString, _ := token.SignedString(testPrivateKey)
 	return tokenString
 }
 

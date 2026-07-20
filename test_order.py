@@ -1,20 +1,29 @@
-import urllib.request
 import json
-
 import jwt
 import time
 import os
+import requests
+import warnings
 
-secret = os.environ.get("ROBIN_GATEWAY_API_TOKEN", "new-secure-dev-secret")
+# Suppress insecure request warnings if using self-signed certs
+requests.packages.urllib3.disable_warnings(requests.packages.urllib3.exceptions.InsecureRequestWarning)
+
+key_path = "config/keys/private.pem"
+if not os.path.exists(key_path):
+    raise ValueError(f"RSA Private key not found at {key_path}")
+
+with open(key_path, "rb") as f:
+    private_key = f.read()
+
 token = jwt.encode({
     "aud": "robin-services",
     "exp": int(time.time()) + 3600,
     "iss": "robin-gateway",
     "role": "trader"
-}, secret, algorithm="HS256")
+}, private_key, algorithm="RS256")
 
 port = os.environ.get("ORCH_PORT", "8080")
-url = f"http://localhost:{port}/order"
+url = f"https://localhost:{port}/order"
 order_data = {
     "symbol": "BTC/USD",
     "side": "BUY",
@@ -23,16 +32,20 @@ order_data = {
     "order_type": "LIMIT",
     "cl_ord_id": "client-test-alpaca-1"
 }
-data = json.dumps(order_data).encode("utf-8")
 headers = {
     "Authorization": f"Bearer {token}",
     "Content-Type": "application/json"
 }
-req = urllib.request.Request(url, data=data, headers=headers)
+
+# Requires mTLS certs to be generated via setup_mtls.sh
+cert_paths = ('config/certs/client.crt', 'config/certs/client.key')
+ca_path = 'config/certs/ca.crt'
 
 try:
-    with urllib.request.urlopen(req, timeout=5) as response:
-        print("Status:", response.status)
-        print("Response:", response.read().decode())
+    response = requests.post(url, headers=headers, json=order_data, cert=cert_paths, verify=False)
+    print(f"Status Code: {response.status_code}")
+    print(f"Response: {response.text}")
+except requests.exceptions.SSLError as e:
+    print(f"SSL/mTLS Error: {e}")
 except Exception as e:
     print("Error:", e)

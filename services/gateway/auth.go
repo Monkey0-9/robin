@@ -16,7 +16,6 @@ type jwtAuthenticator struct {
 	hmacKey   []byte
 	issuer    string
 	audience  string
-	useHMAC   bool
 }
 
 func newJWTAuthenticator() *jwtAuthenticator {
@@ -43,7 +42,7 @@ func newJWTAuthenticator() *jwtAuthenticator {
 			if err == nil {
 				if rsaKey, ok := parsed.(*rsa.PublicKey); ok {
 					auth.publicKey = rsaKey
-					auth.useHMAC = false
+					auth.publicKey = rsaKey
 					slog.Info("JWT authenticator initialized with RSA public key")
 					return auth
 				}
@@ -51,47 +50,27 @@ func newJWTAuthenticator() *jwtAuthenticator {
 		}
 	}
 
-	// Fallback to HMAC ONLY in test environments
-	if os.Getenv("ROBIN_TEST_MODE") == "1" {
-		hmacSecret := os.Getenv("ROBIN_GATEWAY_API_TOKEN")
-		if hmacSecret != "" {
-			auth.hmacKey = []byte(hmacSecret)
-			auth.useHMAC = true
-			slog.Warn("JWT authenticator running in TEST mode with symmetric HMAC fallback")
-			return auth
-		}
-	}
 
 	slog.Warn("no RS256 public key configured (set ROBIN_JWT_PUBKEY or ROBIN_JWT_PUBKEY_FILE). Authentication will fail on verify.")
 	return auth
 }
 
 func (a *jwtAuthenticator) verify(tokenStr string) (jwt.MapClaims, error) {
-	if a.publicKey == nil && a.hmacKey == nil {
-		return nil, fmt.Errorf("authentication disabled: no JWT key configured")
+	if a.publicKey == nil {
+		return nil, fmt.Errorf("authentication disabled: no RS256 JWT key configured")
 	}
 
-	var keyFunc jwt.Keyfunc
-	if a.useHMAC {
-		keyFunc = func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-			}
-			return a.hmacKey, nil
+	keyFunc := func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v, expected RS256", token.Header["alg"])
 		}
-	} else {
-		keyFunc = func(token *jwt.Token) (interface{}, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
-				return nil, fmt.Errorf("unexpected signing method: %v, expected RS256", token.Header["alg"])
-			}
-			return a.publicKey, nil
-		}
+		return a.publicKey, nil
 	}
 
 	token, err := jwt.Parse(tokenStr, keyFunc,
 		jwt.WithIssuer(a.issuer),
 		jwt.WithAudience(a.audience),
-		jwt.WithValidMethods([]string{"RS256", "HS256", "HS384", "HS512"}),
+		jwt.WithValidMethods([]string{"RS256"}),
 	)
 
 	if err != nil {

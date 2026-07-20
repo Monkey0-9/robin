@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -305,21 +307,23 @@ func TestServiceStatusMarshalJSON(t *testing.T) {
 
 func TestJWTAuthMiddleware_JWTVerification(t *testing.T) {
 	// Set up keys
-	hmacSecret := []byte("my-test-secret-key-123456789")
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
 	authenticator := &jwtAuthenticator{
-		hmacKey:  hmacSecret,
-		useHMAC:  true,
-		issuer:   "robin-gateway",
-		audience: "robin-services",
+		publicKey: &privateKey.PublicKey,
+		issuer:    "robin-gateway",
+		audience:  "robin-services",
 	}
 
 	// Create a valid signed token
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
 		"iss": "robin-gateway",
 		"aud": "robin-services",
 		"exp": time.Now().Add(time.Hour).Unix(),
 	})
-	validTokenStr, err := token.SignedString(hmacSecret)
+	validTokenStr, err := token.SignedString(privateKey)
 	if err != nil {
 		t.Fatal(err)
 	}

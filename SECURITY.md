@@ -19,13 +19,13 @@ Do NOT file public issues for security vulnerabilities.
 This prototype is explicitly **not** production-ready. Known limitations:
 
 ### Authentication
-- The Go gateway enforces strict JWT signature verification in `jwtAuthMiddleware` using the `github.com/golang-jwt/jwt/v5` library, supporting both RSA and HMAC verification.
+- The Go gateway enforces strict JWT signature verification using RS256. HMAC is explicitly unsupported to ensure regulatory compliance.
 - The KDB+ HTTP gateway (`http_gateway.q`) uses a static bearer token from the `ROBIN_KDB_API_TOKEN` environment variable. Production must use mTLS or an OAuth2 service.
 - The WebSocket bridge has authentication via JWT (passed via subprotocol fallback or query parameters).
 
 ### Transport Security
-- TLS is configurable in the Go gateway (`ORCH_TLS_CERT`, `ORCH_TLS_KEY`) but requires external certificate provisioning.
-- The frontend communicates with the gateway over plain HTTP by default.
+- Mutual TLS (mTLS) is enforced at the Go Gateway via `ORCH_MTLS_ENABLED=1`. Clients must present valid `client.crt` and `client.key`.
+- The frontend communicates with the gateway over mTLS or HTTPS when TLS is configured.
 
 ### Secrets Management
 - No secrets are hardcoded. All credentials use environment variables.
@@ -51,5 +51,6 @@ This prototype is explicitly **not** production-ready. Known limitations:
 | `ROBIN_FIRM_ID` | R Risk Analytics | SEC CAT FirmID (never hardcode) |
 | `ROBIN_CRD_NUM` | R Risk Analytics | SEC CAT CRD number (never hardcode) |
 | `ORCH_PORT` | Go Gateway | HTTP listen port (default 8080) |
-| `ORCH_TLS_CERT` | Go Gateway | Path to TLS certificate |
+| `ORCH_TLS_CERT` | Go Gateway | Path to TLS server certificate |
 | `ORCH_TLS_KEY` | Go Gateway | Path to TLS private key |
+| `ORCH_CA_CERT` | Go Gateway | Path to TLS CA certificate for mTLS client verification |

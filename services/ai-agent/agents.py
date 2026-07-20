@@ -14,15 +14,11 @@ class LLMBaseAgent:
         print(
             f"[MEMORY MANAGER] Allocating {self.vram_usage_mb}MB VRAM for {self.model_name} (llama.cpp mmap)"
         )
-        time.sleep(0.5)  # Simulate model load time from SSD
         self.is_loaded = True
 
     def unload(self):
-        print(
-            f"[MEMORY MANAGER] Unloading {self.model_name}, freeing {self.vram_usage_mb}MB VRAM"
-        )
+        print(f"[MEMORY MANAGER] Unloading {self.model_name}, freeing {self.vram_usage_mb}MB VRAM")
         self.is_loaded = False
-        gc.collect()
 
 
 class MarketRegimeDetector(LLMBaseAgent):
@@ -39,7 +35,6 @@ class MarketRegimeDetector(LLMBaseAgent):
         if not self.is_loaded:
             raise RuntimeError("Model must be loaded into VRAM before inference!")
         print(f"[{self.model_name}] Analyzing 100-candle context...")
-        time.sleep(0.2)
 
         # In reality, this calls llama_cpp.Llama.create_chat_completion
         # Mocking output for zero-error execution
@@ -71,7 +66,6 @@ class NewsSentimentAnalyst(LLMBaseAgent):
         print(
             f"[{self.model_name}] Running batched ONNX inference on {len(headlines)} headlines..."
         )
-        time.sleep(0.1)
 
         score = 0.0
         for h in headlines:
@@ -100,7 +94,6 @@ class TradeSignalGenerator(LLMBaseAgent):
         print(
             f"[{self.model_name}] Synthesizing Strategy | Regime: {regime} | Sentiment: {sentiment:.2f}"
         )
-        time.sleep(0.3)
 
         # Regime-conditioned logic simulation
         action = "HOLD"

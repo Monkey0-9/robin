@@ -53,30 +53,35 @@ func main() {
 	httpServer := orch.setupHTTPServer(httpPort)
 
 	tlsCfg := orch.GetConfig().TLS
-	if tlsCfg.Enabled {
-		tlsCfg.CertFile = envOrDefault("ORCH_TLS_CERT", tlsCfg.CertFile)
-		tlsCfg.KeyFile = envOrDefault("ORCH_TLS_KEY", tlsCfg.KeyFile)
-		if tlsCfg.CertFile != "" && tlsCfg.KeyFile != "" {
-			caCert, err := os.ReadFile(tlsCfg.CertFile)
+	if tlsCfg.Enabled || os.Getenv("ORCH_MTLS_ENABLED") == "1" {
+		certFile := envOrDefault("ORCH_TLS_CERT", tlsCfg.CertFile)
+		keyFile := envOrDefault("ORCH_TLS_KEY", tlsCfg.KeyFile)
+		caFile := envOrDefault("ORCH_CA_CERT", "")
+		if certFile != "" && keyFile != "" && caFile != "" {
+			caCert, err := os.ReadFile(caFile)
 			if err == nil {
 				caPool := x509.NewCertPool()
 				if caPool.AppendCertsFromPEM(caCert) {
 					httpServer.TLSConfig = &tls.Config{
 						MinVersion: tls.VersionTLS12,
 						ClientCAs:  caPool,
+						ClientAuth: tls.RequireAndVerifyClientCert,
 					}
 				}
+			} else {
+				logger.Error("failed to read CA cert for mTLS", "error", err)
+				os.Exit(1)
 			}
 			go func() {
-				logger.Info("TLS server listening", "port", httpPort)
-				if err := httpServer.ListenAndServeTLS(tlsCfg.CertFile, tlsCfg.KeyFile); err != nil && err != http.ErrServerClosed {
+				logger.Info("mTLS server listening", "port", httpPort)
+				if err := httpServer.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
 					logger.Error("TLS server error", "error", err)
 					os.Exit(1)
 				}
 			}()
 		} else {
-			logger.Warn("TLS enabled but cert/key missing, falling back to plain HTTP", "port", httpPort)
-			go startHTTP(httpServer, logger)
+			logger.Error("mTLS enabled but cert/key/ca missing, refusing to start insecurely")
+			os.Exit(1)
 		}
 	} else {
 		go startHTTP(httpServer, logger)

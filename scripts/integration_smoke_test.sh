@@ -79,7 +79,10 @@ fi
 # ============================================================================
 # Start orchestrator
 # ============================================================================
-export ROBIN_GATEWAY_API_TOKEN="smoke-test-secret"
+if [ -z "$ROBIN_GATEWAY_API_TOKEN" ]; then
+    echo "Error: ROBIN_GATEWAY_API_TOKEN must be set"
+    exit 1
+fi
 export ORCH_PORT=18080
 "$ORCH_BIN" > /tmp/orch.log 2>&1 &
 PIDS+=($!)

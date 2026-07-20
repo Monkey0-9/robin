@@ -3,7 +3,10 @@ services/execution-core/build/matching_engine.exe 9091 > ./exec.log 2>&1 &
 EXEC_PID=$!
 target/release/robin-risk-daemon.exe > ./risk.log 2>&1 &
 RISK_PID=$!
-export ROBIN_GATEWAY_API_TOKEN=smoke-test-secret
+if [ -z "$ROBIN_GATEWAY_API_TOKEN" ]; then
+    echo "Error: ROBIN_GATEWAY_API_TOKEN must be set"
+    exit 1
+fi
 export ORCH_PORT=18080
 build/orchestrator.exe > ./orch.log 2>&1 &
 ORCH_PID=$!

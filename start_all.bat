@@ -6,7 +6,10 @@ echo Starting native processes...
 
 cd /d C:\Robin
 
-set ROBIN_GATEWAY_API_TOKEN=super_secret_test_key
+if "%ROBIN_GATEWAY_API_TOKEN%"=="" (
+    echo Error: ROBIN_GATEWAY_API_TOKEN must be set
+    exit /b 1
+)
 
 echo [1/8] Starting Risk Gate (Rust)...
 cd services\risk-analytics

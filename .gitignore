@@ -40,3 +40,10 @@ config_state.json
 *.docx
 doc_*.txt
 *.db
+*.db-shm
+*.db-wal
+.venv/
+config/certs/
+config/keys/
+data/
+backtest_output.txt
