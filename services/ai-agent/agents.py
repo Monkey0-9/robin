@@ -1,22 +1,6 @@
 """
-Robin Trading Platform — Real AI Inference Agents
-==================================================
-Replaces all print()-based simulation with actual model inference:
-
-Agent 1: MarketRegimeDetector
-  Model: Phi-3.5-mini-instruct (Q4_K_M GGUF, ~2.2GB)
-  Backend: llama-cpp-python with CUDA offload (RTX 2050)
-  Task: Classify market as Bull / Bear / Range / Volatile
-
-Agent 2: NewsSentimentAnalyst
-  Model: FinBERT quantized (INT8 ONNX, ~220MB)
-  Backend: ONNX Runtime on CPU (preserves 4GB VRAM for LLM)
-  Task: Score news headlines -1.0 to +1.0
-
-Agent 3: TradeSignalGenerator
-  Model: Stateless rule synthesis (no LLM — deterministic, <1ms)
-  Logic: Regime × Sentiment matrix → BUY / SELL / HOLD + Kelly weight
-  Task: Produce actionable trade signal with confidence score
+Robin Trading Platform — AI & NLP Agents.
+Strictly optimized for low-latency inference on RTX 2050 (4GB VRAM).
 
 Hardware budget (RTX 2050 4GB):
   Phi-3.5-mini: ~2.2GB VRAM (28 GPU layers)
@@ -25,13 +9,10 @@ Hardware budget (RTX 2050 4GB):
 """
 
 import gc
-import hashlib
-import json
 import logging
 import os
 import time
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -41,7 +22,7 @@ MODEL_DIR = Path(os.path.dirname(__file__)) / "models"
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 # ─── Model paths ─────────────────────────────────────────────────────────────
-PHI_MODEL_PATH   = MODEL_DIR / "Phi-3.5-mini-instruct-Q4_K_M.gguf"
+PHI_MODEL_PATH = MODEL_DIR / "Phi-3.5-mini-instruct-Q4_K_M.gguf"
 FINBERT_ONNX_DIR = MODEL_DIR / "finbert-sentiment-int8"
 
 
@@ -54,9 +35,9 @@ class LLMBaseAgent:
     """
 
     def __init__(self, model_name: str, vram_usage_mb: int):
-        self.model_name    = model_name
+        self.model_name = model_name
         self.vram_usage_mb = vram_usage_mb
-        self.is_loaded     = False
+        self.is_loaded = False
         self._load_time_ns = 0
 
     def load(self):
@@ -89,7 +70,10 @@ class MarketRegimeDetector(LLMBaseAgent):
     VALID_REGIMES = {"Bull", "Bear", "Range", "Volatile"}
 
     def __init__(self):
-        super().__init__("Phi-3.5-mini-instruct-Q4_K_M.gguf", vram_usage_mb=2200)
+        super().__init__(
+            "Phi-3.5-mini-instruct-Q4_K_M.gguf",
+            vram_usage_mb=2200
+        )
         self._llm = None
 
     def load(self):
@@ -103,19 +87,24 @@ class MarketRegimeDetector(LLMBaseAgent):
 
         try:
             from llama_cpp import Llama
-        except ImportError:
+        except ImportError as err:
             raise ImportError(
                 "llama-cpp-python not installed.\n"
                 "Install with CUDA: pip install llama-cpp-python "
-                "--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cu122"
-            )
+                "--extra-index-url "
+                "https://abetlen.github.io/llama-cpp-python/whl/cu122"
+            ) from err
 
-        logger.info("[VRAM] Loading %s (~%dMB VRAM) ...", self.model_name, self.vram_usage_mb)
+        logger.info(
+            "[VRAM] Loading %s (~%dMB VRAM) ...",
+            self.model_name,
+            self.vram_usage_mb
+        )
         t0 = time.perf_counter()
         self._llm = Llama(
             model_path=str(PHI_MODEL_PATH),
             n_gpu_layers=28,      # Offload 28/30 layers to RTX 2050
-            n_ctx=2048,           # Context window — 2K sufficient for regime prompt
+            n_ctx=2048,           # Context window (2K sufficient)
             n_threads=4,          # Use 4 of i5's cores (leave 2–4 for OS)
             n_batch=256,
             verbose=False,
@@ -136,11 +125,13 @@ class MarketRegimeDetector(LLMBaseAgent):
 
         prompt = (
             "<|system|>\n"
-            "You are a quantitative market analyst. Classify market regime precisely.\n"
+            "You are a quantitative market analyst. "
+            "Classify market regime precisely.\n"
             "<|end|>\n"
             "<|user|>\n"
             f"Market data summary:\n{ohlcv_summary}\n\n"
-            "Classify the current market regime as EXACTLY one word: Bull, Bear, Range, or Volatile.\n"
+            "Classify the current market regime as EXACTLY one word: "
+            "Bull, Bear, Range, or Volatile.\n"
             "Reply with ONLY that word, nothing else.\n"
             "<|end|>\n"
             "<|assistant|>\n"
@@ -162,7 +153,10 @@ class MarketRegimeDetector(LLMBaseAgent):
         if raw in self.VALID_REGIMES:
             return raw
 
-        logger.warning("[Phi-3.5] Unexpected regime output: %r — defaulting to Range", raw)
+        logger.warning(
+            "[Phi-3.5] Unexpected regime output: %r — defaulting to Range",
+            raw
+        )
         return "Range"
 
     def unload(self):
@@ -185,7 +179,7 @@ class NewsSentimentAnalyst(LLMBaseAgent):
 
     def __init__(self):
         super().__init__("finbert-sentiment-int8.onnx", vram_usage_mb=0)
-        self._session   = None
+        self._session = None
         self._tokenizer = None
 
     def load(self):
@@ -198,7 +192,7 @@ class NewsSentimentAnalyst(LLMBaseAgent):
 
             if not onnx_model.exists():
                 logger.warning(
-                    "FinBERT ONNX not found at %s — falling back to rule-based sentiment.",
+                    "FinBERT ONNX not found at %s — fallback to rules.",
                     onnx_model
                 )
                 self.is_loaded = True  # Flag as loaded for fallback mode
@@ -217,7 +211,10 @@ class NewsSentimentAnalyst(LLMBaseAgent):
             logger.info("[CPU] FinBERT ONNX loaded from %s", FINBERT_ONNX_DIR)
 
         except ImportError as e:
-            logger.warning("ONNX/transformers not available (%s) — using rule-based fallback", e)
+            logger.warning(
+                "ONNX/transformers not available (%s) — using fallback",
+                e
+            )
 
         self.is_loaded = True
 
@@ -250,13 +247,17 @@ class NewsSentimentAnalyst(LLMBaseAgent):
         )
 
         t0 = time.perf_counter()
+        valid_input_names = [inp.name for inp in self._session.get_inputs()]
         logits = self._session.run(
             None,
-            {k: v for k, v in inputs.items() if k in
-             [inp.name for inp in self._session.get_inputs()]}
+            {k: v for k, v in inputs.items() if k in valid_input_names}
         )[0]
         elapsed_ms = (time.perf_counter() - t0) * 1000
-        logger.debug("[FinBERT] Inference on %d headlines: %.1fms", len(headlines), elapsed_ms)
+        logger.debug(
+            "[FinBERT] Inference on %d headlines: %.1fms",
+            len(headlines),
+            elapsed_ms
+        )
 
         # Softmax
         exp = np.exp(logits - logits.max(axis=1, keepdims=True))
@@ -290,7 +291,7 @@ class NewsSentimentAnalyst(LLMBaseAgent):
     def unload(self):
         del self._session
         del self._tokenizer
-        self._session   = None
+        self._session = None
         self._tokenizer = None
         self._force_vram_release()
         self.is_loaded = False
@@ -328,8 +329,8 @@ class TradeSignalGenerator(LLMBaseAgent):
         ("Volatile", "negative"): ("HOLD",  0.1),
     }
 
-    SENTIMENT_THRESHOLD_STRONG  = 0.5
-    SENTIMENT_THRESHOLD_WEAK    = 0.2
+    SENTIMENT_THRESHOLD_STRONG = 0.5
+    SENTIMENT_THRESHOLD_WEAK = 0.2
 
     def __init__(self):
         super().__init__("SignalMatrix-v1.0-deterministic", vram_usage_mb=0)
@@ -346,7 +347,7 @@ class TradeSignalGenerator(LLMBaseAgent):
     ) -> dict:
         """
         Generate a trade signal from regime and sentiment.
-        Returns dict with action, reason, confidence, entry_target, kelly_fraction.
+        Returns dict with action, reason, confidence, entry_target, etc.
         """
         if not self.is_loaded:
             raise RuntimeError("Call load() before generate_signal()")
@@ -383,16 +384,24 @@ class TradeSignalGenerator(LLMBaseAgent):
             "generated_at_ns": time.time_ns(),
         }
 
-    def _build_reason(self, regime: str, sentiment: float, sent_dir: str, action: str) -> str:
+    def _build_reason(
+        self,
+        regime: str,
+        sentiment: float,
+        sent_dir: str,
+        action: str
+    ) -> str:
         sentiment_pct = f"{sentiment:+.1%}"
         if action == "BUY":
             return (
-                f"{regime} regime with {sent_dir} sentiment divergence ({sentiment_pct}) — "
+                f"{regime} regime with {sent_dir} sentiment divergence "
+                f"({sentiment_pct}) — "
                 "mean-reversion BUY signal: price below fair value."
             )
         elif action == "SELL":
             return (
-                f"{regime} regime with {sent_dir} sentiment divergence ({sentiment_pct}) — "
+                f"{regime} regime with {sent_dir} sentiment divergence "
+                f"({sentiment_pct}) — "
                 "mean-reversion SELL signal: price above fair value."
             )
         return (
@@ -408,7 +417,9 @@ class TradeSignalGenerator(LLMBaseAgent):
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    logger.info("Testing Agent 3 (deterministic signal matrix — no model download needed) ...")
+    logger.info(
+        "Testing Agent 3 (deterministic signal matrix) ..."
+    )
 
     sig_gen = TradeSignalGenerator()
     sig_gen.load()
@@ -419,10 +430,13 @@ if __name__ == "__main__":
         ("Range",   -0.30,  65000.0),
         ("Volatile", 0.80,  65000.0),
     ]
-    for regime, sentiment, price in test_cases:
-        sig = sig_gen.generate_signal(regime, sentiment, price)
-        print(f"  {regime:10s} | sentiment={sentiment:+.2f} | "
-              f"→ {sig['action']:5s} | confidence={sig['confidence']:.2f} | {sig['reason'][:60]}...")
+    for test_regime, test_sentiment, test_price in test_cases:
+        sig = sig_gen.generate_signal(test_regime, test_sentiment, test_price)
+        print(
+            f"  {test_regime:10s} | sentiment={test_sentiment:+.2f} | "
+            f"→ {sig['action']:5s} | confidence={sig['confidence']:.2f} | "
+            f"{sig['reason'][:60]}..."
+        )
 
     sig_gen.unload()
     print("\n✅ Agent 3 test passed.")

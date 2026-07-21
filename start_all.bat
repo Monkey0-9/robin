@@ -23,14 +23,14 @@ cd ..\..
 :: 2. Start C++ Matching Engine (if running paper/sandbox)
 echo [2/3] Starting C++ Matching Engine (Hot Path)...
 cd services\execution-core
-start "Robin Matching Engine" cmd /c "build\Release\matching_engine.exe 9091"
+start "Robin Matching Engine" cmd /c "build\matching_engine.exe 9091"
 cd ..\..
 
 :: 3. Start IPC Pipeline: C++ Live Feed -> Go OMS
-echo [3/3] Starting High-Speed Pipeline (C++ Feed -^> Go OMS)...
+echo [3/3] Starting High-Speed Pipeline (C++ Feed -> Go OMS)...
 :: The C++ live feed outputs JSON signals to stdout
 :: The Go OMS reads JSON signals from stdin
-start "Robin Strategy & OMS Pipeline" cmd /c "cd services\execution-core && build\Release\live_feed.exe | cd ..\gateway && go run ."
+start "Robin Strategy & OMS Pipeline" cmd /c "set ROBIN_JWT_PUBKEY_FILE=C:\Robin\config\keys\public.pem&& cd services\execution-core && build\live_feed.exe | cd ..\gateway && go run ."
 
 echo ========================================================
 echo ALL AGENTS BOOTED NATIVELY.

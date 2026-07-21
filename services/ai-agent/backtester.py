@@ -18,7 +18,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from strategy_engine import Bar, Fill, Signal, Side, Strategy
+from strategy_engine import Bar, Signal, Side, Strategy
 
 logger = logging.getLogger("backtester")
 
@@ -399,6 +399,7 @@ if __name__ == "__main__":
     import sys
     sys.path.insert(0, ".")
     from data_engine import DataEngine
+    from strategy_engine import MeanReversionStrategy
 
     logging.basicConfig(level=logging.INFO)
 
