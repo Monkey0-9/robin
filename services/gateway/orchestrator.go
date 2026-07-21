@@ -854,7 +854,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		}
 		o.RecordLatency(latencyNs)
 
-		// Broadcast trade via WebSocket
+		// Broadcast trade via WebSocket and update position manager
 		if status == "FILLED" {
 			o.wsHub.BroadcastTrade(TradePayload{
 				ID:        execID,
@@ -864,6 +864,13 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 				Price:     fillPrice,
 				Timestamp: time.Now().UnixMilli(),
 			})
+			// Update real-time position tracker
+			if globalPositionManager != nil {
+				globalPositionManager.OnFill(
+					execID, orderReq.Symbol, orderReq.Side,
+					fillQty, fillPrice,
+				)
+			}
 		}
 
 		o.logger.Info("order processed",
@@ -979,6 +986,11 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	r.HandleFunc("/ws", o.wsHub.handleWebSocket)
 
 	r.Handle("/metrics", promhttp.Handler())
+
+	// ── Position & Portfolio endpoints ─────────────────────────────────────
+	r.HandleFunc("/api/positions", handleGetPositions).Methods("GET")
+	r.HandleFunc("/api/positions/{symbol}", handleGetPosition).Methods("GET")
+	r.HandleFunc("/api/portfolio", handleGetPortfolioSummary).Methods("GET")
 
 	r.Handle("/stats", jwtAuthMiddleware(rbacMiddleware("admin")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		orders := o.orderCount.Load()

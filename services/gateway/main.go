@@ -41,7 +41,11 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Initialize position manager (fetches live prices from AI agent)
+	initPositionManager()
+
 	orch.StartHealthProbes(ctx, 100*time.Millisecond)
+
 
 	httpPort := 8080
 	if p := os.Getenv("ORCH_PORT"); p != "" {
