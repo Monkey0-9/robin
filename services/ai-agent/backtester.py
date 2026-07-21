@@ -125,11 +125,48 @@ class Backtester:
         exchange:        str   = "binance",
         slippage_bps:    float = 3.0,   # 3 basis points slippage per trade
         max_position_pct: float = 0.05,  # Max 5% of capital per position
+        base_latency_ms: float = 5.0,
+        jitter_ms:       float = 2.0,
+        enable_jitter:   bool = True,
     ):
         self.initial_capital  = initial_capital
         self.fee_schedule     = FEE_SCHEDULES.get(exchange, FEE_SCHEDULES["default"])
         self.slippage_bps     = slippage_bps
         self.max_position_pct = max_position_pct
+        self.base_latency_ms  = base_latency_ms
+        self.jitter_ms        = jitter_ms
+        self.enable_jitter    = enable_jitter
+
+    def _simulate_execution_delay(self, bar, qty: float, side: Side) -> tuple[float, int]:
+        """
+        Simulates network latency, jitter, and queueing delays.
+        Returns (adjusted_fill_price, latency_ns).
+        """
+        if not self.enable_jitter:
+            return bar.close, 0
+
+        # 1. Base latency + random jitter (Gaussian)
+        jitter = np.random.normal(0, self.jitter_ms)
+        latency_ms = max(0.1, self.base_latency_ms + jitter)
+
+        # 2. Queueing delay (increases if order size is large relative to volume)
+        queueing_factor = 0.0
+        if bar.volume > 0:
+            queueing_factor = (qty / bar.volume) * 500.0  # scale up for massive orders
+        latency_ms += queueing_factor
+
+        # 3. Price impact during the delay (modeled as random walk based on standard volatility)
+        volatility_per_ms = 0.00001
+        price_change_pct = np.random.normal(0, volatility_per_ms * np.sqrt(latency_ms))
+
+        # Adjust price based on side
+        if side == Side.BUY:
+            fill_price = bar.close * (1.0 + price_change_pct)
+        else:
+            fill_price = bar.close * (1.0 - price_change_pct)
+
+        latency_ns = int(latency_ms * 1e6)
+        return float(fill_price), latency_ns
 
     def run(
         self,
@@ -141,12 +178,6 @@ class Backtester:
         """
         Run walk-forward backtest on a price DataFrame.
         Only evaluates performance on the out-of-sample test portion.
-
-        Args:
-            strategy:    Configured Strategy instance
-            df:          DataFrame with columns: timestamp, open, high, low, close, volume
-            symbol:      Ticker symbol
-            train_ratio: Fraction of data used for "warm-up" (not evaluated)
         """
         df = df.dropna(subset=["open", "high", "low", "close", "volume"]).reset_index(drop=True)
         split = int(len(df) * train_ratio)
@@ -177,7 +208,7 @@ class Backtester:
         total_fees  = 0.0
         total_slip  = 0.0
 
-        for bar_idx, row in df.iterrows():
+        for _, row in df.iterrows():
             bar = self._row_to_bar(row, symbol)
             equity_curve.append(capital + position * bar.close)
 
@@ -190,14 +221,17 @@ class Backtester:
                     (position < 0 and signal is not None and signal.side == Side.BUY)
                 )
                 if exit_condition:
+                    exit_price, exit_latency_ns = self._simulate_execution_delay(
+                        bar, abs(position), Side.SELL if position > 0 else Side.BUY
+                    )
                     trade = self._close_position(
-                        symbol, position, entry_price, bar.close,
-                        entry_bar.timestamp_ns, bar.timestamp_ns,
+                        symbol, position, entry_price, exit_price,
+                        entry_bar.timestamp_ns, bar.timestamp_ns + exit_latency_ns,
                         entry_signal, signal, capital
                     )
                     capital    += trade.pnl + abs(position) * entry_price
                     total_fees += trade.fee
-                    total_slip += abs(bar.close * position) * self.slippage_bps / 10000
+                    total_slip += abs(exit_price * position) * self.slippage_bps / 10000
                     trades.append(trade)
                     position   = 0.0
                     entry_bar  = None
@@ -205,13 +239,14 @@ class Backtester:
             # Enter new position
             if position == 0 and signal is not None:
                 notional  = capital * self.max_position_pct * signal.strength
+                
+                # Simulate execution delay and get fill price
+                fill_price, latency_ns = self._simulate_execution_delay(
+                    bar, notional / bar.close, Side.BUY if signal.side == Side.BUY else Side.SELL
+                )
+                
                 slip_cost = notional * self.slippage_bps / 10000
                 fee_cost  = notional * self.fee_schedule["taker"]
-                fill_price = (
-                    bar.close * (1 + self.slippage_bps / 10000)
-                    if signal.side == Side.BUY
-                    else bar.close * (1 - self.slippage_bps / 10000)
-                )
                 qty = notional / fill_price
                 position_cost = qty * fill_price + fee_cost
 

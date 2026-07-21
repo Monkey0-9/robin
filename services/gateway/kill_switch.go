@@ -381,7 +381,7 @@ func (ks *KillSwitchManager) restoreFromDB() {
 	if ks.db == nil {
 		return
 	}
-	// Find the latest TRIP event for the system that has no subsequent RESET
+	// 1. Restore System Halt
 	var action, reason, trippedBy string
 	err := ks.db.QueryRow(`
 		SELECT action, reason, tripped_by FROM kill_switch_log
@@ -397,6 +397,54 @@ func (ks *KillSwitchManager) restoreFromDB() {
 		ks.metaMu.Unlock()
 		if ks.logger != nil {
 			ks.logger.Warn("[KILL SWITCH] Restored system halt from DB", "reason", reason)
+		}
+	}
+
+	// 2. Restore Algo Halts
+	rows, err := ks.db.Query(`
+		SELECT target_id, action, reason FROM kill_switch_log
+		WHERE level='ALGO'
+		GROUP BY target_id
+		HAVING id = MAX(id) AND action='TRIP'`,
+	)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var algoID, act, rsn string
+			if err := rows.Scan(&algoID, &act, &rsn); err == nil {
+				slot := algoIDToSlot(algoID)
+				ks.algoHalts[slot].Store(1)
+				ks.algoMu.Lock()
+				ks.algoReasons[algoID] = rsn
+				ks.algoMu.Unlock()
+				if ks.logger != nil {
+					ks.logger.Warn("[KILL SWITCH] Restored ALGO halt from DB", "algo_id", algoID, "reason", rsn)
+				}
+			}
+		}
+	}
+
+	// 3. Restore Trader Halts
+	trows, err := ks.db.Query(`
+		SELECT target_id, action, reason FROM kill_switch_log
+		WHERE level='TRADER'
+		GROUP BY target_id
+		HAVING id = MAX(id) AND action='TRIP'`,
+	)
+	if err == nil {
+		defer trows.Close()
+		for trows.Next() {
+			var traderID, act, rsn string
+			if err := trows.Scan(&traderID, &act, &rsn); err == nil {
+				slot := traderIDToSlot(traderID)
+				ks.traderHalts[slot].Store(1)
+				ks.traderMu.Lock()
+				ks.traderReasons[traderID] = rsn
+				ks.traderMu.Unlock()
+				if ks.logger != nil {
+					ks.logger.Warn("[KILL SWITCH] Restored TRADER halt from DB", "trader_id", traderID, "reason", rsn)
+				}
+			}
 		}
 	}
 }

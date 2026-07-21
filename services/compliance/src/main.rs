@@ -139,7 +139,16 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
             shm_reader = Some(reader);
         }
         Err(e) => {
-            eprintln!("[COMPLIANCE] SHM open failed ({e}) — running in log-only demo mode");
+            eprintln!("[COMPLIANCE] SHM open failed for '{shm_path}': {e}. Trying fallback 'robin_risk_match.shm'...");
+            match ShmBridge::new("robin_risk_match.shm", false) {
+                Ok(reader) => {
+                    eprintln!("[COMPLIANCE] Connected to fallback SHM: robin_risk_match.shm");
+                    shm_reader = Some(reader);
+                }
+                Err(err) => {
+                    eprintln!("[COMPLIANCE] Fallback SHM open failed ({err}) — running in log-only demo mode");
+                }
+            }
         }
     }
 

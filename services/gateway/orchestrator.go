@@ -1407,6 +1407,24 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		json.NewEncoder(w).Encode(o.hsmClient.Status())
 	}))).Methods("GET")
 
+	// --- Portfolio Optimizer ---
+	r.Handle("/api/portfolio/status", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		client := &http.Client{Timeout: 2 * time.Second}
+		stats, err := QueryPortfolioOptimizer(client)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(stats)
+	}))).Methods("GET")
+
+	r.Handle("/api/portfolio/weights", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		weights := CalculateOptimalWeights()
+		json.NewEncoder(w).Encode(weights)
+	}))).Methods("GET")
+
 	// Apply middleware chain: requestID → rateLimit → router
 	handler := requestIDMiddleware(rateLimitMiddleware(1000, r))
 
