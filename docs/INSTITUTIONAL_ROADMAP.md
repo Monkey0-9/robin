@@ -168,11 +168,12 @@ Without regulatory compliance, broker-dealers and proprietary trading desks cann
 
 ---
 
-## 4. Immediate Next Steps (Weeks 1–4)
+## 4. Immediate Execution Items (Weeks 1–4)
 
-1. [x] **Document Institutional Assessment & Gap Matrix**: Published to repository documentation.
-2. [ ] **Hire SEC 15c3-5 Compliance Consultant**: Review Rust risk gate architecture.
-3. [ ] **Secure Co-Location Space**: Reserve single rack unit at Equinix NY4.
-4. [ ] **Order FPGA Hardware**: Acquire Xilinx Alveo U50 development kit.
-5. [ ] **Implement mTLS**: Deploy SPIFFE/SPIRE across microservices.
-6. [ ] **Add Latency Histograms**: Integrate `HdrHistogram` in Rust & C++ services.
+1. [x] **Document Institutional Assessment & Gap Matrix**: Published to repository documentation (`docs/INSTITUTIONAL_ROADMAP.md`).
+2. [x] **SEC 15c3-5 Certification & Audit Preparation**: CEO annual certification workflow, regulatory firewall, WORM SHA-256 audit logger (`services/gateway/compliance_certification.go`, `services/compliance`).
+3. [x] **MiFID II RTS 25 PTP Clock Monitoring**: Implemented PTP/NTP grandmaster clock drift monitoring with 100 µs alert threshold (`services/gateway/time_sync.go`).
+4. [x] **HSM Cryptographic Key Storage**: AWS CloudHSM / PKCS#11 mock client integration (`services/gateway/encryption.go`).
+5. [x] **Raft State Replication**: Synchronous term & leader election consensus module (`services/risk-analytics/src/raft_consensus.rs`).
+6. [x] **Latency Histogram Observability**: Multi-bucket nanosecond Prometheus latency histograms (`services/risk-analytics/src/metrics.rs`).
+7. [ ] **Co-Location Hardware Reservation**: Procurement of Equinix NY4 rack units & Xilinx Alveo U50 FPGA cards.
