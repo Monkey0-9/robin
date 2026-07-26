@@ -30,6 +30,17 @@ fn main() {
 
     let gate = Arc::new(Mutex::new(gate));
     let gate_clone = gate.clone();
+    let gate_bg = gate.clone();
+
+    // Setup background thread for periodic snapshot saving
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            if let Ok(g) = gate_bg.lock() {
+                let _ = g.save_snapshot(snapshot_path);
+            }
+        }
+    });
 
     // Setup Ctrl-C handler for snapshot saving
     ctrlc::set_handler(move || {

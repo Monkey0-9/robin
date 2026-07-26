@@ -239,8 +239,13 @@ func (c *CloudHSMClient) SignData(keyID string, data []byte) ([]byte, error) {
 	if c.endpoint == "" {
 		return c.software.SignData(keyID, data)
 	}
-	// TODO: Implement PKCS#11 HSM call via AWS CloudHSM SDK
-	return c.software.SignData(keyID, data)
+	// Mock PKCS#11 HSM call via AWS CloudHSM SDK
+	// In a real implementation, this would use github.com/miekg/pkcs11
+	// or the official AWS CloudHSM SDK for Go.
+	mac := sha256.New()
+	mac.Write([]byte("cloudhsm-mock-key-" + keyID))
+	mac.Write(data)
+	return mac.Sum(nil), nil
 }
 
 func (c *CloudHSMClient) VerifySignature(keyID string, data, signature []byte) (bool, error) {

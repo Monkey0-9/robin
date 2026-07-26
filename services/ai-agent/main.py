@@ -74,9 +74,18 @@ async def autonomous_trading_loop():
 
             # ── 4. Run Defense-in-Depth Guardian (now with real VIX) ──────
             #    daily_pnl_pct: derive from portfolio P&L if available
+            try:
+                import requests
+                port = os.environ.get("ORCH_PORT", "8080")
+                resp = requests.get(f"http://127.0.0.1:{port}/api/portfolio/summary", timeout=2)
+                pnl = resp.json().get("total_pnl_pct", 0.0)
+            except Exception as e:
+                logger.warning(f"[Loop] Failed to fetch P&L: {e}")
+                pnl = 0.0
+
             is_safe = ORCHESTRATOR.risk_guardian_check(
                 simulated_vix=live_vix,
-                daily_pnl_pct=0.0,   # TODO: wire real P&L from OMS positions
+                daily_pnl_pct=pnl,
             )
 
             if is_safe:
