@@ -273,3 +273,12 @@ c:\Robin\
 │   └── kernel/                    GPIO kill switch v2.1.0 (whitelist-aware)
 └── frontend/                      Next.js Dashboard (WebSockets via Go gateway, integrated AI scripts)
 ```
+
+---
+
+## Institutional Assessment & Strategic Roadmap
+
+For a domain-by-domain gap analysis and 18–36 month strategic implementation plan to transition this prototype to a top-1% institutional trading platform (SEC Rule 15c3-5, MiFID II RTS 25, FPGA acceleration, DPDK, real-time risk, TensorRT inference), see:
+- 📖 [Institutional Architecture & Upgrade Roadmap](docs/INSTITUTIONAL_ROADMAP.md)
+- 📖 [Aspirational Production Roadmap](docs/PRODUCTION_ROADMAP.md)
+
