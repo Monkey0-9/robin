@@ -356,39 +356,28 @@ def with_latency_bound(
                     max_ms,
                     elapsed_ms,
                 )
-                model_risk_monitor._fallback_count += 1
+                with model_risk_monitor._lock:
+                    model_risk_monitor._fallback_count += 1
                 return fallback
 
         def sync_wrapper(*args, **kwargs):
-            import threading
+            from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
-            result_container = [fallback]
-            exception_container = [None]
-
-            def target():
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(func, *args, **kwargs)
                 try:
-                    result_container[0] = func(*args, **kwargs)
+                    return future.result(timeout=max_ms / 1000.0)
+                except FutureTimeoutError:
+                    logger.warning(
+                        "[LATENCY BOUND] %s exceeded %.0fms — using fallback",
+                        func.__name__,
+                        max_ms,
+                    )
+                    with model_risk_monitor._lock:
+                        model_risk_monitor._fallback_count += 1
+                    return fallback
                 except Exception as e:
-                    exception_container[0] = e
-
-            t = threading.Thread(target=target, daemon=True)
-            start = time.time()
-            t.start()
-            t.join(timeout=max_ms / 1000.0)
-            # elapsed_ms = (time.time() - start) * 1000
-
-            if t.is_alive():
-                logger.warning(
-                    "[LATENCY BOUND] %s exceeded %.0fms — using fallback",
-                    func.__name__,
-                    max_ms,
-                )
-                model_risk_monitor._fallback_count += 1
-                return fallback
-
-            if exception_container[0]:
-                raise exception_container[0]
-            return result_container[0]
+                    raise e
 
         import asyncio as _asyncio
 

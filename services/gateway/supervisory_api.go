@@ -117,6 +117,10 @@ func supervisoryDecisionHash(id int64, decision, reason string, timestamp int64)
 // handleSupervisoryPending handles GET /api/supervisory/pending.
 func handleSupervisoryPending(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if db == nil {
+			http.Error(w, `{"error":"database not initialized"}`, http.StatusInternalServerError)
+			return
+		}
 		// Expire stale pending records first
 		_, _ = db.Exec(`
 			UPDATE supervisory_decisions
@@ -295,3 +299,6 @@ func supervisoryIDFromPath(r *http.Request) int64 {
 	}
 	return 0
 }
+
+var _ = defaultSupervisoryThresholdUSD
+var _ = checkSupervisoryApproval

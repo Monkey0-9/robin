@@ -21,6 +21,18 @@ impl OrderBookVisualizer {
         Ok(OrderBookVisualizer { program, vbo })
     }
 
+    pub fn from_compute(
+        gl: &WebGl2RenderingContext,
+        compute_source: &str,
+    ) -> Result<Self, JsValue> {
+        let program = crate::compile_compute_program(gl, compute_source)
+            .map_err(|e| JsValue::from_str(&e))?;
+
+        let vbo = gl.create_buffer();
+
+        Ok(OrderBookVisualizer { program, vbo })
+    }
+
     pub fn render(&self, gl: &WebGl2RenderingContext) {
         gl.use_program(Some(&self.program));
 

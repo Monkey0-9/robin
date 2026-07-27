@@ -206,10 +206,14 @@ func (pm *PositionManager) refreshPrices() {
 
 	for symbol, pos := range pm.positions {
 		if data, ok := priceMap[symbol]; ok {
+			sideMultiplier := 1.0
+			if pos.Side == "SHORT" {
+				sideMultiplier = -1.0
+			}
 			pos.CurrentPrice  = data.Price
 			pos.DayChange     = data.ChangePct
 			pos.MarketValue   = pos.CurrentPrice * pos.TotalQty
-			pos.UnrealizedPnL = (pos.CurrentPrice - pos.AvgEntryPrice) * pos.TotalQty
+			pos.UnrealizedPnL = (pos.CurrentPrice - pos.AvgEntryPrice) * pos.TotalQty * sideMultiplier
 			if pos.TotalNotional > 0 {
 				pos.UnrealizedPct = pos.UnrealizedPnL / pos.TotalNotional * 100
 			}

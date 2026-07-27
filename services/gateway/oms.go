@@ -37,6 +37,8 @@ import (
 	"time"
 )
 
+const numOrderWorkers = 10
+
 // ─── Order state machine ───────────────────────────────────────────────────────
 
 type OrderState int32
@@ -141,8 +143,12 @@ func (a *AuditLogger) Log(event string, data any) {
 		"data":  data,
 	}
 	b, _ := json.Marshal(entry)
-	a.f.Write(b)
-	a.f.Write([]byte("\n"))
+	if _, err := a.f.Write(b); err != nil {
+		log.Printf("[AUDIT] Write error: %v", err)
+	}
+	if _, err := a.f.Write([]byte("\n")); err != nil {
+		log.Printf("[AUDIT] Write newline error: %v", err)
+	}
 }
 
 func (a *AuditLogger) Close() { a.f.Close() }
@@ -157,14 +163,31 @@ type OMS struct {
 	alpaca   *AlpacaConnector
 	seqNum   atomic.Uint64
 	killSwitch atomic.Bool   // Emergency stop
+
+	orderCh  chan *Order
+	wg       sync.WaitGroup
 }
 
 func NewOMS(audit *AuditLogger) *OMS {
-	return &OMS{
+	oms := &OMS{
 		orders:  make(map[string]*Order),
 		audit:   audit,
 		binance: NewBinanceConnector(),
 		alpaca:  NewAlpacaConnector(),
+		orderCh: make(chan *Order, 100),
+	}
+	for i := 0; i < numOrderWorkers; i++ {
+		oms.wg.Add(1)
+		go oms.orderWorker()
+	}
+	return oms
+}
+
+func (o *OMS) orderWorker() {
+	defer o.wg.Done()
+	ctx := context.Background()
+	for order := range o.orderCh {
+		o.routeOrder(ctx, order)
 	}
 }
 
@@ -243,8 +266,12 @@ func (o *OMS) OnSignal(ctx context.Context, sig CppSignal, portfolioValue float6
 	log.Printf("[OMS] Routing %s %s %.6f %s @ %.4f (notional=$%.2f) → %s",
 		clID, sig.Side, qty, sig.Symbol, sig.Price, notional, exchange)
 
-	// Route to exchange asynchronously
-	go o.routeOrder(ctx, order)
+	// Route to exchange via bounded worker pool
+	select {
+	case o.orderCh <- order:
+	default:
+		log.Printf("[OMS] Order channel full, dropping order %s", clID)
+	}
 	return nil
 }
 
@@ -503,6 +530,9 @@ func runSignalReader(ctx context.Context, oms *OMS, portfolioValue float64) {
 		if err := oms.OnSignal(ctx, sig, portfolioValue); err != nil {
 			log.Printf("[OMS] OnSignal error: %v", err)
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		log.Printf("[OMS] Scanner error: %v", err)
 	}
 }
 

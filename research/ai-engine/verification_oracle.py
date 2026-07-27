@@ -27,6 +27,7 @@ class VerificationOracle:
         self.significance_level = significance_level
         self.drift_threshold = drift_threshold
         self.reference_distributions: Dict[str, Tuple[float, float]] = {}
+        self._reference_samples: Dict[str, np.ndarray] = {}
 
     def set_reference_distribution(self, feature_name: str, mean: float, std: float):
         self.reference_distributions[feature_name] = (mean, std)
@@ -65,8 +66,10 @@ class VerificationOracle:
         drift_reports = []
         for feature_name, values in features.items():
             if feature_name in self.reference_distributions:
-                ref_mean, ref_std = self.reference_distributions[feature_name]
-                reference = np.random.normal(ref_mean, ref_std, len(values))
+                if feature_name not in self._reference_samples:
+                    ref_mean, ref_std = self.reference_distributions[feature_name]
+                    self._reference_samples[feature_name] = np.random.normal(ref_mean, ref_std, len(values))
+                reference = self._reference_samples[feature_name]
                 report = self.detect_drift_ks(reference, values, feature_name)
                 drift_reports.append(report)
 

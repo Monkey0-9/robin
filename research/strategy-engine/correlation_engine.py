@@ -67,16 +67,22 @@ class CorrelationEngine:
         for sym, price in trade_data.items():
             self._ensure_instrument(sym)
 
+        # Phase 1: compute all innovations using old means (prevents pairwise asymmetry)
+        innovations = {}
         for sym, price in trade_data.items():
+            innovations[sym] = price - self._means.get(sym, 0.0)
+
+        # Phase 2: update means, variances, and covariances
+        for sym, price in trade_data.items():
+            innovation = innovations[sym]
             prev_mean = self._means.get(sym, 0.0)
-            innovation = price - prev_mean
             self._means[sym] = prev_mean + (1 - self.lambda_) * innovation
             self._vars[sym] = self.lambda_ * self._vars.get(sym, 0.0) + (1 - self.lambda_) * innovation ** 2
 
             for other, other_price in trade_data.items():
                 if sym == other:
                     continue
-                other_innovation = other_price - self._means.get(other, 0.0)
+                other_innovation = innovations[other]
                 self._covs[(sym, other)] = (
                     self.lambda_ * self._covs.get((sym, other), 0.0)
                     + (1 - self.lambda_) * innovation * other_innovation

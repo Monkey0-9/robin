@@ -2,59 +2,62 @@
 
 #include <atomic>
 #include <cstddef>
-#include <new>
-#include <limits>
+#include <cstdint>
+#include <cstring>
 
 namespace quantum {
 namespace execution {
 
+// Lock-free single-producer single-consumer queue for hot-path order passing.
+// Fixed capacity (template param), no heap allocation.
+// Uses 64-byte cache-line padding to avoid false sharing.
 template <typename T, size_t Capacity>
 class LockFreeSPSCQueue {
 public:
-    static_assert((Capacity & (Capacity - 1)) == 0, "Capacity must be a power of 2");
+    static_assert((Capacity & (Capacity - 1)) == 0, "Capacity must be power of 2");
+    static constexpr size_t MASK = Capacity - 1;
 
-    LockFreeSPSCQueue() : write_idx_(0), read_idx_(0) {}
+    LockFreeSPSCQueue() noexcept : head_(0), tail_(0) {}
 
-    bool push(const T& val) {
-        size_t write_idx = write_idx_.load(std::memory_order_relaxed);
-        size_t read_idx = read_idx_.load(std::memory_order_acquire);
-
-        if ((write_idx - read_idx) == Capacity) {
-            return false;
-        }
-
-        ring_buffer_[write_idx & (Capacity - 1)] = val;
-        write_idx_.store(write_idx + 1, std::memory_order_release);
+    bool push(const T& item) noexcept {
+        size_t t = tail_.load(std::memory_order_relaxed);
+        size_t h = head_.load(std::memory_order_acquire);
+        if ((t - h) >= Capacity) return false;
+        slots_[t & MASK] = item;
+        std::atomic_thread_fence(std::memory_order_release);
+        tail_.store(t + 1, std::memory_order_relaxed);
         return true;
     }
 
-    bool pop(T& val) {
-        size_t read_idx = read_idx_.load(std::memory_order_relaxed);
-        size_t write_idx = write_idx_.load(std::memory_order_acquire);
-
-        if (read_idx == write_idx) {
-            return false;
-        }
-
-        val = ring_buffer_[read_idx & (Capacity - 1)];
-        read_idx_.store(read_idx + 1, std::memory_order_release);
+    bool pop(T& item) noexcept {
+        size_t h = head_.load(std::memory_order_relaxed);
+        size_t t = tail_.load(std::memory_order_acquire);
+        if (h == t) return false;
+        item = slots_[h & MASK];
+        std::atomic_thread_fence(std::memory_order_release);
+        head_.store(h + 1, std::memory_order_relaxed);
         return true;
     }
 
-    bool empty() const {
-        return read_idx_.load(std::memory_order_relaxed) == write_idx_.load(std::memory_order_relaxed);
+    bool empty() const noexcept {
+        return head_.load(std::memory_order_relaxed) ==
+               tail_.load(std::memory_order_relaxed);
     }
 
-    size_t size() const {
-        size_t write = write_idx_.load(std::memory_order_acquire);
-        size_t read = read_idx_.load(std::memory_order_acquire);
-        return write - read;
+    size_t size() const noexcept {
+        return tail_.load(std::memory_order_relaxed) -
+               head_.load(std::memory_order_relaxed);
+    }
+
+    void clear() noexcept {
+        head_.store(0, std::memory_order_relaxed);
+        tail_.store(0, std::memory_order_relaxed);
     }
 
 private:
-    alignas(64) T ring_buffer_[Capacity];
-    alignas(64) std::atomic<size_t> write_idx_;
-    alignas(64) std::atomic<size_t> read_idx_;
+    T slots_[Capacity];
+    alignas(64) std::atomic<size_t> head_;
+    alignas(64) std::atomic<size_t> tail_;
 };
 
 } // namespace execution

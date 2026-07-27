@@ -192,16 +192,34 @@ func (b *KDBBridge) HandleInsert(w http.ResponseWriter, r *http.Request) {
 
 	table := "quotes"
 	if body.Table != "" {
-		table = body.Table
+		// Sanitize table name identically to sym to prevent Q injection
+		table = strings.Map(func(r rune) rune {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+				return r
+			}
+			return '_'
+		}, body.Table)
 	}
 
 	// Q expression to upsert into tick table
+	// Escape symbol to prevent Q injection: sanitize non-alphanumeric chars
+	sym := strings.ReplaceAll(body.Sym, "-", "_")
+	sym = strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			return r
+		}
+		return '_'
+	}, sym)
+	side := strings.ToLower(body.Side)
+	if side != "buy" && side != "sell" {
+		side = "none"
+	}
 	expr := fmt.Sprintf(
 		"`%s insert (`%s;%.0d;%.6f;%.6f;`%s)",
-		table, strings.ReplaceAll(body.Sym, "-", "_"),
+		table, sym,
 		time.Now().UnixNano(),
 		body.Price, body.Size,
-		strings.ToLower(body.Side),
+		side,
 	)
 
 	_, err := b.client.ExecQ(expr)

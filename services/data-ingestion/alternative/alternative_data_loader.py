@@ -115,7 +115,10 @@ class AlternativeDataLoader:
 
         resp = requests.get(endpoint, headers=headers, timeout=3)
         resp.raise_for_status()
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError as e:
+            raise OSError(f"Invalid JSON response from {endpoint}: {e}") from e
 
         # Different APIs use different field names for a summary sentiment/score
         for field in ('score', 'sentiment_score', 'signal', 'value'):

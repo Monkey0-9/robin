@@ -50,8 +50,8 @@ impl TaxEngine {
             }
         }
 
-        // Sort by largest loss first
-        opportunities.sort_by(|a, b| b.unrealized_loss.partial_cmp(&a.unrealized_loss).unwrap());
+        // Sort by largest loss first (use total_cmp for deterministic ordering, handle NaN safely)
+        opportunities.sort_by(|a, b| b.unrealized_loss.total_cmp(&a.unrealized_loss));
         opportunities
     }
 

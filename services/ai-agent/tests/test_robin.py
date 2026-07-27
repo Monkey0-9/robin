@@ -9,12 +9,8 @@ Tests all critical components:
   - train_models: feature build, model training smoke test
 """
 
-import asyncio
-import json
-import math
 import pytest
 import time
-from unittest.mock import MagicMock, patch, AsyncMock
 from dataclasses import asdict
 
 
@@ -122,11 +118,11 @@ class TestMarketDataService:
         assert a is b
 
 
-# ─── data_engine tests ────────────────────────────────────────────────────────
+# ─── data_engine tests ───────────────────────────────────────────────
 
 class TestDataEngine:
     def test_import(self):
-        from data_engine import DataEngine, ALL_SYMBOLS
+        from data_engine import ALL_SYMBOLS
         assert "BTC-USD" in ALL_SYMBOLS
         assert "SPY" in ALL_SYMBOLS
 
@@ -185,12 +181,12 @@ class TestDataEngine:
         result = engine._add_features(df)
         # Should have more than 20 feature columns
         assert len(result.columns) > 20
-        # data_engine._add_features keeps all rows (no dropna) for caching purposes
-        # The NaN values in SMA/EMA early rows are expected and handled by ML pipeline
+        # data_engine._add_features keeps all rows (no dropna) for caching
+        # The NaN values in SMA/EMA early rows are expected and handled by ML
         assert len(result) == n
 
 
-# ─── live_feed tests ──────────────────────────────────────────────────────────
+# ─── live_feed tests ─────────────────────────────────────────────────
 
 class TestLiveFeed:
     def test_tick_dataclass(self):
@@ -208,7 +204,6 @@ class TestLiveFeed:
 
     def test_tick_asdict(self):
         from live_feed import Tick
-        from dataclasses import asdict
         tick = Tick(
             symbol="ETH-USD",
             price=3000.0,
@@ -251,10 +246,12 @@ class TestLiveFeed:
             }
         }
         agg._handle_binance_message(msg)
-        assert agg.get_last_price("BTC-USD") == pytest.approx(64800.50, abs=0.01)
+        assert agg.get_last_price("BTC-USD") == pytest.approx(
+            64800.50, abs=0.01
+        )
 
 
-# ─── train_models smoke tests ─────────────────────────────────────────────────
+# ─── train_models smoke tests ────────────────────────────────────────
 
 class TestTrainModels:
     def test_build_features(self):
@@ -348,7 +345,8 @@ class TestCORSSecurity:
             # This is actual code — check for wildcard
             if '["*"]' in line and 'allow_origins' in line:
                 raise AssertionError(
-                    f"SECURITY: CORS wildcard found in main.py code: {line.strip()}"
+                    "SECURITY: CORS wildcard found in main.py "
+                    f"code: {line.strip()}"
                 )
 
     def test_cors_localhost_only(self):
@@ -367,7 +365,7 @@ class TestCORSSecurity:
             "Random price generation still present in main.py!"
 
 
-# ─── Position manager tests ───────────────────────────────────────────────────
+# ─── Position manager tests ──────────────────────────────────────────
 
 class TestPositionManager:
     def test_no_positions_initially(self):

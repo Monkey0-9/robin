@@ -23,8 +23,10 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -34,6 +36,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/pbkdf2"
 )
 
 const (
@@ -382,9 +386,8 @@ func handleCreateUser(db *sql.DB, logger *slog.Logger) http.HandlerFunc {
 			return
 		}
 
-		// Simple password hash stub (in production: use bcrypt)
-		hashInput := fmt.Sprintf("PBKDF2:%s:robin-salt-v1", body.Password)
-		h := sha256sum(hashInput)
+		// PBKDF2-SHA256 password hashing (600k iterations, OWASP 2024 recommendation)
+		h := pbkdf2Hash(body.Password, 600000)
 
 		now := time.Now().UnixNano()
 		_, err := db.Exec(`
@@ -462,15 +465,13 @@ func usernameFromContext(r *http.Request) string {
 	return ""
 }
 
-func sha256sum(s string) string {
-	import_sha := sha256sumInternal(s)
-	return import_sha
-}
-
-func sha256sumInternal(s string) string {
-	h := sha1.New() // Note: using sha1 here as sha256 is imported elsewhere; in prod use crypto/sha256
-	h.Write([]byte(s))
-	return fmt.Sprintf("%x", h.Sum(nil))
+func pbkdf2Hash(password string, iter int) string {
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		panic("failed to generate PBKDF2 salt: " + err.Error())
+	}
+	dk := pbkdf2.Key([]byte(password), salt, iter, 32, sha256.New)
+	return fmt.Sprintf("PBKDF2-SHA256:%x:%s", dk, base64.StdEncoding.EncodeToString(salt))
 }
 
 func totpTimeStep(unixSec int64) uint64 {
@@ -481,3 +482,7 @@ func totpTimeStep(unixSec int64) uint64 {
 func formatTOTPCode(n uint32) string {
 	return strconv.FormatUint(uint64(n%1_000_000), 10)
 }
+
+var _ = mfaEnableForUser
+var _ = totpTimeStep
+var _ = formatTOTPCode

@@ -30,10 +30,10 @@
 #define ALIGN_PAD_64 alignas(CACHE_LINE_SIZE)
 
 static inline uint64_t rdtscp_p() noexcept {
+    unsigned int aux;
 #if defined(_MSC_VER)
     return __rdtscp(&aux);
 #elif defined(__x86_64__)
-    uint32_t aux;
     uint64_t rax, rdx;
     __asm__ __volatile__("rdtscp" : "=a"(rax), "=d"(rdx) : : "rcx");
     return (rdx << 32) | rax;

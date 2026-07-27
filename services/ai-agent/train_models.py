@@ -25,7 +25,6 @@ Output:
 import argparse
 import json
 import logging
-import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -119,6 +118,9 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df["target_1d"] = close.pct_change(1).shift(-1)  # Next-day return
     df["target_5d"] = close.pct_change(5).shift(-5)  # 5-day return
 
+    # Drop rows where target_5d would be NaN (due to shift(-5)) to prevent lookahead leakage
+    df = df.dropna(subset=["target_5d"])
+
     # Signal label: BUY=1, HOLD=0, SELL=-1 (based on forward 5d return)
     df["signal_label"] = 0
     df.loc[df["target_5d"] > 0.02,  "signal_label"] = 1   # BUY if >2% gain
@@ -193,7 +195,6 @@ def load_or_download(symbols: list[str], days: int) -> pd.DataFrame:
 def train_signal_classifier(X: np.ndarray, y: np.ndarray) -> object:
     """GradientBoostingClassifier: predict BUY/HOLD/SELL signal."""
     from sklearn.ensemble import GradientBoostingClassifier
-    from sklearn.preprocessing import LabelEncoder
 
     logger.info("[1/4] Training SignalClassifier (GBT) ...")
     model = GradientBoostingClassifier(
@@ -225,6 +226,21 @@ def train_volatility_regressor(X: np.ndarray, y: np.ndarray) -> object:
     return model
 
 
+class RegimeModel:
+    def __init__(self, km, sc):
+        self.kmeans = km
+        self.scaler = sc
+        # Label clusters by average return profile
+        self.cluster_labels = {0: "bull", 1: "bear", 2: "chop", 3: "volatile"}
+
+    def predict(self, X):
+        return self.kmeans.predict(self.scaler.transform(X))
+
+    def predict_label(self, X):
+        clusters = self.predict(X)
+        return [self.cluster_labels.get(c, "unknown") for c in clusters]
+
+
 def train_regime_detector(X: np.ndarray) -> object:
     """KMeans: cluster market into regimes (bull/bear/chop/volatile)."""
     from sklearn.cluster import KMeans
@@ -237,20 +253,6 @@ def train_regime_detector(X: np.ndarray) -> object:
     kmeans.fit(X_scaled)
 
     # Bundle scaler with kmeans for consistent inference
-    class RegimeModel:
-        def __init__(self, km, sc):
-            self.kmeans = km
-            self.scaler = sc
-            # Label clusters by average return profile
-            self.cluster_labels = {0: "bull", 1: "bear", 2: "chop", 3: "volatile"}
-
-        def predict(self, X):
-            return self.kmeans.predict(self.scaler.transform(X))
-
-        def predict_label(self, X):
-            clusters = self.predict(X)
-            return [self.cluster_labels.get(c, "unknown") for c in clusters]
-
     return RegimeModel(kmeans, scaler)
 
 
@@ -296,7 +298,6 @@ def evaluate_regressor(model, X_test: np.ndarray, y_test: np.ndarray) -> dict:
 
 def train_all(symbols: list[str], days: int):
     import joblib
-    from sklearn.model_selection import train_test_split
 
     # 1. Load data
     raw = load_or_download(symbols, days)
@@ -311,6 +312,9 @@ def train_all(symbols: list[str], days: int):
     df = pd.concat(all_frames, ignore_index=True)
     logger.info("Feature matrix: %d rows × %d cols", len(df), len(FEATURE_COLS))
 
+    # Sort by timestamp for time-based split (prevents cross-symbol leakage)
+    df = df.sort_values("timestamp").reset_index(drop=True)
+
     X = df[FEATURE_COLS].values.astype(np.float32)
     y_signal = df["signal_label"].values.astype(int)
     y_vol    = df["vol_5d"].values.astype(np.float32)
@@ -323,12 +327,14 @@ def train_all(symbols: list[str], days: int):
         0.0,
     )
 
-    # Train/test split (time-aware: use last 20% as test)
-    split = int(len(X) * 0.8)
-    X_train, X_test = X[:split], X[split:]
-    y_sig_tr, y_sig_te = y_signal[:split], y_signal[split:]
-    y_vol_tr, y_vol_te = y_vol[:split], y_vol[split:]
-    y_kelly_tr, y_kelly_te = y_kelly[:split], y_kelly[split:]
+    # Train/test split (time-aware: all train rows strictly before all test rows)
+    split_date = df["timestamp"].quantile(0.8)
+    train_mask = df["timestamp"] <= split_date
+    test_mask  = df["timestamp"] > split_date
+    X_train, X_test = X[train_mask], X[test_mask]
+    y_sig_tr, y_sig_te = y_signal[train_mask], y_signal[test_mask]
+    y_vol_tr, y_vol_te = y_vol[train_mask], y_vol[test_mask]
+    y_kelly_tr, y_kelly_te = y_kelly[train_mask], y_kelly[test_mask]
 
     # 3. Train
     sig_model    = train_signal_classifier(X_train, y_sig_tr)
@@ -354,8 +360,8 @@ def train_all(symbols: list[str], days: int):
         "trained_at":       datetime.utcnow().isoformat() + "Z",
         "symbols":          symbols,
         "training_days":    days,
-        "training_rows":    split,
-        "test_rows":        len(X) - split,
+        "training_rows":    int(train_mask.sum()),
+        "test_rows":        int(test_mask.sum()),
         "features":         FEATURE_COLS,
         "feature_count":    len(FEATURE_COLS),
         "signal_metrics":   sig_metrics,
@@ -398,5 +404,5 @@ if __name__ == "__main__":
     for k, v in meta["models"].items():
         path = MODELS_DIR / v
         size = path.stat().st_size / 1024 if path.exists() else 0
-        print(f"  {k:<25} → {v} ({size:.0f} KB)")
+        print(f"  {k:<25} -> {v} ({size:.0f} KB)")
     print(f"\n  Signal accuracy: {meta['signal_metrics']['accuracy']:.1%}")

@@ -123,8 +123,9 @@ class YFinanceFetcher:
             np.pad(v, (63, 0), mode="edge"), 64
         )
 
-        bid_vol = np.full(ob_levels, p.mean() * 0.4, dtype=np.float32) * (1 + np.random.randn(ob_levels) * 0.05)
-        ask_vol = np.full(ob_levels, p.mean() * 0.4, dtype=np.float32) * (1 + np.random.randn(ob_levels) * 0.05)
+        # TODO: Replace with real L2 order book data when subscribed
+        bid_vol = np.full(ob_levels, p.mean() * 0.4, dtype=np.float32)
+        ask_vol = np.full(ob_levels, p.mean() * 0.4, dtype=np.float32)
 
         ob = np.zeros(ob_levels * 2, dtype=np.float32)
         for i in range(ob_levels):

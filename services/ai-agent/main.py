@@ -14,6 +14,7 @@ import asyncio
 import logging
 import os
 
+import aiohttp
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -75,10 +76,10 @@ async def autonomous_trading_loop():
             # ── 4. Run Defense-in-Depth Guardian (now with real VIX) ──────
             #    daily_pnl_pct: derive from portfolio P&L if available
             try:
-                import requests
                 port = os.environ.get("ORCH_PORT", "8080")
-                resp = requests.get(f"http://127.0.0.1:{port}/api/portfolio/summary", timeout=2)
-                pnl = resp.json().get("total_pnl_pct", 0.0)
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(f"http://127.0.0.1:{port}/api/portfolio/summary", timeout=aiohttp.ClientTimeout(total=2)) as resp:
+                        pnl = (await resp.json()).get("total_pnl_pct", 0.0)
             except Exception as e:
                 logger.warning(f"[Loop] Failed to fetch P&L: {e}")
                 pnl = 0.0

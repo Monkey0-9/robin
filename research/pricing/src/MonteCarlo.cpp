@@ -7,8 +7,6 @@
 #include <vector>
 #include <numeric>
 #include <algorithm>
-#include <array>
-#include <valarray>
 
 struct MonteCarloParams {
     double spot_price;
@@ -347,6 +345,41 @@ private:
     size_t steps_;
 };
 
+// ============================================================================
+// Black-Scholes Analytical Greeks
+// ============================================================================
+namespace BlackScholes {
+    double norm_pdf(double x) {
+        return (1.0 / std::sqrt(2.0 * 3.14159265358979323846)) * std::exp(-0.5 * x * x);
+    }
+    double norm_cdf(double x) {
+        return 0.5 * std::erfc(-x / std::sqrt(2.0));
+    }
+
+    struct Greeks {
+        double delta;
+        double gamma;
+        double theta;
+        double vega;
+        double rho;
+    };
+
+    Greeks calc_greeks_call(const MonteCarloParams& p) {
+        double d1 = (std::log(p.spot_price / p.strike_price) + (p.risk_free_rate + 0.5 * p.volatility * p.volatility) * p.time_to_expiry) / (p.volatility * std::sqrt(p.time_to_expiry));
+        double d2 = d1 - p.volatility * std::sqrt(p.time_to_expiry);
+
+        Greeks g;
+        g.delta = norm_cdf(d1);
+        g.gamma = norm_pdf(d1) / (p.spot_price * p.volatility * std::sqrt(p.time_to_expiry));
+        g.theta = -(p.spot_price * norm_pdf(d1) * p.volatility) / (2.0 * std::sqrt(p.time_to_expiry)) - p.risk_free_rate * p.strike_price * std::exp(-p.risk_free_rate * p.time_to_expiry) * norm_cdf(d2);
+        // Usually Vega is divided by 100 to represent a 1% change, but returning absolute here
+        g.vega = p.spot_price * std::sqrt(p.time_to_expiry) * norm_pdf(d1);
+        // Rho usually divided by 100 for 1% rate change
+        g.rho = p.strike_price * p.time_to_expiry * std::exp(-p.risk_free_rate * p.time_to_expiry) * norm_cdf(d2);
+        return g;
+    }
+}
+
 int main() {
     MonteCarloParams params = {50000.0, 52000.0, 0.05, 0.30, 0.25, 100000};
 
@@ -366,6 +399,11 @@ int main() {
 
     BarrierOptionPricer barrier_ko(params, BarrierType::KNOCK_OUT, BarrierDirection::DOWN, 40000.0, 100);
     barrier_ko.price_barrier_call();
+
+    std::printf("\n--- Analytical Greeks (Black-Scholes) ---\n");
+    BlackScholes::Greeks greeks = BlackScholes::calc_greeks_call(params);
+    std::printf("[GREEKS] Delta: %.4f | Gamma: %.6f | Theta: %.4f | Vega: %.4f | Rho: %.4f\n",
+           greeks.delta, greeks.gamma, greeks.theta, greeks.vega / 100.0, greeks.rho / 100.0);
 
     return 0;
 }

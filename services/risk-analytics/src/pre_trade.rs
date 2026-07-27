@@ -8,6 +8,8 @@ pub struct PreTradeRiskEvaluator {
     pub price_bound_lower: u64,
     pub restricted_instruments: [u32; 64],
     pub restricted_count: usize,
+    pub short_restricted_instruments: [u32; 64],
+    pub short_restricted_count: usize,
 }
 
 impl PreTradeRiskEvaluator {
@@ -24,6 +26,15 @@ impl PreTradeRiskEvaluator {
             price_bound_lower,
             restricted_instruments: [0u32; 64],
             restricted_count: 0,
+            short_restricted_instruments: [0u32; 64],
+            short_restricted_count: 0,
+        }
+    }
+
+    pub fn add_short_restricted(&mut self, instrument_id: u32) {
+        if self.short_restricted_count < 64 {
+            self.short_restricted_instruments[self.short_restricted_count] = instrument_id;
+            self.short_restricted_count += 1;
         }
     }
 
@@ -39,6 +50,14 @@ impl PreTradeRiskEvaluator {
         for i in 0..self.restricted_count {
             if self.restricted_instruments[i] == order.instrument_id {
                 return Err("RESTRICTED_INSTRUMENT");
+            }
+        }
+
+        if order.side == crate::gate::OrderSide::Ask {
+            for i in 0..self.short_restricted_count {
+                if self.short_restricted_instruments[i] == order.instrument_id {
+                    return Err("REG_SHO_RESTRICTION");
+                }
             }
         }
 

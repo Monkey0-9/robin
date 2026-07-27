@@ -23,6 +23,7 @@ var upgrader = websocket.Upgrader{
 type wsClient struct {
 	conn   *websocket.Conn
 	send   chan []byte
+	done   chan struct{}
 	userID string
 }
 
@@ -30,9 +31,17 @@ func (c *wsClient) writePump() {
 	defer func() {
 		c.conn.Close()
 	}()
-	for msg := range c.send {
-		if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-			slog.Warn("WebSocket write error", "user", c.userID, "error", err)
+	for {
+		select {
+		case msg, ok := <-c.send:
+			if !ok {
+				return
+			}
+			if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				slog.Warn("WebSocket write error", "user", c.userID, "error", err)
+				return
+			}
+		case <-c.done:
 			return
 		}
 	}
@@ -104,6 +113,7 @@ func (hub *WebSocketHub) handleWebSocket(w http.ResponseWriter, r *http.Request)
 	client := &wsClient{
 		conn:   conn,
 		send:   make(chan []byte, 256),
+		done:   make(chan struct{}),
 		userID: userID,
 	}
 
@@ -126,7 +136,7 @@ func (hub *WebSocketHub) readPump(conn *websocket.Conn, userID string) {
 	defer func() {
 		if val, ok := hub.clients.LoadAndDelete(conn); ok {
 			client := val.(*wsClient)
-			close(client.send)
+			close(client.done)
 		}
 		count := 0
 		hub.clients.Range(func(_, _ interface{}) bool {
@@ -213,7 +223,7 @@ func (hub *WebSocketHub) broadcast(v interface{}) {
 			slog.Warn("WebSocket client buffer full, dropping connection", "user", client.userID)
 			if val, ok := hub.clients.LoadAndDelete(key); ok {
 				c := val.(*wsClient)
-				close(c.send)
+				close(c.done)
 			}
 		}
 		return true

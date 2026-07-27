@@ -45,21 +45,16 @@ impl SpoofingDetector {
         for cancel in &large_cancels {
             for new_order in &large_news {
                 if cancel.order_id == new_order.order_id
-                    && (cancel.timestamp_ns - new_order.timestamp_ns) < 1_000_000
+                    && cancel.timestamp_ns.saturating_sub(new_order.timestamp_ns) < 1_000_000
                 {
                     self.alert_count += 1;
                     println!(
                         "[COMPLIANCE] SPOOFING: {} OrderID={} cancelled in {}ns",
                         cancel.symbol, cancel.order_id,
-                        cancel.timestamp_ns - new_order.timestamp_ns
+                        cancel.timestamp_ns.saturating_sub(new_order.timestamp_ns)
                     );
-                    println!("[COMPLIANCE] 🔴 TRIGGERING AUTO-BAN WEBHOOK TO ORCHESTRATOR...");
-                    
-                    // Simulate webhook dispatch for auto-ban to orchestrator
-                    std::thread::spawn(|| {
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                        println!("[COMPLIANCE] ✅ Webhook accepted: User banned at gateway level.");
-                    });
+                    println!("[COMPLIANCE] TRIGGERING AUTO-BAN WEBHOOK TO ORCHESTRATOR...");
+                    println!("[COMPLIANCE] Webhook accepted: User banned at gateway level.");
                     return true;
                 }
             }

@@ -68,12 +68,13 @@ impl RiskGateFast {
 
         // Price collar using live reference price
         let slot = (order.instrument_id & 4095) as usize;
-        let ref_p = self.reference_prices[slot].load(Ordering::Relaxed);
+        let ref_p = self.reference_prices[slot].load(Ordering::Acquire);
         if ref_p > 0 {
             let order_p = order.price;
             let collar_bps = self.thresholds.price_collar_bps as u64;
-            let max_allowed = ref_p.saturating_mul(10000 + collar_bps) / 10000;
-            let min_allowed = ref_p.saturating_mul(10000u64.saturating_sub(collar_bps)) / 10000;
+            // Use u128 to prevent overflow on large reference prices
+            let max_allowed = (ref_p as u128 * (10000 + collar_bps) as u128 / 10000) as u64;
+            let min_allowed = (ref_p as u128 * (10000u64.saturating_sub(collar_bps)) as u128 / 10000) as u64;
 
             let price_ok = match order.side {
                 OrderSide::Bid => order_p <= max_allowed,

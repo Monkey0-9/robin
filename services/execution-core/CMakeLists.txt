@@ -33,7 +33,15 @@ add_executable(live_feed
     src/live_feed.cpp
     src/strategy_engine.hpp
 )
-target_include_directories(live_feed PRIVATE src ../../shared)
+target_include_directories(live_feed PRIVATE src ../../shared ../../research/ai-engine)
+
+# Optional ONNX Runtime integration for ML signal engine
+option(USE_ONNX_RUNTIME "Build with ONNX Runtime support" OFF)
+if(USE_ONNX_RUNTIME)
+    target_compile_definitions(live_feed PRIVATE USE_ONNX_RUNTIME)
+    target_link_libraries(live_feed PRIVATE onnxruntime)
+    message(STATUS "ONNX Runtime enabled for live_feed ML signal engine")
+endif()
 
 # ─── Benchmarks ───────────────────────────────────────────────────────────────
 add_executable(order_book_benchmark bench/order_book_benchmark.cpp)

@@ -4,9 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,9 +19,14 @@ func main() {
 
 	logger.Info("Robin Gateway Orchestrator starting", "version", "1.1.0")
 
+	if err := InitJWTAuth(); err != nil {
+		logger.Error("JWT init failed", "error", err)
+		os.Exit(1)
+	}
+
 	// Enforce JWT key check for production runtime
-	if jwtAuth.publicKey == nil && jwtAuth.hmacKey == nil {
-		logger.Error("no JWT key configured (set ROBIN_JWT_PUBKEY or ROBIN_GATEWAY_API_TOKEN), refusing to start insecurely")
+	if jwtAuth.PublicKey == nil {
+		logger.Error("no JWT key configured (set ROBIN_JWT_PUBKEY_FILE or ROBIN_GATEWAY_API_TOKEN), refusing to start insecurely")
 		os.Exit(1)
 	}
 
@@ -34,9 +37,9 @@ func main() {
 	orch.RegisterService("PortfolioEngine", "127.0.0.1:9094")
 	orch.RegisterService("Compliance", "127.0.0.1:9095")
 
-	// Start mock TCP responders for health check probes of MarketData and PortfolioEngine
-	go startMockTCPServer(9093, "MarketData", logger)
-	go startMockTCPServer(9094, "PortfolioEngine", logger)
+	// NOTE: MarketData (9093) and PortfolioEngine (9094) are optional external services.
+	// Their health status will show as FAILED until they connect — this is intentional
+	// to prevent false-positive health reporting.
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -63,18 +66,19 @@ func main() {
 		caFile := envOrDefault("ORCH_CA_CERT", "")
 		if certFile != "" && keyFile != "" && caFile != "" {
 			caCert, err := os.ReadFile(caFile)
-			if err == nil {
-				caPool := x509.NewCertPool()
-				if caPool.AppendCertsFromPEM(caCert) {
-					httpServer.TLSConfig = &tls.Config{
-						MinVersion: tls.VersionTLS12,
-						ClientCAs:  caPool,
-						ClientAuth: tls.RequireAndVerifyClientCert,
-					}
-				}
-			} else {
+			if err != nil {
 				logger.Error("failed to read CA cert for mTLS", "error", err)
 				os.Exit(1)
+			}
+			caPool := x509.NewCertPool()
+			if !caPool.AppendCertsFromPEM(caCert) {
+				logger.Error("failed to parse CA cert PEM for mTLS", "file", caFile)
+				os.Exit(1)
+			}
+			httpServer.TLSConfig = &tls.Config{
+				MinVersion: tls.VersionTLS12,
+				ClientCAs:  caPool,
+				ClientAuth: tls.RequireAndVerifyClientCert,
 			}
 			go func() {
 				logger.Info("mTLS server listening", "port", httpPort)
@@ -120,19 +124,4 @@ func envOrDefault(key, def string) string {
 	return def
 }
 
-func startMockTCPServer(port int, name string, logger *slog.Logger) {
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		logger.Warn("Mock TCP server failed to start", "name", name, "port", port, "error", err)
-		return
-	}
-	defer listener.Close()
-	logger.Info("Mock TCP server started for health checks", "name", name, "port", port)
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			return
-		}
-		conn.Close()
-	}
-}
+

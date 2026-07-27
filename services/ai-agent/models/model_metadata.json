@@ -1,0 +1,89 @@
+{
+  "trained_at": "2026-07-26T04:05:26.847418Z",
+  "symbols": [
+    "BTC-USD",
+    "ETH-USD",
+    "SPY",
+    "QQQ",
+    "AAPL",
+    "TSLA",
+    "NVDA"
+  ],
+  "training_days": 730,
+  "training_rows": 2025,
+  "test_rows": 507,
+  "features": [
+    "ret_1d",
+    "ret_3d",
+    "ret_5d",
+    "ret_10d",
+    "ret_20d",
+    "vol_5d",
+    "vol_10d",
+    "vol_20d",
+    "macd",
+    "macd_signal",
+    "macd_hist",
+    "rsi_14",
+    "bb_pos",
+    "atr_pct",
+    "volume_zscore",
+    "price_vs_sma20",
+    "price_vs_sma50",
+    "price_vs_sma200",
+    "mom_5",
+    "mom_10",
+    "mom_20"
+  ],
+  "feature_count": 21,
+  "signal_metrics": {
+    "accuracy": 0.40039447731755423,
+    "report": {
+      "-1": {
+        "precision": 0.4107142857142857,
+        "recall": 0.42592592592592593,
+        "f1-score": 0.4181818181818182,
+        "support": 162.0
+      },
+      "0": {
+        "precision": 0.35714285714285715,
+        "recall": 0.2976190476190476,
+        "f1-score": 0.3246753246753247,
+        "support": 168.0
+      },
+      "1": {
+        "precision": 0.4221105527638191,
+        "recall": 0.4745762711864407,
+        "f1-score": 0.44680851063829785,
+        "support": 177.0
+      },
+      "accuracy": 0.40039447731755423,
+      "macro avg": {
+        "precision": 0.39665589854032063,
+        "recall": 0.3993737482438047,
+        "f1-score": 0.3965552178318135,
+        "support": 507.0
+      },
+      "weighted avg": {
+        "precision": 0.3969413848617559,
+        "recall": 0.40039447731755423,
+        "f1-score": 0.3971913520195026,
+        "support": 507.0
+      }
+    }
+  },
+  "vol_metrics": {
+    "mae": 7.539798596436198e-05,
+    "r2": 0.9998781800400667
+  },
+  "kelly_metrics": {
+    "mae": 0.12104380253688703,
+    "r2": 0.008269537791679715
+  },
+  "models": {
+    "signal_classifier": "signal_classifier.joblib",
+    "volatility_regressor": "volatility_regressor.joblib",
+    "regime_detector": "regime_detector.joblib",
+    "kelly_estimator": "kelly_estimator.joblib"
+  }
+}

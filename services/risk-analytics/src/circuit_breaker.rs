@@ -1,6 +1,13 @@
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use coarsetime::Clock;
+
+fn cached_time_ns() -> u64 {
+    let now = Clock::now_since_epoch();
+    now.as_secs() * 1_000_000_000 + now.as_nanos() % 1_000_000_000
+}
+
 pub struct RiskCircuitBreaker {
     tripped: AtomicBool,
     daily_drawdown_limit: f64,
@@ -32,20 +39,9 @@ impl RiskCircuitBreaker {
             return true;
         }
 
-        let mut current_peak = self.peak_equity.load(Ordering::Acquire);
-        loop {
-            if f64::from_bits(current_peak) >= peak_equity {
-                break;
-            }
-            match self.peak_equity.compare_exchange_weak(
-                current_peak,
-                peak_equity.to_bits(),
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(val) => current_peak = val,
-            }
+        let current_peak = self.peak_equity.load(Ordering::Relaxed);
+        if peak_equity > f64::from_bits(current_peak) {
+            self.peak_equity.store(peak_equity.to_bits(), Ordering::Release);
         }
 
         let actual_peak = f64::from_bits(self.peak_equity.load(Ordering::Acquire));
@@ -65,10 +61,7 @@ impl RiskCircuitBreaker {
 
     pub fn trip(&self, reason: &str) {
         self.tripped.store(true, Ordering::Release);
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos() as u64;
+        let now = cached_time_ns();
         self.trip_time_ns.store(now, Ordering::Release);
         self.trip_count.fetch_add(1, Ordering::Release);
         println!("[CIRCUIT_BREAKER] TRIPPED: {} at {}", reason, now);

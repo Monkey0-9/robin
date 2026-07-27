@@ -148,6 +148,10 @@ func getCertificationStatus(db *sql.DB) (*CertificationRecord, error) {
 // Requires: admin role. SEC 15c3-5 §(e)(2): CEO must certify annually.
 func handleCEOCertify(db *sql.DB, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if db == nil {
+			http.Error(w, `{"error":"database not initialized"}`, http.StatusInternalServerError)
+			return
+		}
 		var req CertificationRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, `{"error":"invalid request JSON"}`, http.StatusBadRequest)
@@ -281,6 +285,10 @@ func handleCertificationHistory(db *sql.DB) http.HandlerFunc {
 // Documents the annual effectiveness review required by SEC 15c3-5.
 func handleComplianceReview(db *sql.DB, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if db == nil {
+			http.Error(w, `{"error":"database not initialized"}`, http.StatusInternalServerError)
+			return
+		}
 		var req ComplianceReviewRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, `{"error":"invalid request JSON"}`, http.StatusBadRequest)
@@ -376,3 +384,6 @@ func verifyCertificationChain(db *sql.DB) (valid bool, issues []string) {
 
 	return len(issues) == 0, issues
 }
+
+var _ = certificationHealthFlag
+var _ = verifyCertificationChain

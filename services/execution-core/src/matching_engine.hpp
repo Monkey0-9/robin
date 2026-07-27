@@ -10,6 +10,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <array>
+#include <vector>
+#include <cstddef>
+#include <immintrin.h>
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
 
 #ifdef _WIN32
 #include <malloc.h>
@@ -21,10 +28,18 @@
 #endif
 
 #ifndef likely
+#ifdef _MSC_VER
+#define likely(x) (x)
+#else
 #define likely(x)   __builtin_expect(!!(x), 1)
 #endif
+#endif
 #ifndef unlikely
+#ifdef _MSC_VER
+#define unlikely(x) (x)
+#else
 #define unlikely(x) __builtin_expect(!!(x), 0)
+#endif
 #endif
 
 #define CACHE_LINE_SIZE 64
@@ -54,6 +69,8 @@ public:
     MatchingEngine() noexcept : running_(false), numa_node_(0), cpu_core_(2) {
         std::memset(&stats_, 0, sizeof(stats_));
         stats_.min_latency_ns = UINT64_MAX;
+        // allocate book storage on the heap to avoid exceeding static array size limits on MSVC
+        book_storage_.reset(new std::array<std::byte, sizeof(OrderBook)>[BOOK_COUNT]);
         for (auto& book : books_) book = nullptr;
     }
 
@@ -91,7 +108,8 @@ public:
     OrderBook* get_or_create_book(uint32_t instrument_id) noexcept {
         const size_t idx = instrument_id % BOOK_COUNT;
         if (unlikely(!books_[idx])) {
-            books_[idx] = new (&book_storage_[idx]) OrderBook(instrument_id);
+            void* mem = static_cast<void*>(book_storage_[idx].data());
+            books_[idx] = new (mem) OrderBook(instrument_id);
         }
         return books_[idx];
     }
@@ -140,16 +158,21 @@ private:
                 if (latency > stats_.max_latency_ns) stats_.max_latency_ns = latency;
                 if (latency < stats_.min_latency_ns) stats_.min_latency_ns = latency;
             } else {
-                __asm__ __volatile__("pause" ::: "memory");
+                _mm_pause();
             }
         }
     }
 
     static inline uint64_t rdtscp() noexcept {
+#ifdef _MSC_VER
+        unsigned int aux;
+        return __rdtscp(&aux);
+#else
         uint32_t aux;
         uint64_t rax, rdx;
         __asm__ __volatile__("rdtscp" : "=a"(rax), "=d"(rdx) : : "rcx");
         return (rdx << 32) | rax;
+#endif
     }
 
     ALIGN_PAD_64 std::atomic<bool> running_;
@@ -158,7 +181,9 @@ private:
     ALIGN_PAD_64 std::thread matching_thread_;
     ALIGN_PAD_64 LockFreeSPSCQueue<Order, INBOUND_CAPACITY> inbound_queue_;
     ALIGN_PAD_64 LockFreeSPSCQueue<Trade, OUTBOUND_CAPACITY> outbound_queue_;
-    alignas(64) OrderBook book_storage_[BOOK_COUNT];
+    /* heap-allocated byte storage to avoid 5.3GB embedded array;
+       placement-new constructs OrderBook instances on demand. */
+    std::unique_ptr<std::array<std::byte, sizeof(OrderBook)>[]> book_storage_;
     OrderBook* books_[BOOK_COUNT];
     ALIGN_PAD_64 EngineStats stats_;
 };

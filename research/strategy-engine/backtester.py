@@ -35,10 +35,11 @@ class Trade:
     notional: float
     commission: float = 0.0
     slippage: float = 0.0
+    latency_cost: float = 0.0
 
     @property
     def total_cost(self) -> float:
-        return self.commission + abs(self.slippage)
+        return self.commission + abs(self.slippage) + self.latency_cost
 
 
 @dataclass
@@ -52,6 +53,7 @@ class BacktestResult:
     total_trades: int
     total_commission: float
     total_slippage: float
+    total_latency_cost: float
     equity_curve: np.ndarray
     trades: List[Trade] = field(default_factory=list)
 
@@ -79,15 +81,28 @@ class StrategyBacktester:
         initial_capital: float = 1_000_000.0,
         commission_bps: float = 2.0,         # 2bps per trade (institutional rate)
         slippage_model: Optional[SlippageModel] = None,
+        mean_latency_ms: float = 5.0,
+        jitter_ms: float = 2.0,
     ):
         self.initial_capital = initial_capital
         self.commission_bps = commission_bps
         self.slippage_model = slippage_model or SlippageModel()
+        self.mean_latency_ms = mean_latency_ms
+        self.jitter_ms = jitter_ms
 
-    def _calc_transaction_costs(self, notional: float) -> tuple[float, float]:
+    def _calc_transaction_costs(self, notional: float) -> tuple[float, float, float]:
         commission = notional * (self.commission_bps / 10_000.0)
         slippage = self.slippage_model.estimate(notional)
-        return commission, slippage
+
+        # Latency jitter simulation (adverse selection)
+        if self.mean_latency_ms > 0 or self.jitter_ms > 0:
+            latency = max(0.0, np.random.normal(self.mean_latency_ms, self.jitter_ms))
+            drift_bps = (latency / 10.0) * 0.5  # 0.5bps drift per 10ms
+            latency_cost = notional * (drift_bps / 10_000.0)
+        else:
+            latency_cost = 0.0
+
+        return commission, slippage, latency_cost
 
     def run_backtest(self, prices: np.ndarray, signals: np.ndarray) -> BacktestResult:
         if len(prices) != len(signals):
@@ -100,6 +115,7 @@ class StrategyBacktester:
         trades: List[Trade] = []
         total_commission = 0.0
         total_slippage = 0.0
+        total_latency_cost = 0.0
 
         for i in range(n):
             price = float(prices[i])
@@ -108,31 +124,33 @@ class StrategyBacktester:
             if sig == 1 and capital > price:
                 qty = (capital * 0.95) / price
                 notional = qty * price
-                commission, slippage = self._calc_transaction_costs(notional)
-                total_cost = notional + commission + slippage
+                commission, slippage, latency_cost = self._calc_transaction_costs(notional)
+                total_cost = notional + commission + slippage + latency_cost
                 if total_cost > capital:
                     # Reduce size to fit within available capital
                     qty *= capital / total_cost
                     notional = qty * price
-                    commission, slippage = self._calc_transaction_costs(notional)
-                    total_cost = notional + commission + slippage
+                    commission, slippage, latency_cost = self._calc_transaction_costs(notional)
+                    total_cost = notional + commission + slippage + latency_cost
 
                 capital -= total_cost
                 position += qty
                 total_commission += commission
                 total_slippage += slippage
+                total_latency_cost += latency_cost
                 trades.append(Trade(i, 'SYM', OrderSide.BUY, price, qty, notional,
-                                    commission, slippage))
+                                    commission, slippage, latency_cost))
 
             elif sig == -1 and position > 0:
                 notional = position * price
-                commission, slippage = self._calc_transaction_costs(notional)
-                proceeds = notional - commission - slippage
+                commission, slippage, latency_cost = self._calc_transaction_costs(notional)
+                proceeds = notional - commission - slippage - latency_cost
                 capital += proceeds
                 total_commission += commission
                 total_slippage += slippage
+                total_latency_cost += latency_cost
                 trades.append(Trade(i, 'SYM', OrderSide.SELL, price, position, notional,
-                                    commission, slippage))
+                                    commission, slippage, latency_cost))
                 position = 0.0
 
             equity[i] = capital + position * price
@@ -165,6 +183,7 @@ class StrategyBacktester:
             total_trades=len(trades),
             total_commission=total_commission,
             total_slippage=total_slippage,
+            total_latency_cost=total_latency_cost,
             equity_curve=equity,
             trades=trades,
         )
@@ -252,7 +271,8 @@ def run_backtest_with_yfinance(
     print(f"  Trades:      {result.total_trades:>14d}")
     print(f"  Commission:  ${result.total_commission:>14,.2f}")
     print(f"  Slippage:    ${result.total_slippage:>14,.2f}")
-    print(f"  Total cost:  ${result.total_commission + result.total_slippage:>14,.2f}")
+    print(f"  Latency Cost:${result.total_latency_cost:>14,.2f}")
+    print(f"  Total cost:  ${result.total_commission + result.total_slippage + result.total_latency_cost:>14,.2f}")
     print(f" {'='*58}\n")
 
     return result
@@ -272,7 +292,7 @@ def run_backtest_with_100yr_parquet(
     from data_engine import DataEngine
     from orchestrator import HardwareConstrainedOrchestrator
 
-    engine = DataEngine(symbols=[symbol])
+    engine = DataEngine(symbols={symbol: '2000-01-01'})
     try:
         df = engine.load_dataset(symbol)
     except FileNotFoundError:
@@ -281,25 +301,32 @@ def run_backtest_with_100yr_parquet(
         df = engine.load_dataset(symbol)
 
     prices = df["close"].values
-    macro_sentiments = df["macro_sentiment"].values
+    macro_sentiments = df.get("macro_sentiment", pd.Series(0.0, index=df.index)).values
 
     orchestrator = HardwareConstrainedOrchestrator()
     signals = np.zeros(len(prices), dtype=np.int8)
 
     print(f"Running 100-year backtest over {len(prices):,} trading days for {symbol}...")
 
-    # Step through historical data using sequential orchestrator logic
-    for i in range(0, len(prices), 10):  # Sample every 10 periods for high-performance backtest
-        curr_price = prices[i]
-        macro_sent = macro_sentiments[i]
-        market_summary = f"Price: {curr_price}, MacroSentiment: {macro_sent:.2f}"
-        headlines = [f"Market update for {symbol} at step {i}"]
+    # Reuse a single event loop for all pipeline calls
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
-        sig = asyncio.run(
-            orchestrator.execute_sequential_pipeline(
-                market_summary, headlines, curr_price
+    try:
+        # Step through historical data using sequential orchestrator logic
+        for i in range(0, len(prices), 10):  # Sample every 10 periods for high-performance backtest
+            curr_price = prices[i]
+            macro_sent = macro_sentiments[i]
+            market_summary = f"Price: {curr_price}, MacroSentiment: {macro_sent:.2f}"
+            headlines = [f"Market update for {symbol} at step {i}"]
+
+            sig = loop.run_until_complete(
+                orchestrator.execute_sequential_pipeline(
+                    market_summary, headlines, curr_price
+                )
             )
-        )
+    finally:
+        loop.close()
 
         if sig and sig.get("action") != "HOLD":
             action = sig.get("action")
@@ -325,7 +352,8 @@ def run_backtest_with_100yr_parquet(
     print(f"  Trades:      {result.total_trades:>14d}")
     print(f"  Commission:  ${result.total_commission:>14,.2f}")
     print(f"  Slippage:    ${result.total_slippage:>14,.2f}")
-    print(f"  Total cost:  ${result.total_commission + result.total_slippage:>14,.2f}")
+    print(f"  Latency Cost:${result.total_latency_cost:>14,.2f}")
+    print(f"  Total cost:  ${result.total_commission + result.total_slippage + result.total_latency_cost:>14,.2f}")
     print(f" {'='*58}\n")
 
     return result
@@ -382,5 +410,6 @@ if __name__ == "__main__":
         print(f"Trades:      {r.total_trades:>14d}")
         print(f"Commission:  ${r.total_commission:>14,.2f}")
         print(f"Slippage:    ${r.total_slippage:>14,.2f}")
-        print(f"Total cost:  ${r.total_commission + r.total_slippage:>14,.2f}")
+        print(f"Latency Cost:${r.total_latency_cost:>14,.2f}")
+        print(f"Total cost:  ${r.total_commission + r.total_slippage + r.total_latency_cost:>14,.2f}")
 

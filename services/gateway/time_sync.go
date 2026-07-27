@@ -22,11 +22,11 @@ package main
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
-	"encoding/json"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -97,7 +97,7 @@ func (t *TimeSyncMonitor) Start(ctx context.Context) {
 // Now returns the current time adjusted for the measured NTP offset.
 // This should be used for all order and audit timestamps.
 func (t *TimeSyncMonitor) Now() int64 {
-	return time.Now().UnixNano() - t.offsetNs.Load()
+	return time.Now().UnixNano() + t.offsetNs.Load()
 }
 
 // Quality returns the current sync quality level.
@@ -221,9 +221,8 @@ func measureNTPOffset(server string) (int64, error) {
 	serverFracNs := int64(fracPart) * 1e9 >> 32
 	serverTimeNs := serverSecs*int64(time.Second) + serverFracNs
 
-	// Round-trip time / 2 for offset
-	rttNs := t4.UnixNano() - t1.UnixNano()
-	offsetNs := serverTimeNs - t1.UnixNano() + rttNs/2
+	// NTP offset = t3 - (t1 + t4) / 2  (with t2 ≈ t3 approximation)
+	offsetNs := serverTimeNs - (t1.UnixNano()+t4.UnixNano())/2
 
 	return offsetNs, nil
 }

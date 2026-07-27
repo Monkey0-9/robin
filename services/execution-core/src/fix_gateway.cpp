@@ -136,16 +136,14 @@ void FIXGateway::toAdmin(FIX::Message& message, const FIX::SessionID& sessionID)
     }
 }
 
-void FIXGateway::toApp(FIX::Message& message, const FIX::SessionID& sessionID) throw(FIX::DoNotSend) {
+void FIXGateway::toApp(FIX::Message& message, const FIX::SessionID& sessionID) {
     // Outbound application message validation
 }
 
-void FIXGateway::fromAdmin(const FIX::Message& message, const FIX::SessionID& sessionID)
-    throw(FIX::FieldNotFound, FIX::IncorrectDataFormat, FIX::IncorrectTagValue, FIX::RejectLogon) {
+void FIXGateway::fromAdmin(const FIX::Message& message, const FIX::SessionID& sessionID) {
 }
 
-void FIXGateway::fromApp(const FIX::Message& message, const FIX::SessionID& sessionID)
-    throw(FIX::FieldNotFound, FIX::IncorrectDataFormat, FIX::IncorrectTagValue, FIX::UnsupportedMessageType) {
+void FIXGateway::fromApp(const FIX::Message& message, const FIX::SessionID& sessionID) {
     crack(message, sessionID);
 }
 

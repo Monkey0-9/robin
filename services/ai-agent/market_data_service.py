@@ -21,7 +21,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, asdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Optional
 
 logger = logging.getLogger("market_data_service")
@@ -74,6 +74,8 @@ class MarketDataService:
         self._prices:  Dict[str, PriceSnapshot] = {}
         self._lock     = threading.RLock()
         self._running  = False
+        self._stop_event = threading.Event()
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._ws_task: Optional[asyncio.Task] = None
         self._poll_task: Optional[asyncio.Task] = None
 
@@ -116,10 +118,13 @@ class MarketDataService:
     def start_in_thread(self):
         """Convenience: start the event loop in a background daemon thread."""
         def _run():
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(self.start_async())
-            loop.run_forever()
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            self._loop.run_until_complete(self.start_async())
+            # Poll stop_event instead of running forever
+            while self._running and not self._stop_event.is_set():
+                self._loop.call_later(0.5, lambda: None)
+                self._loop.run_forever()
 
         t = threading.Thread(target=_run, daemon=True, name="market-data")
         t.start()
@@ -132,10 +137,10 @@ class MarketDataService:
 
     def stop(self):
         self._running = False
-        if self._ws_task:
-            self._ws_task.cancel()
-        if self._poll_task:
-            self._poll_task.cancel()
+        self._stop_event.set()
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(self._loop.stop)
+        # Tasks will be cancelled naturally when loop stops on stop_event
 
     # ─── Binance WebSocket ────────────────────────────────────────────────────
 

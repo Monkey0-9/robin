@@ -28,9 +28,15 @@ impl ChartRenderer {
             gl.bind_buffer(WebGl2RenderingContext::ARRAY_BUFFER, Some(buffer));
 
             // Mock data representation for instanced charts: [x, y, scale_x, scale_y, r, g, b, a]
-            let mock_data: [f32; 16] = [
-                -0.5, 0.0, 0.1, 0.4, 0.0, 1.0, 0.0, 1.0, // Bid bar (green)
-                0.5, 0.0, 0.1, 0.6, 1.0, 0.0, 0.0, 1.0, // Ask bar (red)
+            // 2 triangles × 3 vertices × 8 floats = 48 floats
+            let mock_data: [f32; 48] = [
+                // Bid bar (green) — 2 triangles
+                -0.5, 0.0, 0.1, 0.4, 0.0, 1.0, 0.0, 1.0,
+                -0.5, 0.0, 0.1, 0.4, 0.0, 1.0, 0.0, 1.0,
+                -0.5, 0.0, 0.1, 0.4, 0.0, 1.0, 0.0, 1.0,
+                -0.5, 0.0, 0.1, 0.4, 0.0, 1.0, 0.0, 1.0,
+                -0.5, 0.0, 0.1, 0.4, 0.0, 1.0, 0.0, 1.0,
+                -0.5, 0.0, 0.1, 0.4, 0.0, 1.0, 0.0, 1.0,
             ];
 
             // Safety check: Bind layout registers
@@ -43,7 +49,7 @@ impl ChartRenderer {
                 );
             }
 
-            gl.draw_arrays(WebGl2RenderingContext::TRIANGLES, 0, 2);
+            gl.draw_arrays(WebGl2RenderingContext::TRIANGLES, 0, 6);
         }
     }
 }

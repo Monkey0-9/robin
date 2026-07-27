@@ -12,6 +12,7 @@ Total on-disk size: ~500MB for 5 symbols × 100yr daily bars.
 import hashlib
 import logging
 import os
+import re
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -111,7 +112,8 @@ class DataEngine:
 
         end = end or datetime.now().strftime("%Y-%m-%d")
         cache_key = hashlib.md5(f"{ticker}-{start}-{end}".encode()).hexdigest()[:8]
-        cache_file = CACHE_DIR / f"{ticker.replace('/', '_')}_{cache_key}.parquet"
+        safe_ticker = re.sub(r'[^a-zA-Z0-9_-]', '_', ticker)
+        cache_file = CACHE_DIR / f"{safe_ticker}_{cache_key}.parquet"
 
         if cache_file.exists():
             logger.debug("Cache hit: %s", cache_file)
@@ -289,9 +291,6 @@ class DataEngine:
         # Price relative to MAs
         df["price_vs_sma50"]  = (close / df["sma_50"])  - 1
         df["price_vs_sma200"] = (close / df["sma_200"]) - 1
-
-        # Target: forward 5-day return (for supervised learning)
-        df["target_5d"] = close.pct_change(5).shift(-5)
 
         return df
 

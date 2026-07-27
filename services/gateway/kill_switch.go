@@ -22,6 +22,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -455,7 +456,7 @@ func (ks *KillSwitchManager) restoreFromDB() {
 
 func algoIDToSlot(algoID string) int {
 	h := sha256.Sum256([]byte(algoID))
-	return int(h[0])<<8|int(h[1]) & 0xFF // 0..255
+	return int(binary.BigEndian.Uint16(h[:2]) % 256) // 0..255, full 16-bit hash
 }
 
 func traderIDToSlot(traderID string) int {
@@ -476,7 +477,13 @@ func killSwitchHash(level, targetID, action, reason string, nowNs int64) string 
 func killSwitchStatusHandler(ks *KillSwitchManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(ks.GetStatus())
+		status := ks.GetStatus()
+		if halted, ok := status["system_halted"].(bool); ok && halted {
+			KillSwitchStatus.Set(1)
+		} else {
+			KillSwitchStatus.Set(0)
+		}
+		json.NewEncoder(w).Encode(status)
 	}
 }
 
@@ -494,6 +501,7 @@ func killSwitchTripSystemHandler(ks *KillSwitchManager) http.HandlerFunc {
 
 		admin := adminFromContext(r)
 		ks.TripSystem(body.Reason, admin)
+		KillSwitchStatus.Set(1)
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -686,7 +694,7 @@ func adminFromContext(r *http.Request) string {
 	return "unknown"
 }
 
-func extractPathParam(r *http.Request, key string) string {
+func extractPathParam(r *http.Request, _ string) string {
 	// Works with gorilla/mux path variables
 	path := r.URL.Path
 	// Simple last segment extraction

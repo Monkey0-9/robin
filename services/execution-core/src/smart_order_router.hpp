@@ -118,26 +118,4 @@ private:
 } // namespace execution
 } // namespace quantum
 
-// ============================================================================
-// Standalone demonstration
-// ============================================================================
-int main() {
-    using namespace quantum::execution;
-
-    SmartOrderRouter router;
-    Order order{"AAPL", 100, 150.25, true};
-
-    auto best = router.route_order(order);
-    std::printf("[SOR] Best venue for %s: %s (fill prob=%.2f)\n",
-                order.symbol.c_str(), best.venue_name.c_str(),
-                best.expected_fill_probability);
-
-    auto ranked = router.rank_venues(order);
-    std::printf("[SOR] Ranked venues:\n");
-    for (const auto& vs : ranked) {
-        std::printf("  %s -> fill_prob=%.2f\n",
-                    vs.venue_name.c_str(), vs.expected_fill_probability);
-    }
-
-    return 0;
-}
+// main() lives in the corresponding .cpp file; not in this header.

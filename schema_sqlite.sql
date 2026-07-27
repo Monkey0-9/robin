@@ -1,7 +1,14 @@
 -- ============================================================================
--- Robin Trading Platform - Persistence Layer Schema (SQLite)
--- Institutional-Grade Schema v2.0
+-- Robin Trading Platform - Offline/EOD Analytics & Compliance Ledger
+-- Institutional-Grade Schema v2.1
 -- Compliant with: SEC 15c3-5, FINRA 3110, MiFID II RTS 22/25, SEC 17a-4
+-- 
+-- ARCHITECTURE WARNING (TOP 1% QUANT STANDARD):
+-- SQLite is NEVER used on the hot execution path. 
+-- All live orders, trades, and risk snapshots are written asynchronously to
+-- a memory-mapped Append-Only Binary Journal (e.g., /dev/shm/journal.bin) 
+-- using zero-copy IPC. This SQLite schema is used strictly by the offline 
+-- reporting and compliance microservices to hydrate historical views at EOD.
 -- ============================================================================
 
 -- 1. Order History (with CAT/MiFID fields)

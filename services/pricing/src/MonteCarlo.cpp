@@ -197,8 +197,8 @@ public:
                 double pivot = AtA[col][col];
                 if (std::fabs(pivot) < 1e-14) {
                     for (size_t i = 0; i < n_itm; ++i) {
-                        double exercise = std::max(0.0, params_.strike_price - paths[t][i]);
-                        cash_flow[i] = std::max(cash_flow[i], exercise);
+                        double exercise = std::max(0.0, params_.strike_price - paths[t][itm_indices[i]]);
+                        cash_flow[itm_indices[i]] = std::max(cash_flow[itm_indices[i]], exercise);
                     }
                     goto next_step;
                 }

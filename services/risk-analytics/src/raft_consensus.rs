@@ -66,12 +66,10 @@ impl RaftConsensus {
         let interface: Ipv4Addr = "0.0.0.0".parse().unwrap();
         socket.join_multicast_v4(&mcast_addr, &interface).ok();
 
-        let is_leader = Arc::new(AtomicBool::new(node_id == 1 && !peers.is_empty()));
-        let role = Arc::new(Mutex::new(if node_id == 1 && !peers.is_empty() {
-            RaftRole::Leader
-        } else {
-            RaftRole::Follower
-        }));
+        // If this is a single-node cluster, initialize directly as Leader.
+        let initial_leader = peers.is_empty();
+        let is_leader = Arc::new(AtomicBool::new(initial_leader));
+        let role = Arc::new(Mutex::new(if initial_leader { RaftRole::Leader } else { RaftRole::Follower }));
 
         Self {
             node_id,
@@ -112,11 +110,13 @@ impl RaftConsensus {
             let mut rng = simple_rng(node_id);
 
             while running.load(Ordering::Relaxed) {
-                let current_role = *role.lock().unwrap();
+                // Snapshot role with lock dropped before state transitions
+                let current_role = {
+                    *role.lock().unwrap()
+                };
 
                 match current_role {
                     RaftRole::Leader => {
-                        // Send heartbeats to all peers
                         let current_term = term.load(Ordering::Relaxed);
                         for peer in &peers {
                             let msg = format!(
@@ -129,7 +129,6 @@ impl RaftConsensus {
                                 let _ = socket.send_to(msg.as_bytes(), addr);
                             }
                         }
-                        // Also broadcast via multicast
                         let msg = format!(
                             "HEARTBEAT|{}|{}|{}",
                             node_id,
@@ -143,20 +142,27 @@ impl RaftConsensus {
                     }
 
                     RaftRole::Follower => {
-                        // Check if we've heard from the leader recently
-                        let elapsed = last_heartbeat.lock().unwrap().elapsed();
-                        if elapsed > Duration::from_millis(election_timeout + (rng % 150)) {
-                            // Leader timeout — start election
+                        let mut transition_to_candidate = false;
+                        {
+                            let hb = last_heartbeat.lock().unwrap();
+                            if hb.elapsed() > Duration::from_millis(election_timeout + (rng % 150)) {
+                                let mut r = role.lock().unwrap();
+                                if *r == RaftRole::Follower {
+                                    *r = RaftRole::Candidate;
+                                    transition_to_candidate = true;
+                                }
+                            }
+                        }
+                        if transition_to_candidate {
                             println!("[RAFT] Node {}: leader timeout, starting election", node_id);
-                            *role.lock().unwrap() = RaftRole::Candidate;
                             rng = simple_rng(node_id + term.load(Ordering::Relaxed));
                         } else {
-                            // Listen for heartbeat / append entries
                             let mut buf = [0u8; 256];
-                            if let Ok((n, _)) = socket.recv_from(&mut buf) {
+                            if let Ok((n, src_addr)) = socket.recv_from(&mut buf) {
                                 let msg = String::from_utf8_lossy(&buf[..n]);
                                 Self::process_message(
                                     &msg,
+                                    src_addr,
                                     node_id,
                                     &role,
                                     &term,
@@ -164,24 +170,34 @@ impl RaftConsensus {
                                     &last_heartbeat,
                                     &log,
                                     &commit_index,
+                                    &socket,
                                 );
                             }
                         }
                     }
 
                     RaftRole::Candidate => {
-                        let current_term = term.fetch_add(1, Ordering::Relaxed) + 1;
-                        *voted_for.lock().unwrap() = Some(node_id);
+                        let current_term;
+                        {
+                            let mut voted = voted_for.lock().unwrap();
+                            let r = role.lock().unwrap();
+                            if *r != RaftRole::Candidate {
+                                drop(voted);
+                                drop(r);
+                                continue;
+                            }
+                            drop(r);
+                            current_term = term.fetch_add(1, Ordering::Relaxed) + 1;
+                            *voted = Some(node_id);
+                        }
 
-                        // Request votes from all peers
-                        let mut votes = 1; // Vote for self
-                        let total_peers = peers.len() + 1; // Include self
+                        let mut votes = 1;
+                        let total_peers = peers.len() + 1;
 
                         for peer in &peers {
                             let msg = format!("REQUEST_VOTE|{}|{}|{}", node_id, current_term, 0u64);
                             if let Ok(addr) = peer.addr.parse::<std::net::SocketAddr>() {
                                 if socket.send_to(msg.as_bytes(), addr).is_ok() {
-                                    // Listen for response
                                     let mut buf = [0u8; 256];
                                     let start = Instant::now();
                                     while start.elapsed() < Duration::from_millis(50) {
@@ -189,8 +205,8 @@ impl RaftConsensus {
                                             let resp = String::from_utf8_lossy(&buf[..n]);
                                             if resp.starts_with("VOTE_GRANTED") {
                                                 votes += 1;
+                                                break;
                                             }
-                                            break;
                                         }
                                     }
                                 }
@@ -202,12 +218,15 @@ impl RaftConsensus {
                                 "[RAFT] Node {}: elected leader for term {}",
                                 node_id, current_term
                             );
-                            *role.lock().unwrap() = RaftRole::Leader;
+                            let mut r = role.lock().unwrap();
+                            *r = RaftRole::Leader;
+                            drop(r);
                             is_leader.store(true, Ordering::Relaxed);
                             *last_heartbeat.lock().unwrap() = Instant::now();
                         } else {
-                            // Not elected — revert to follower
-                            *role.lock().unwrap() = RaftRole::Follower;
+                            let mut r = role.lock().unwrap();
+                            *r = RaftRole::Follower;
+                            drop(r);
                             std::thread::sleep(Duration::from_millis(50 + (rng % 100)));
                         }
                     }
@@ -221,6 +240,7 @@ impl RaftConsensus {
     #[allow(clippy::too_many_arguments)]
     fn process_message(
         msg: &str,
+        src_addr: std::net::SocketAddr,
         node_id: u64,
         role: &Mutex<RaftRole>,
         term: &AtomicU64,
@@ -228,6 +248,7 @@ impl RaftConsensus {
         last_heartbeat: &Mutex<Instant>,
         _log: &Mutex<Vec<LogEntry>>,
         commit_index: &AtomicU64,
+        socket: &UdpSocket,
     ) {
         let parts: Vec<&str> = msg.split('|').collect();
         if parts.len() < 3 {
@@ -269,7 +290,8 @@ impl RaftConsensus {
 
                     if voted.is_none() || *voted == Some(candidate_id) {
                         *voted = Some(candidate_id);
-                        // Send vote granted via UDP (would need peer socket addr)
+                        let resp = format!("VOTE_GRANTED|{}|{}", node_id, candidate_term);
+                        let _ = socket.send_to(resp.as_bytes(), src_addr);
                         println!(
                             "[RAFT] Node {}: voted for node {} in term {}",
                             node_id, candidate_id, candidate_term

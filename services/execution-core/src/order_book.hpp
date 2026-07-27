@@ -5,6 +5,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 
 namespace quantum {
 namespace execution {
@@ -248,7 +249,9 @@ private:
     void match_against_side(Order& order, PriceLevel* levels, size_t& count,
                             FixedVector<Trade, 64>& trades) noexcept {
         size_t write = 0;
-        for (size_t i = 0; i < count && order.qty > 0; i++) {
+        size_t i = 0;
+        for (; i < count && order.qty > 0; i++) {
+            if (trades.full()) break;
             if (order.type != OrderType::MARKET) {
                 bool price_ok = IsBid
                     ? order.price >= levels[i].price
@@ -268,6 +271,10 @@ private:
                     q.pop_front();
                     continue;
                 }
+                if (trades.full()) {
+                    break; // Stop matching to avoid silent trade drops
+                }
+
                 int64_t fill_qty = (order.qty < resting->qty) ? order.qty : resting->qty;
                 Trade t{};
                 t.trade_id     = static_cast<uint64_t>(instrument_id_) * 1000000ULL
@@ -278,7 +285,7 @@ private:
                 t.price         = levels[i].price; // Resting order's price (maker price)
                 t.qty           = fill_qty;
                 t.timestamp     = 0; // Caller should stamp with wall-clock/TSC
-                if (!trades.full()) trades.push_back(t);
+                trades.push_back(t);
 
                 order.qty   -= fill_qty;
                 resting->qty -= fill_qty;
@@ -290,17 +297,17 @@ private:
                 }
             }
 
-            if (!q.empty() || order.qty == 0) {
+            if (!q.empty()) {
                 if (write < i) levels[write] = levels[i];
                 write++;
             }
         }
 
-        // Compact consumed empty levels
-        size_t remaining = 0;
-        for (size_t i = write; i < count; i++)
-            levels[remaining++] = levels[i];
-        count = remaining;
+        // Move unprocessed levels (beyond where loop exited) after kept levels
+        for (size_t j = i; j < count; j++, write++) {
+            if (write < j) levels[write] = levels[j];
+        }
+        count = write;
     }
 
     uint32_t   instrument_id_;

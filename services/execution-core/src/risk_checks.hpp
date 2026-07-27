@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <ctime>
+#include <string>
 #include <unordered_map>
 #include <vector>
 #include <algorithm>
@@ -61,7 +62,10 @@ public:
         {
             size_t slot = order.id & 4095;
             auto [old_id, old_ts] = recent_orders_[slot];
-            if (old_id == order.id && (timestamp_ns - old_ts) < DUPLICATE_WINDOW_NS) {
+            uint64_t elapsed = (old_id == order.id)
+                ? timestamp_ns - old_ts
+                : DUPLICATE_WINDOW_NS + 1;
+            if (elapsed < DUPLICATE_WINDOW_NS) {
                 err_msg = "duplicate_order";
                 return false;
             }
@@ -79,9 +83,13 @@ public:
         {
             size_t slot = order.instrument_id & 4095;
             int64_t current = positions_[slot].net_position;
-            int64_t next = (order.side == Side::BID)
-                ? current + static_cast<int64_t>(order.qty)
-                : current - static_cast<int64_t>(order.qty);
+            int64_t qty = static_cast<int64_t>(order.qty);
+            int64_t next;
+            if (order.side == Side::BID) {
+                next = (current > POSITION_LIMIT - qty) ? POSITION_LIMIT + 1 : current + qty;
+            } else {
+                next = (current < -POSITION_LIMIT + qty) ? POSITION_LIMIT + 1 : current - qty;
+            }
             if (std::abs(next) > POSITION_LIMIT) { err_msg = "position_limit"; return false; }
             positions_[slot].net_position = next;
             positions_[slot].last_update_ns = timestamp_ns;
@@ -89,7 +97,10 @@ public:
         {
             size_t lookback = (velocity_head_ + VELOCITY_RING_SIZE - MAX_VELOCITY) % VELOCITY_RING_SIZE;
             uint64_t oldest_ts = velocity_ring_[lookback];
-            if (oldest_ts > 0 && (timestamp_ns - oldest_ts) < VELOCITY_WINDOW_NS) {
+            uint64_t elapsed = (oldest_ts > 0)
+                ? timestamp_ns - oldest_ts
+                : VELOCITY_WINDOW_NS + 1;
+            if (elapsed < VELOCITY_WINDOW_NS) {
                 err_msg = "velocity_limit";
                 return false;
             }

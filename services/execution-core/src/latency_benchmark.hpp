@@ -12,9 +12,7 @@ namespace benchmark {
 template <size_t MaxSamples = 1000000>
 class LatencyTracker {
 public:
-    LatencyTracker() : count_(0), max_latency_(0) {
-        std::fill(buckets_.begin(), buckets_.end(), 0);
-    }
+    LatencyTracker() : count_(0), max_latency_(0), buckets_(BUCKET_COUNT, 0) {}
 
     static inline uint64_t get_tsc() noexcept {
         uint64_t rax, rdx;
@@ -80,7 +78,7 @@ private:
     static constexpr size_t BUCKET_COUNT = 65536;
     size_t count_;
     uint64_t max_latency_;
-    std::array<uint32_t, BUCKET_COUNT> buckets_;
+    std::vector<uint32_t> buckets_;
 };
 
 } // namespace benchmark

@@ -267,16 +267,28 @@ func handleCATStatus(db *sql.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var pending, submitted, accepted, rejected int64
 		if db != nil {
-			db.QueryRow(`SELECT COUNT(*) FROM cat_reports WHERE status='PENDING'`).Scan(&pending)
-			db.QueryRow(`SELECT COUNT(*) FROM cat_reports WHERE status='SUBMITTED'`).Scan(&submitted)
-			db.QueryRow(`SELECT COUNT(*) FROM cat_reports WHERE status='ACCEPTED'`).Scan(&accepted)
-			db.QueryRow(`SELECT COUNT(*) FROM cat_reports WHERE status='REJECTED'`).Scan(&rejected)
+			if err := db.QueryRow(`SELECT COUNT(*) FROM cat_reports WHERE status='PENDING'`).Scan(&pending); err != nil {
+				pending = -1
+			}
+			if err := db.QueryRow(`SELECT COUNT(*) FROM cat_reports WHERE status='SUBMITTED'`).Scan(&submitted); err != nil {
+				submitted = -1
+			}
+			if err := db.QueryRow(`SELECT COUNT(*) FROM cat_reports WHERE status='ACCEPTED'`).Scan(&accepted); err != nil {
+				accepted = -1
+			}
+			if err := db.QueryRow(`SELECT COUNT(*) FROM cat_reports WHERE status='REJECTED'`).Scan(&rejected); err != nil {
+				rejected = -1
+			}
 		}
 
 		var mifidPending, mifidSubmitted int64
 		if db != nil {
-			db.QueryRow(`SELECT COUNT(*) FROM mifid_reports WHERE report_status='PENDING'`).Scan(&mifidPending)
-			db.QueryRow(`SELECT COUNT(*) FROM mifid_reports WHERE report_status='SUBMITTED'`).Scan(&mifidSubmitted)
+			if err := db.QueryRow(`SELECT COUNT(*) FROM mifid_reports WHERE report_status='PENDING'`).Scan(&mifidPending); err != nil {
+				mifidPending = -1
+			}
+			if err := db.QueryRow(`SELECT COUNT(*) FROM mifid_reports WHERE report_status='SUBMITTED'`).Scan(&mifidSubmitted); err != nil {
+				mifidSubmitted = -1
+			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -291,3 +303,6 @@ func handleCATStatus(db *sql.DB) http.HandlerFunc {
 		})
 	}
 }
+
+var _ = recordCATEvent
+var _ = recordMiFIDReport

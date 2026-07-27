@@ -247,8 +247,17 @@ static socket_t tcp_connect(const char* host, uint16_t port) noexcept {
 static void run_feed_loop(const char* symbol_hint) {
     robin::strategy::CompositeSignalEngine engine(symbol_hint);
 
+    /*
+     * NOTE: Production Binance feed requires WSS (TLS) on port 443.
+     * For production, integrate libwebsockets or OpenSSL for TLS.
+     * See: binance-docs.github.io/apidocs/websocket_api/en/
+     */
     static constexpr char HOST[] = "stream.binance.com";
-    static constexpr uint16_t PORT = 80; // Use port 80 for plain WS (no TLS required)
+#ifdef ROBIN_TLS_ENABLED
+    static constexpr uint16_t PORT = 443;
+#else
+    static constexpr uint16_t PORT = 80; // Dev only — no TLS
+#endif
     static constexpr char PATH[] = "/stream?streams=btcusdt@trade/ethusdt@trade";
 
     char ws_req[512];

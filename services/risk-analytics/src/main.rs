@@ -1,6 +1,7 @@
 use std::net::{TcpListener, TcpStream};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use robin_risk::gate::{RiskGate, Order, OrderSide};
 use serde_json::Value;
 
@@ -42,9 +43,12 @@ fn main() {
         }
     });
 
-    // Setup Ctrl-C handler for snapshot saving
+    // Setup Ctrl-C handler for snapshot saving and graceful shutdown
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
     ctrlc::set_handler(move || {
         println!("\n[RISK] Shutdown signal received. Saving snapshot...");
+        r.store(false, Ordering::Relaxed);
         if let Ok(g) = gate_clone.lock() {
             if let Err(e) = g.save_snapshot(snapshot_path) {
                 eprintln!("[RISK] Error saving snapshot: {}", e);
@@ -52,25 +56,53 @@ fn main() {
                 println!("[RISK] Snapshot saved successfully.");
             }
         }
-        std::process::exit(0);
     }).expect("Error setting Ctrl-C handler");
 
     let listener = TcpListener::bind("127.0.0.1:9092").unwrap();
+    listener.set_nonblocking(true).expect("Cannot set non-blocking");
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
+    let active_connections = Arc::new(AtomicU64::new(0));
+    const MAX_CONNECTIONS: u64 = 64;
+
+    // Use monotonically increasing atomic sequence for unique order IDs
+    let initial_seq = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64;
+    let order_seq = Arc::new(AtomicU64::new(initial_seq));
+
+    while running.load(Ordering::Relaxed) {
+        match listener.accept() {
+            Ok((stream, _)) => {
                 let gate = gate.clone();
+                let active = active_connections.clone();
+                let order_seq = order_seq.clone();
+                if active.load(Ordering::Relaxed) >= MAX_CONNECTIONS {
+                    eprintln!("[RISK] Max connections ({}) reached, dropping client", MAX_CONNECTIONS);
+                    continue;
+                }
+                active.fetch_add(1, Ordering::Relaxed);
                 std::thread::spawn(move || {
-                    handle_client(stream, gate);
+                    handle_client(stream, gate, order_seq);
+                    active.fetch_sub(1, Ordering::Relaxed);
                 });
+            }
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                continue;
             }
             Err(e) => eprintln!("[RISK] Connection failed: {}", e),
         }
     }
+
+    println!("[RISK] Shutting down gracefully, waiting for active connections...");
+    while active_connections.load(Ordering::Relaxed) > 0 {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    println!("[RISK] All connections closed. Exiting.");
 }
 
-fn handle_client(mut client_stream: TcpStream, gate: Arc<Mutex<RiskGate>>) {
+fn handle_client(mut client_stream: TcpStream, gate: Arc<Mutex<RiskGate>>, order_seq: Arc<AtomicU64>) {
     let mut buffer = [0; 4096];
 
     while let Ok(size) = client_stream.read(&mut buffer) {
@@ -97,10 +129,12 @@ fn handle_client(mut client_stream: TcpStream, gate: Arc<Mutex<RiskGate>>) {
                 OrderSide::Bid
             };
 
+            let instrument_id = v["instrument_id"].as_u64().unwrap_or(1) as u32;
+
             let mut order = Order {
                 id: 1, // Dummy ID
                 cl_order_id: 1,
-                instrument_id: 1, // Default to 1
+                instrument_id,
                 symbol: *b"UNKNOWN ",
                 price,
                 qty,
@@ -112,8 +146,7 @@ fn handle_client(mut client_stream: TcpStream, gate: Arc<Mutex<RiskGate>>) {
                 entry_time_ns: 0,
             };
             
-            // Generate basic unique ID based on timestamp
-            order.id = order.timestamp % 1000000000;
+            order.id = order_seq.fetch_add(1, Ordering::Relaxed);
 
             let approved = {
                 if let Ok(mut g) = gate.lock() {

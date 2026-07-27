@@ -210,11 +210,13 @@ class NewsSentimentAnalyst(LLMBaseAgent):
             )
             logger.info("[CPU] FinBERT ONNX loaded from %s", FINBERT_ONNX_DIR)
 
-        except ImportError as e:
+        except Exception as e:
             logger.warning(
-                "ONNX/transformers not available (%s) — using fallback",
+                "Failed to load FinBERT ONNX (%s) — using fallback",
                 e
             )
+            self._session = None
+            self._tokenizer = None
 
         self.is_loaded = True
 

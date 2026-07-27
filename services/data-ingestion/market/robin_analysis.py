@@ -34,22 +34,22 @@ def _import_from_path(module_name, file_path):
     spec.loader.exec_module(mod)
     return mod
 
-_ai_engine = _import_from_path("robin_signal_model", os.path.join(ROBIN_ROOT, "services", "ai-engine", "robin_signal_model.py"))
+_ai_engine = _import_from_path("robin_signal_model", os.path.join(ROBIN_ROOT, "research", "ai-engine", "robin_signal_model.py"))
 RobinSignalModel = _ai_engine.RobinSignalModel
 ModelInput = _ai_engine.ModelInput
 
 _yf = _import_from_path("yfinance_fetcher", os.path.join(ROBIN_ROOT, "services", "data-ingestion", "market", "yfinance_fetcher.py"))
 YFinanceFetcher = _yf.YFinanceFetcher
 
-_bt = _import_from_path("backtester", os.path.join(ROBIN_ROOT, "services", "strategy-engine", "backtester.py"))
+_bt = _import_from_path("backtester", os.path.join(ROBIN_ROOT, "research", "strategy-engine", "backtester.py"))
 StrategyBacktester = _bt.StrategyBacktester
 SlippageModel = _bt.SlippageModel
 BacktestResult = _bt.BacktestResult
 
-_ce = _import_from_path("correlation_engine", os.path.join(ROBIN_ROOT, "services", "strategy-engine", "correlation_engine.py"))
+_ce = _import_from_path("correlation_engine", os.path.join(ROBIN_ROOT, "research", "strategy-engine", "correlation_engine.py"))
 CorrelationEngine = _ce.CorrelationEngine
 
-_vo = _import_from_path("verification_oracle", os.path.join(ROBIN_ROOT, "services", "ai-engine", "verification_oracle.py"))
+_vo = _import_from_path("verification_oracle", os.path.join(ROBIN_ROOT, "research", "ai-engine", "verification_oracle.py"))
 VerificationOracle = _vo.VerificationOracle
 
 logger = logging.getLogger(__name__)

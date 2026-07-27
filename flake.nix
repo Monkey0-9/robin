@@ -32,16 +32,10 @@
             rustfmt
             clippy
 
-            # 3. Go Toolchain
-            go_1_21
-
-            # 4. OCaml Stack
+            # 3. OCaml Stack (Formal Verification & Logic)
             ocaml
             dune_3
             opam
-
-            # 5. Statistical Modeling
-            R
 
             # 6. Core System Libraries
             dpdk
@@ -53,7 +47,7 @@
             echo "============================================================"
             echo "   QUANTUM TERMINAL DEVELOPMENT ENVIRONMENT INITIALIZED     "
             echo "============================================================"
-            echo "Available tools: gcc, cmake, cargo, go, ocaml, dune, R, dpdk"
+            echo "Available tools: gcc, cmake, cargo, ocaml, dune, dpdk"
             echo "============================================================"
           '';
         };

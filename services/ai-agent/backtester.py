@@ -229,7 +229,7 @@ class Backtester:
                         entry_bar.timestamp_ns, bar.timestamp_ns + exit_latency_ns,
                         entry_signal, signal, capital
                     )
-                    capital    += trade.pnl + abs(position) * entry_price
+                    capital    += trade.pnl + position * entry_price
                     total_fees += trade.fee
                     total_slip += abs(exit_price * position) * self.slippage_bps / 10000
                     trades.append(trade)
@@ -384,7 +384,7 @@ class Backtester:
             avg_loss = np.mean([t.pnl_pct * 100 for t in losses]) if losses else 0.0
             gross_profit = sum(t.pnl for t in wins)
             gross_loss   = abs(sum(t.pnl for t in losses))
-            pf = gross_profit / gross_loss if gross_loss > 0 else float("inf")
+            pf = min(gross_profit / gross_loss, 1e6) if gross_loss > 0 else 999999.0
             avg_dur = np.mean([(t.exit_ns - t.entry_ns) / 1e9 / 86400 for t in trades])
         else:
             win_rate = avg_win = avg_loss = avg_dur = 0.0

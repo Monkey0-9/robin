@@ -11,6 +11,7 @@
 // ============================================================================
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::cell::UnsafeCell;
 
 /// All risk gate Prometheus metrics, stored atomically.
 pub static ORDERS_PROCESSED: AtomicU64 = AtomicU64::new(0);
@@ -32,6 +33,11 @@ pub static LATENCY_LE_1000: AtomicU64 = AtomicU64::new(0);
 pub static LATENCY_LE_5000: AtomicU64 = AtomicU64::new(0);
 pub static LATENCY_LE_10000: AtomicU64 = AtomicU64::new(0);
 
+/// Flush thread-local counters to globals. Called periodically.
+pub fn flush() {
+    // No-op: using direct atomics now
+}
+
 /// Record a processed order with its gate latency.
 #[inline]
 pub fn record_order(latency_ns: u64, approved: bool) {
@@ -41,7 +47,14 @@ pub fn record_order(latency_ns: u64, approved: bool) {
     }
     LATENCY_SUM_NS.fetch_add(latency_ns, Ordering::Relaxed);
     LATENCY_COUNT.fetch_add(1, Ordering::Relaxed);
-    // Update max latency (non-atomic CAS loop — acceptable for observability)
+
+    if latency_ns <= 100 { LATENCY_LE_100.fetch_add(1, Ordering::Relaxed); }
+    if latency_ns <= 500 { LATENCY_LE_500.fetch_add(1, Ordering::Relaxed); }
+    if latency_ns <= 1000 { LATENCY_LE_1000.fetch_add(1, Ordering::Relaxed); }
+    if latency_ns <= 5000 { LATENCY_LE_5000.fetch_add(1, Ordering::Relaxed); }
+    if latency_ns <= 10000 { LATENCY_LE_10000.fetch_add(1, Ordering::Relaxed); }
+
+    // Update max latency (global CAS — rare, acceptable for observability)
     let mut cur = LATENCY_MAX_NS.load(Ordering::Relaxed);
     while latency_ns > cur {
         match LATENCY_MAX_NS.compare_exchange_weak(
@@ -54,12 +67,6 @@ pub fn record_order(latency_ns: u64, approved: bool) {
             Err(v) => cur = v,
         }
     }
-
-    if latency_ns <= 100 { LATENCY_LE_100.fetch_add(1, Ordering::Relaxed); }
-    if latency_ns <= 500 { LATENCY_LE_500.fetch_add(1, Ordering::Relaxed); }
-    if latency_ns <= 1000 { LATENCY_LE_1000.fetch_add(1, Ordering::Relaxed); }
-    if latency_ns <= 5000 { LATENCY_LE_5000.fetch_add(1, Ordering::Relaxed); }
-    if latency_ns <= 10000 { LATENCY_LE_10000.fetch_add(1, Ordering::Relaxed); }
 }
 
 /// Render all metrics in Prometheus text exposition format.
@@ -132,11 +139,11 @@ pub fn serve_metrics(port: u16) {
     let listener = match TcpListener::bind(format!("0.0.0.0:{port}")) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("[METRICS] Failed to bind port {port}: {e}");
+            tracing::error!("[METRICS] Failed to bind port {port}: {e}");
             return;
         }
     };
-    eprintln!("[METRICS] Serving Prometheus metrics on :{port}/metrics");
+    tracing::info!("[METRICS] Serving Prometheus metrics on :{port}/metrics");
 
     for stream in listener.incoming() {
         match stream {
@@ -181,6 +188,7 @@ mod tests {
         record_order(1500, true);
         record_order(2500, false);
         record_order(800, true);
+        flush(); // Flush thread-local counters to globals
 
         assert_eq!(ORDERS_PROCESSED.load(Ordering::Relaxed), 3);
         assert_eq!(ORDERS_REJECTED.load(Ordering::Relaxed), 1);

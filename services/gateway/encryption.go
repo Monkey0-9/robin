@@ -16,12 +16,15 @@ package main
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
+
+	"golang.org/x/crypto/pbkdf2"
 )
 
 // ============================================================================
@@ -34,15 +37,16 @@ type EncryptionService struct {
 }
 
 // NewEncryptionService creates an EncryptionService using ROBIN_MASTER_KEY env var.
-// The key is derived via SHA-256 to ensure exactly 32 bytes regardless of input.
+// The key is derived via PBKDF2-SHA256 (100k iterations) to ensure exactly 32 bytes.
 // In production, this should be replaced with HSM-managed key material.
 func NewEncryptionService() (*EncryptionService, error) {
 	masterKey := os.Getenv("ROBIN_MASTER_KEY")
 	if masterKey == "" {
-		// Development fallback — log a warning; production should reject
-		masterKey = "robin-dev-master-key-do-not-use-in-production-12345"
+		return nil, fmt.Errorf("ROBIN_MASTER_KEY environment variable is not set")
 	}
-	key := sha256.Sum256([]byte(masterKey))
+	var key [32]byte
+	dk := pbkdf2.Key([]byte(masterKey), []byte("robin-enc-key-v1"), 100000, 32, sha256.New)
+	copy(key[:], dk)
 	return &EncryptionService{key: key}, nil
 }
 
@@ -171,8 +175,7 @@ func (h *SoftwareHSM) SignData(keyID string, data []byte) ([]byte, error) {
 		h.sigKeys[keyID] = key
 	}
 
-	mac := sha256.New()
-	mac.Write(key)
+	mac := hmac.New(sha256.New, key)
 	mac.Write(data)
 	return mac.Sum(nil), nil
 }
@@ -242,8 +245,7 @@ func (c *CloudHSMClient) SignData(keyID string, data []byte) ([]byte, error) {
 	// Mock PKCS#11 HSM call via AWS CloudHSM SDK
 	// In a real implementation, this would use github.com/miekg/pkcs11
 	// or the official AWS CloudHSM SDK for Go.
-	mac := sha256.New()
-	mac.Write([]byte("cloudhsm-mock-key-" + keyID))
+	mac := hmac.New(sha256.New, []byte("cloudhsm-mock-key-"+keyID))
 	mac.Write(data)
 	return mac.Sum(nil), nil
 }

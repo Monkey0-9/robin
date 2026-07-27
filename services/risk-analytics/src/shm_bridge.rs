@@ -13,7 +13,8 @@ pub struct ShmHeader {
     pub size: u32,
     pub pid_writer: u32,
     pub pid_reader: u32,
-    _pad3: [u8; 40],
+    pub last_heartbeat_ns: AtomicU64,
+    _pad3: [u8; 32],
 }
 
 pub const SHM_MAGIC: u64 = 0x524f42494e484d5f;
@@ -43,6 +44,17 @@ pub struct ShmBridge {
     pub ring: *mut ShmMessage,
 }
 
+// SAFETY: ShmBridge wraps a mutable mmap region behind raw pointers.
+// All mutations go through the push/pop methods which synchronise via
+// atomic write_idx/read_idx with acquire/release ordering. The struct
+// is !Send by default due to the raw pointer fields, but Send+Sync are
+// safe because:
+//   1. The mmap is file-backed and visible to all threads via shared
+//      address space.
+//   2. Atomic indexes guarantee single-writer/multi-reader safety.
+//   3. No aliased mutable access: push() takes &mut self and exclusive
+//      write_idx; pop() takes &mut self and exclusive read_idx.
+//   4. The MmapMut backing lives for the whole struct lifetime.
 unsafe impl Send for ShmBridge {}
 unsafe impl Sync for ShmBridge {}
 
@@ -88,6 +100,7 @@ impl ShmBridge {
                 (*header).size = SHM_CAPACITY as u32;
                 (*header).pid_writer = std::process::id();
                 (*header).pid_reader = 0;
+                (*header).last_heartbeat_ns = AtomicU64::new(0);
             }
         }
 
@@ -113,8 +126,14 @@ impl ShmBridge {
         let slot = (write_idx & (SHM_CAPACITY as u64 - 1)) as usize;
         unsafe {
             std::ptr::copy_nonoverlapping(msg as *const ShmMessage, self.ring.add(slot), 1);
-            std::sync::atomic::fence(Ordering::Release);
-            header.write_idx.store(write_idx + 1, Ordering::Relaxed);
+            header.write_idx.store(write_idx + 1, Ordering::Release);
+            header.last_heartbeat_ns.store(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u64,
+                Ordering::Relaxed,
+            );
         }
         true
     }
@@ -132,8 +151,7 @@ impl ShmBridge {
         let slot = (read_idx & (SHM_CAPACITY as u64 - 1)) as usize;
         unsafe {
             std::ptr::copy_nonoverlapping(self.ring.add(slot), msg as *mut ShmMessage, 1);
-            std::sync::atomic::fence(Ordering::Release);
-            header.read_idx.store(read_idx + 1, Ordering::Relaxed);
+            header.read_idx.store(read_idx + 1, Ordering::Release);
         }
         true
     }
@@ -160,6 +178,19 @@ impl ShmBridge {
     pub fn available(&self) -> u64 {
         let header = unsafe { &*self.header };
         header.write_idx.load(Ordering::Relaxed) - header.read_idx.load(Ordering::Relaxed)
+    }
+
+    pub fn writer_alive(&self, timeout_ns: u64) -> bool {
+        let header = unsafe { &*self.header };
+        let last_hb = header.last_heartbeat_ns.load(Ordering::Relaxed);
+        if last_hb == 0 {
+            return false;
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
+        now.saturating_sub(last_hb) < timeout_ns
     }
 
     pub fn unlink(path: &str) {

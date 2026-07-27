@@ -46,7 +46,7 @@ impl RendererContext {
         let text_frag = include_str!("shaders/text.frag");
 
         let chart_renderer = chart::ChartRenderer::new(&gl, chart_vert, chart_frag)?;
-        let orderbook_visualizer = orderbook::OrderBookVisualizer::new(&gl, chart_vert, orderbook_comp)?;
+        let orderbook_visualizer = orderbook::OrderBookVisualizer::from_compute(&gl, orderbook_comp)?;
         let text_renderer = text::TextRenderer::new(&gl, text_vert, text_frag)?;
 
         console_log!("Quantum Terminal v4.0 Renderer initialized with custom shaders.");
@@ -129,4 +129,28 @@ pub fn compile_and_link(
     let vert_shader = compile_shader(gl, WebGl2RenderingContext::VERTEX_SHADER, vert_source)?;
     let frag_shader = compile_shader(gl, WebGl2RenderingContext::FRAGMENT_SHADER, frag_source)?;
     link_program(gl, &vert_shader, &frag_shader)
+}
+
+pub fn compile_compute_program(
+    gl: &WebGl2RenderingContext,
+    source: &str,
+) -> Result<WebGlProgram, String> {
+    const COMPUTE_SHADER: u32 = 0x91B9;
+    let shader = compile_shader(gl, COMPUTE_SHADER, source)?;
+    let program = gl
+        .create_program()
+        .ok_or_else(|| String::from("Unable to create program object"))?;
+    gl.attach_shader(&program, &shader);
+    gl.link_program(&program);
+    if gl
+        .get_program_parameter(&program, WebGl2RenderingContext::LINK_STATUS)
+        .as_bool()
+        .unwrap_or(false)
+    {
+        Ok(program)
+    } else {
+        Err(gl
+            .get_program_info_log(&program)
+            .unwrap_or_else(|| String::from("Unknown error creating program object")))
+    }
 }

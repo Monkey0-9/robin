@@ -1,5 +1,5 @@
 // Kernel module for GPIO-based hardware kill switch
-// Uses descriptor-based GPIO API (modern replacement for legacy gpio_* API)
+// Uses legacy gpio_to_desc API (transitioning to descriptor-based gpiod_get)
 // Threaded IRQ to avoid sleeping in interrupt context
 //
 // SAFETY FIX v2.1.0: Kill switch now blocks only TRADING traffic on
@@ -33,9 +33,9 @@ static int gpio_pin = 18;
 module_param(gpio_pin, int, 0644);
 MODULE_PARM_DESC(gpio_pin, "GPIO pin number for kill switch input");
 
-static int debounce_ms = 50;
+static int debounce_ms = 5;
 module_param(debounce_ms, int, 0644);
-MODULE_PARM_DESC(debounce_ms, "Debounce delay in milliseconds");
+MODULE_PARM_DESC(debounce_ms, "Debounce delay in milliseconds (institutional: 1-5ms recommended)");
 
 /* Management port whitelist — traffic on these ports is NEVER blocked.
  * Add SSH (22), health-check (8080), admin (9090) etc. here.
@@ -126,6 +126,12 @@ static unsigned int kill_switch_nf_hook(void *priv, struct sk_buff *skb,
     return NF_ACCEPT;
 }
 
+/*
+ * NOTE: For production use, prefer iptables-based kill switch:
+ *   iptables -A OUTPUT -p tcp --dport 5000:9100 -j DROP
+ * This avoids per-packet kernel inspection overhead.
+ * The netfilter hook below is retained as a secondary mechanism.
+ */
 static int register_netfilter_hook(void)
 {
     nf_ops = kmalloc(sizeof(struct nf_hook_ops), GFP_KERNEL);

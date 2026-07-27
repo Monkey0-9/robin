@@ -10,6 +10,10 @@
 #include <chrono>
 #include <new>
 #include <memory>
+#ifdef _MSC_VER
+#include <intrin.h>
+#include <immintrin.h>
+#endif
 
 #include "../src/order_book.hpp"
 #include "../src/lockfree_queue.hpp"
@@ -18,25 +22,43 @@
 using namespace quantum::execution;
 
 #ifndef likely
+#ifdef _MSC_VER
+#define likely(x) (x)
+#else
 #define likely(x)   __builtin_expect(!!(x), 1)
 #endif
+#endif
 #ifndef unlikely
+#ifdef _MSC_VER
+#define unlikely(x) (x)
+#else
 #define unlikely(x) __builtin_expect(!!(x), 0)
+#endif
 #endif
 
 #define CACHE_LINE_SIZE 64
 #define ALIGN_PAD_64 alignas(CACHE_LINE_SIZE)
 
 static inline uint64_t rdtscp_bench() noexcept {
+#ifdef _MSC_VER
+    unsigned int aux;
+    return __rdtscp(&aux);
+#else
     uint32_t aux;
     uint64_t rax, rdx;
     __asm__ __volatile__("rdtscp" : "=a"(rax), "=d"(rdx) : : "rcx");
     return (rdx << 32) | rax;
+#endif
 }
 
 static inline void cpuid_bench() noexcept {
+#ifdef _MSC_VER
+    int cpuInfo[4];
+    __cpuid(cpuInfo, 0);
+#else
     uint32_t eax, ebx, ecx, edx;
     __asm__ __volatile__("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(0));
+#endif
 }
 
 struct alignas(CACHE_LINE_SIZE) HdrHistogram {
@@ -133,7 +155,11 @@ void producer_thread(LockFreeSPSCQueue<Order, 65536>& queue, uint64_t count) noe
         order.id = i + 1;
 
         while (!queue.push(order)) {
+#ifdef _MSC_VER
+            _mm_pause();
+#else
             __asm__ __volatile__("pause" ::: "memory");
+#endif
         }
 
         if ((i & 0xFFFF) == 0) {
@@ -149,7 +175,11 @@ void consumer_thread(OrderBook** books, LockFreeSPSCQueue<Order, 65536>& inbound
 
     for (uint64_t i = 0; i < count; ++i) {
         while (!inbound.pop(order)) {
+#ifdef _MSC_VER
+            _mm_pause();
+#else
             __asm__ __volatile__("pause" ::: "memory");
+#endif
         }
 
         const uint64_t start = rdtscp_bench();
@@ -163,7 +193,11 @@ void consumer_thread(OrderBook** books, LockFreeSPSCQueue<Order, 65536>& inbound
 
         for (size_t idx = 0; idx < trades_batch.size(); ++idx) {
             while (!outbound.push(trades_batch[idx])) {
+#ifdef _MSC_VER
+                _mm_pause();
+#else
                 __asm__ __volatile__("pause" ::: "memory");
+#endif
             }
         }
 

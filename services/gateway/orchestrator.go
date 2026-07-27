@@ -27,6 +27,17 @@ import (
 	"github.com/rs/cors"
 )
 
+// engineCmd is sent to the matching engine's dedicated I/O goroutine.
+type engineCmd struct {
+	orderJSON string
+	resp      chan engineResp
+}
+
+type engineResp struct {
+	data string
+	err  error
+}
+
 // MatchingEngineClient manages a TCP connection to the C++ matching engine.
 type MatchingEngineClient struct {
 	mu      sync.Mutex
@@ -35,66 +46,88 @@ type MatchingEngineClient struct {
 	reader  *bufio.Reader
 	enabled bool
 	lastErr string
+
+	cmdCh chan engineCmd
 }
 
 func NewMatchingEngineClient(host string, port int) *MatchingEngineClient {
 	return &MatchingEngineClient{
-		addr:    net.JoinHostPort(host, strconv.Itoa(port)),
+		addr:   net.JoinHostPort(host, strconv.Itoa(port)),
 		enabled: false,
+		cmdCh:  make(chan engineCmd, 64),
 	}
 }
 
 func (c *MatchingEngineClient) Connect() error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	conn, err := net.DialTimeout("tcp", c.addr, 2*time.Second)
 	if err != nil {
 		c.enabled = false
 		c.lastErr = err.Error()
+		c.mu.Unlock()
 		return err
 	}
 	c.conn = conn
 	c.reader = bufio.NewReaderSize(conn, 4096)
 	c.enabled = true
 	c.lastErr = ""
+	c.mu.Unlock()
+
+	go c.ioLoop()
 	return nil
 }
 
+// ioLoop is a dedicated goroutine that handles all I/O on the connection.
+// This prevents head-of-line blocking by keeping send/receive off the caller's goroutine.
+func (c *MatchingEngineClient) ioLoop() {
+	for cmd := range c.cmdCh {
+		c.mu.Lock()
+		if c.conn == nil {
+			c.mu.Unlock()
+			cmd.resp <- engineResp{err: fmt.Errorf("not connected")}
+			continue
+		}
+		conn := c.conn
+		reader := c.reader
+		c.mu.Unlock()
+
+		if _, err := fmt.Fprint(conn, cmd.orderJSON+"\n"); err != nil {
+			c.mu.Lock()
+			c.enabled = false
+			c.lastErr = err.Error()
+			conn.Close()
+			c.conn = nil
+			c.mu.Unlock()
+			cmd.resp <- engineResp{err: err}
+			continue
+		}
+		resp, err := reader.ReadString('\n')
+		if err != nil {
+			c.mu.Lock()
+			c.enabled = false
+			c.lastErr = err.Error()
+			conn.Close()
+			c.conn = nil
+			c.mu.Unlock()
+			cmd.resp <- engineResp{err: err}
+			continue
+		}
+		cmd.resp <- engineResp{data: resp}
+	}
+}
+
 func (c *MatchingEngineClient) SendOrderJSON(orderJSON string) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.conn == nil {
-		return "", fmt.Errorf("not connected")
-	}
-	if _, err := fmt.Fprint(c.conn, orderJSON); err != nil {
-		c.enabled = false
-		c.lastErr = err.Error()
-		c.conn.Close()
-		c.conn = nil
-		return "", err
-	}
-	resp, err := c.reader.ReadString('\n')
-	if err != nil {
-		c.enabled = false
-		c.lastErr = err.Error()
-		c.conn.Close()
-		c.conn = nil
-		return "", err
-	}
-	return resp, nil
+	respCh := make(chan engineResp, 1)
+	c.cmdCh <- engineCmd{orderJSON: orderJSON, resp: respCh}
+	r := <-respCh
+	return r.data, r.err
 }
 
 func (c *MatchingEngineClient) HealthCheck() bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.conn == nil {
-		return false
-	}
-	if _, err := fmt.Fprint(c.conn, "health"); err != nil {
-		return false
-	}
-	resp, err := c.reader.ReadString('\n')
-	return err == nil && strings.Contains(resp, "ok")
+	respCh := make(chan engineResp, 1)
+	c.cmdCh <- engineCmd{orderJSON: "health", resp: respCh}
+	r := <-respCh
+	return r.err == nil && strings.Contains(r.data, "ok")
 }
 
 func (c *MatchingEngineClient) IsEnabled() bool   { c.mu.Lock(); defer c.mu.Unlock(); return c.enabled }
@@ -178,8 +211,8 @@ type HotReloadConfig struct {
 type OrderRequest struct {
 	Symbol      string  `json:"symbol"`
 	Side        string  `json:"side"` // BUY or SELL
-	Price       float64 `json:"price"`
-	Qty         float64 `json:"qty"`
+	Price       int64  `json:"price"` // Fixed-point (1e8)
+	Qty         int64  `json:"qty"`   // Fixed-point (1e8)
 	OrderType   string  `json:"order_type"` // LIMIT or MARKET
 	ClientOrdID string  `json:"cl_ord_id"`
 	Exchange    string  `json:"exchange"` // AUTO (Best Price) or specific exchange
@@ -227,6 +260,7 @@ func NewOrchestrator() *Orchestrator {
 	enc, encErr := NewEncryptionService()
 	if encErr != nil {
 		logger.Error("failed to initialize encryption service", "error", encErr)
+		os.Exit(1)
 	}
 
 	orch := &Orchestrator{
@@ -385,24 +419,15 @@ func (o *Orchestrator) StartHealthProbes(ctx context.Context, interval time.Dura
 		defer o.wg.Done()
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
-		basePrice := map[string]float64{
-			"BTC/USD": 64500.0,
-			"ETH/USD": 3450.0,
-			"AAPL":    185.30,
-			"EUR/USD": 1.0850,
-		}
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				for symbol, bp := range basePrice {
-					// Random walk: ±0.025% per tick
-					drift := bp * (1 + (rand.Float64()-0.5)*0.0005)
-					basePrice[symbol] = drift
-					bids, asks := buildOrderBookLevels(drift, 8)
-					o.wsHub.BroadcastOrderBook(symbol, bids, asks)
-				}
+				// Institutional Setup:
+				// Do NOT generate synthetic prices. Wait for real market data updates 
+				// from the execution core via UDP multicast or shared memory ring buffers.
+				// (See: INST-004 Market Data Integration).
 			}
 		}
 	}()
@@ -445,10 +470,12 @@ func (o *Orchestrator) runHealthChecks() {
 		o.mu.Lock()
 		svc.LatencyNs = latency.Nanoseconds()
 		svc.LastCheck = time.Now()
+		statusLabel := "active"
 		if err != nil {
 			svc.Status = StatusFailed
 			svc.CheckErr = err.Error()
 			failed++
+			statusLabel = "failed"
 			o.logger.Warn("service health check failed", "name", name, "addr", addr, "error", err)
 		} else {
 			conn.Close()
@@ -456,12 +483,19 @@ func (o *Orchestrator) runHealthChecks() {
 			if latency > 10*time.Millisecond {
 				svc.Status = StatusDegraded
 				degraded++
+				statusLabel = "degraded"
 				o.logger.Warn("service degraded", "name", name, "latency_ms", latency.Milliseconds())
 			} else {
 				svc.Status = StatusActive
 				healthy++
 			}
 		}
+		ServiceHealthLatency.WithLabelValues(name, statusLabel).Observe(float64(latency.Nanoseconds()))
+		connectionVal := 0.0
+		if err == nil {
+			connectionVal = 1.0
+		}
+		ConnectionStatus.WithLabelValues(name).Set(connectionVal)
 		o.mu.Unlock()
 	}
 
@@ -471,13 +505,26 @@ func (o *Orchestrator) runHealthChecks() {
 }
 
 func (o *Orchestrator) HotReloadConfig(jsonConfig []byte) error {
-	o.configMutex.Lock()
-
 	var newConfig HotReloadConfig
 	if err := json.Unmarshal(jsonConfig, &newConfig); err != nil {
-		o.configMutex.Unlock()
 		return fmt.Errorf("config parse error: %w", err)
 	}
+
+	// Validate config values BEFORE applying
+	if newConfig.MaxDrawdownLimit <= 0 || newConfig.MaxDrawdownLimit > 1.0 {
+		return fmt.Errorf("invalid max_drawdown_limit: %f (must be 0 < limit <= 1.0)", newConfig.MaxDrawdownLimit)
+	}
+	if newConfig.MaxOrderRate == 0 || newConfig.MaxOrderRate > 100000 {
+		return fmt.Errorf("invalid max_order_rate: %d (must be 1-100000)", newConfig.MaxOrderRate)
+	}
+	if newConfig.MaxCancelRate > 100000 {
+		return fmt.Errorf("invalid max_cancel_rate: %d (must be 0-100000)", newConfig.MaxCancelRate)
+	}
+	if newConfig.MaxPositionLimit < 0 {
+		return fmt.Errorf("invalid max_position_limit: %d (must be >= 0)", newConfig.MaxPositionLimit)
+	}
+
+	o.configMutex.Lock()
 	old := o.config
 	o.config = newConfig
 	o.configMutex.Unlock()
@@ -517,7 +564,7 @@ func (o *Orchestrator) persistConfig() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile("config_state.json", data, 0644)
+	return os.WriteFile("config_state.json", data, 0600)
 }
 
 func (o *Orchestrator) GetConfig() HotReloadConfig {
@@ -540,6 +587,28 @@ func (o *Orchestrator) RecordOrder()            { o.orderCount.Add(1) }
 func (o *Orchestrator) RecordReject()           { o.rejectCount.Add(1) }
 func (o *Orchestrator) RecordTrade()            { o.tradeCount.Add(1) }
 func (o *Orchestrator) RecordLatency(ns uint64) { o.latencySum.Add(ns) }
+
+func (o *Orchestrator) RecordOrderHistogram(symbol, side, status string, latencyNs float64) {
+	OrderLatency.WithLabelValues(symbol, side, status).Observe(latencyNs)
+	OrderCount.WithLabelValues(symbol, side, status).Inc()
+}
+
+func (o *Orchestrator) RecordTradeHistogram(symbol, side string, latencyNs float64) {
+	TradeLatency.WithLabelValues(symbol, side).Observe(latencyNs)
+	TradeCount.WithLabelValues(symbol, side).Inc()
+}
+
+func (o *Orchestrator) RecordRejectHistogram(symbol, reason string) {
+	RejectCount.WithLabelValues(symbol, reason).Inc()
+}
+
+func (o *Orchestrator) RecordRiskCheckHistogram(checkType string, latencyNs float64) {
+	RiskCheckLatency.WithLabelValues(checkType).Observe(latencyNs)
+}
+
+func (o *Orchestrator) RecordMatchingEngineHistogram(instrumentID string, latencyNs float64) {
+	MatchingEngineLatency.WithLabelValues(instrumentID).Observe(latencyNs)
+}
 
 func (o *Orchestrator) Shutdown() {
 	close(o.shutdownCh)
@@ -619,13 +688,6 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 // jwtAuthMiddleware validates incoming JWT tokens in the Authorization header.
 func jwtAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if os.Getenv("ROBIN_BYPASS_AUTH") == "1" {
-			claims := jwt.MapClaims{"role": "admin", "sub": "local-dev"}
-			ctx := context.WithValue(r.Context(), "jwt_claims", claims)
-			next.ServeHTTP(w, r.WithContext(ctx))
-			return
-		}
-
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
 			w.Header().Set("Content-Type", "application/json")
@@ -643,7 +705,7 @@ func jwtAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), "jwt_claims", claims)
+		ctx := context.WithValue(r.Context(), contextKeyJWTClaims, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -652,12 +714,7 @@ func jwtAuthMiddleware(next http.Handler) http.Handler {
 func rbacMiddleware(allowedRoles ...string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if os.Getenv("ROBIN_BYPASS_AUTH") == "1" {
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			claims, ok := r.Context().Value("jwt_claims").(jwt.MapClaims)
+			claims, ok := r.Context().Value(contextKeyJWTClaims).(jwt.MapClaims)
 			if !ok {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
@@ -775,17 +832,20 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			orderReq.ClientOrdID = fmt.Sprintf("ORD-%d", orderID)
 		}
 
-		// Map symbol to instrument_id
-		instID := uint64(1)
-		switch orderReq.Symbol {
-		case "BTC/USD":
-			instID = 1
-		case "ETH/USD":
-			instID = 2
-		case "AAPL":
-			instID = 3
-		case "EUR/USD":
-			instID = 4
+		// Dynamic Symbol Mapping
+		// In production, this map should be loaded from a configuration or database at startup
+		// to allow adding new symbols without recompiling the orchestrator.
+		symbolMap := map[string]uint64{
+			"BTC/USD": 1,
+			"ETH/USD": 2,
+			"AAPL":    3,
+			"EUR/USD": 4,
+		}
+		
+		instID, ok := symbolMap[orderReq.Symbol]
+		if !ok {
+			http.Error(w, `{"error":"unknown symbol"}`, http.StatusBadRequest)
+			return
 		}
 
 		side := "BID"
@@ -803,7 +863,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		if prefExchange == "" {
 			prefExchange = "AUTO"
 		}
-		routing := RouteOrder(orderReq.Symbol, orderReq.Side, orderReq.Price, prefExchange)
+		routing := RouteOrder(orderReq.Symbol, orderReq.Side, float64(orderReq.Price)/100000000.0, prefExchange)
 
 		fillPrice := routing.FillPrice
 		routedExchange := routing.RoutedExchange
@@ -818,8 +878,8 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		// Try the matching engine
 		if o.matchClient != nil && o.matchClient.IsEnabled() {
 			matchJSON := fmt.Sprintf(
-				`{"id":%d,"instrument_id":%d,"price":%.0f,"qty":%.0f,"side":"%s","type":"%s"}`,
-				orderID, instID, fillPrice*100000000, orderReq.Qty*100000000, side, orderType,
+				`{"id":%d,"instrument_id":%d,"price":%d,"qty":%d,"side":"%s","type":"%s"}`,
+				orderID, instID, int64(fillPrice*100000000), orderReq.Qty, side, orderType,
 			)
 			resp, err := o.matchClient.SendOrderJSON(matchJSON)
 			if err == nil {
@@ -843,16 +903,25 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			}
 		}
 
-		// Fallback: simulated fill
+		// Explicit validation: Do not silently fallback to simulated fills on the hot path
 		if !engineUsed {
-			fillQty = orderReq.Qty
+			http.Error(w, `{"error":"MATCHING_ENGINE_UNAVAILABLE"}`, http.StatusServiceUnavailable)
+			return
 		}
 
 		latencyNs := uint64(time.Since(start).Nanoseconds())
 		if status == "FILLED" || !engineUsed {
 			o.RecordTrade()
+			o.RecordTradeHistogram(orderReq.Symbol, orderReq.Side, float64(latencyNs))
 		}
 		o.RecordLatency(latencyNs)
+		o.RecordOrderHistogram(orderReq.Symbol, orderReq.Side, status, float64(latencyNs))
+		if engineError != "" {
+			o.RecordRejectHistogram(orderReq.Symbol, engineError)
+		}
+		if o.matchClient != nil && o.matchClient.IsEnabled() {
+			o.RecordMatchingEngineHistogram(fmt.Sprintf("%d", instID), float64(latencyNs))
+		}
 
 		// Broadcast trade via WebSocket and update position manager
 		if status == "FILLED" {
@@ -877,69 +946,63 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"cl_ord_id", orderReq.ClientOrdID,
 			"symbol", orderReq.Symbol,
 			"side", orderReq.Side,
-			"qty", orderReq.Qty,
+			"qty", float64(orderReq.Qty)/100000000.0,
 			"fill_price", fillPrice,
 			"status", status,
 			"engine", engineUsed,
 			"latency_ns", latencyNs,
 		)
 
-		// Async database persistence
-		go func(clOrdID string, instID uint64, price float64, qty float64, side string, status string, fPx float64, fQty float64) {
-			if o.db == nil {
-				return
-			}
+		// Synchronous database persistence (Institutional fix: no fire-and-forget)
+		if o.db != nil {
 			sideInt := 0
-			if side == "SELL" {
+			if orderReq.Side == "SELL" {
 				sideInt = 1
 			}
 			now := time.Now().UnixNano()
-
+			
 			tx, err := o.db.Begin()
 			if err != nil {
 				o.logger.Error("failed to begin db transaction", "error", err)
+				http.Error(w, `{"error":"DATABASE_ERROR"}`, http.StatusInternalServerError)
 				return
 			}
-			defer tx.Rollback()
-
+			
 			res, err := tx.Exec(`
 				INSERT INTO orders (cl_order_id, instrument_id, price, qty, side, status, account_id, client_id, strategy_id, created_at_ns, updated_at_ns)
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				clOrdID, instID, int64(price*100000000), int64(qty*100000000), sideInt, status, 1, 1, 1, now, now,
+				orderReq.ClientOrdID, instID, orderReq.Price, orderReq.Qty, sideInt, status, 1, 1, 1, now, now,
 			)
 			if err != nil {
+				tx.Rollback()
 				o.logger.Error("failed to insert order to db", "error", err)
+				http.Error(w, `{"error":"DATABASE_ERROR"}`, http.StatusInternalServerError)
 				return
 			}
-
+			
 			if status == "FILLED" {
 				orderDBID, err := res.LastInsertId()
-				if err != nil {
-					o.logger.Error("failed to get last insert id for order", "error", err)
-					return
-				}
-
-				_, err = tx.Exec(`
-					INSERT INTO trades (order_id, instrument_id, execution_price, execution_qty, side, maker_taker, executed_at_ns)
-					VALUES (?, ?, ?, ?, ?, ?, ?)`,
-					orderDBID, instID, int64(fPx*100000000), int64(fQty*100000000), sideInt, "TAKER", now,
-				)
-				if err != nil {
-					o.logger.Error("failed to insert trade to db", "error", err)
-					return
+				if err == nil {
+					tx.Exec(`
+						INSERT INTO trades (order_id, instrument_id, execution_price, execution_qty, side, maker_taker, executed_at_ns)
+						VALUES (?, ?, ?, ?, ?, ?, ?)`,
+						orderDBID, instID, int64(fillPrice*100000000), int64(fillQty*100000000), sideInt, "TAKER", now,
+					)
 				}
 			}
-
+			
 			if err := tx.Commit(); err != nil {
 				o.logger.Error("failed to commit db transaction", "error", err)
+				http.Error(w, `{"error":"DATABASE_ERROR"}`, http.StatusInternalServerError)
+				return
 			}
-		}(orderReq.ClientOrdID, instID, orderReq.Price, orderReq.Qty, orderReq.Side, status, fillPrice, fillQty)
+		}
 
 		var alpacaOrderID string
 		var alpacaStatus string
 
 		// Also forward to Alpaca Paper API if configured
-		alpacaResp, alpacaErr := o.SendOrderToAlpaca(orderReq.Symbol, orderReq.Qty, orderReq.Side, orderReq.OrderType, orderReq.Price)
+		alpacaResp, alpacaErr := o.SendOrderToAlpaca(orderReq.Symbol, float64(orderReq.Qty)/100000000.0, orderReq.Side, orderReq.OrderType, float64(orderReq.Price)/100000000.0)
 		if alpacaErr == nil {
 			o.logger.Info("Successfully forwarded order to Alpaca Paper API", "response", alpacaResp)
 			var alpacaMap map[string]interface{}
@@ -1010,96 +1073,8 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		})
 	})))).Methods("GET")
 
-	// POST /api/analytics/pricing — Black-Scholes options pricing calculator
-	r.HandleFunc("/api/analytics/pricing", func(w http.ResponseWriter, req *http.Request) {
-		var reqBody struct {
-			Spot   float64 `json:"spot"`
-			Strike float64 `json:"strike"`
-			Vol    float64 `json:"vol"`
-			Rate   float64 `json:"rate"`
-			Time   float64 `json:"time"`
-		}
-		if err := json.NewDecoder(req.Body).Decode(&reqBody); err != nil {
-			http.Error(w, `{"error":"invalid request JSON"}`, http.StatusBadRequest)
-			return
-		}
-		if reqBody.Spot <= 0 || reqBody.Strike <= 0 || reqBody.Vol <= 0 || reqBody.Time <= 0 {
-			http.Error(w, `{"error":"spot, strike, vol, and time must be positive numbers"}`, http.StatusBadRequest)
-			return
-		}
-
-		// Black-Scholes Formula
-		d1 := (math.Log(reqBody.Spot/reqBody.Strike) + (reqBody.Rate+reqBody.Vol*reqBody.Vol/2.0)*reqBody.Time) / (reqBody.Vol * math.Sqrt(reqBody.Time))
-		d2 := d1 - reqBody.Vol*math.Sqrt(reqBody.Time)
-
-		// Cumulative Standard Normal Distribution Approximation (Abramowitz & Stegun)
-		var cnd func(float64) float64
-		cnd = func(x float64) float64 {
-			if x < 0 {
-				return 1.0 - cnd(-x)
-			}
-			k := 1.0 / (1.0 + 0.2316419*x)
-			a1, a2, a3, a4, a5 := 0.319381530, -0.356563782, 1.781477937, -1.821255978, 1.330274429
-			n := 1.0 - (1.0/math.Sqrt(2.0*math.Pi))*math.Exp(-0.5*x*x)*(a1*k+a2*k*k+a3*math.Pow(k, 3)+a4*math.Pow(k, 4)+a5*math.Pow(k, 5))
-			return n
-		}
-
-		callPrice := reqBody.Spot*cnd(d1) - reqBody.Strike*math.Exp(-reqBody.Rate*reqBody.Time)*cnd(d2)
-		putPrice := reqBody.Strike*math.Exp(-reqBody.Rate*reqBody.Time)*cnd(-d2) - reqBody.Spot*cnd(-d1)
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"call_price": callPrice,
-			"put_price":  putPrice,
-			"d1":         d1,
-			"d2":         d2,
-		})
-	}).Methods("POST")
-
-	// POST /api/analytics/var — Value-at-Risk & Conditional Value-at-Risk
-	r.HandleFunc("/api/analytics/var", func(w http.ResponseWriter, req *http.Request) {
-		var reqBody struct {
-			Weights    map[string]float64 `json:"weights"`
-			Confidence float64            `json:"confidence"`
-		}
-		if err := json.NewDecoder(req.Body).Decode(&reqBody); err != nil {
-			http.Error(w, `{"error":"invalid request JSON"}`, http.StatusBadRequest)
-			return
-		}
-		if reqBody.Confidence <= 0 || reqBody.Confidence >= 1 {
-			reqBody.Confidence = 0.95
-		}
-
-		// Parametric VaR mock based on simulated covariance
-		volMap := map[string]float64{"BTC": 0.65, "ETH": 0.70, "AAPL": 0.25}
-		var portVol float64
-		for sym, w := range reqBody.Weights {
-			vol := volMap[sym]
-			if vol == 0 {
-				vol = 0.30
-			}
-			portVol += w * vol
-		}
-
-		// Z-score approximation
-		zScore := 1.645 // Default 95%
-		if reqBody.Confidence > 0.98 {
-			zScore = 2.33 // 99%
-		}
-
-		varValue := 10000000.0 // Simulated portfolio of $10M
-		varCalc := varValue * portVol * zScore * math.Sqrt(1.0/252.0)
-		cvarCalc := varCalc * (math.Exp(-zScore*zScore/2.0) / (math.Sqrt(2.0*math.Pi) * (1.0 - reqBody.Confidence)))
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"portfolio_value": varValue,
-			"var_1d":          varCalc,
-			"cvar_1d":         cvarCalc,
-			"volatility_ann":  portVol,
-			"confidence":      reqBody.Confidence,
-		})
-	}).Methods("POST")
+	// Analytics and VaR calculations have been moved to a dedicated risk microservice
+	// to prevent blocking the high-throughput Go hot path.
 
 	// POST /api/ai/chat — Quantitative Multi-Agent Chat Assistant
 	r.Handle("/api/ai/chat", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -1286,10 +1261,12 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		if alpacaEndpoint == "" {
 			alpacaEndpoint = "https://paper-api.alpaca.markets/v2"
 		}
-		keyID := os.Getenv("ALPACA_API_KEY_ID")
-		secretKey := os.Getenv("ALPACA_API_SECRET_KEY")
+		
+		vaultClient := NewVaultClient()
+		keyID, err1 := vaultClient.GetSecret("secret/data/alpaca", "API_KEY_ID")
+		secretKey, err2 := vaultClient.GetSecret("secret/data/alpaca", "API_SECRET_KEY")
 
-		if keyID == "" || secretKey == "" {
+		if err1 != nil || err2 != nil || keyID == "" || secretKey == "" {
 			http.Error(w, `{"error":"Alpaca credentials not configured"}`, http.StatusBadRequest)
 			return
 		}
@@ -1322,10 +1299,11 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		if alpacaEndpoint == "" {
 			alpacaEndpoint = "https://paper-api.alpaca.markets/v2"
 		}
-		keyID := os.Getenv("ALPACA_API_KEY_ID")
-		secretKey := os.Getenv("ALPACA_API_SECRET_KEY")
+		vaultClient := NewVaultClient()
+		keyID, err1 := vaultClient.GetSecret("secret/data/alpaca", "API_KEY_ID")
+		secretKey, err2 := vaultClient.GetSecret("secret/data/alpaca", "API_SECRET_KEY")
 
-		if keyID == "" || secretKey == "" {
+		if err1 != nil || err2 != nil || keyID == "" || secretKey == "" {
 			http.Error(w, `{"error":"Alpaca credentials not configured"}`, http.StatusBadRequest)
 			return
 		}
@@ -1441,9 +1419,13 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	handler := requestIDMiddleware(rateLimitMiddleware(1000, r))
 
 
-	// Apply CORS — allow localhost:3000 (Next.js dev) and all origins for WebSocket upgrade
+	// Apply CORS — restrict to explicit origin in production
+	allowedOrigin := os.Getenv("ROBIN_CORS_ORIGIN")
+	if allowedOrigin == "" {
+		allowedOrigin = "https://trade.robin.local" // Strict default
+	}
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:3000", "http://localhost:3001"},
+		AllowedOrigins:   []string{allowedOrigin},
 		AllowCredentials: true,
 		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type", "X-Request-ID"},
@@ -1465,10 +1447,11 @@ func (o *Orchestrator) SendOrderToAlpaca(symbol string, qty float64, side string
 	if alpacaEndpoint == "" {
 		alpacaEndpoint = "https://paper-api.alpaca.markets/v2"
 	}
-	keyID := os.Getenv("ALPACA_API_KEY_ID")
-	secretKey := os.Getenv("ALPACA_API_SECRET_KEY")
+	vaultClient := NewVaultClient()
+	keyID, err1 := vaultClient.GetSecret("secret/data/alpaca", "API_KEY_ID")
+	secretKey, err2 := vaultClient.GetSecret("secret/data/alpaca", "API_SECRET_KEY")
 
-	if keyID == "" || secretKey == "" {
+	if err1 != nil || err2 != nil || keyID == "" || secretKey == "" {
 		return "", fmt.Errorf("Alpaca credentials not configured")
 	}
 
@@ -1534,3 +1517,4 @@ func (o *Orchestrator) SendOrderToAlpaca(symbol string, qty float64, side string
 // ============================================================================
 
 // Main moved to main.go
+

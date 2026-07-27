@@ -49,6 +49,9 @@ impl HedgingEngine {
 
     pub fn execute_hedge(&self, index_price: f64) -> Vec<HedgeOrder> {
         let mut orders = Vec::new();
+        if index_price <= 0.0 {
+            return orders;
+        }
         for (symbol, pos) in &self.positions {
             if let Some(beta) = self.beta_sensitivities.get(symbol) {
                 let market_exposure = pos.qty as f64 * pos.avg_price;

@@ -59,14 +59,21 @@ class SmartPortfolioOptimizer:
             1 - shrinkage_intensity
         ) * cov_matrix + shrinkage_intensity * shrinkage_target
 
-        # Simulate LSTM Volatility Forecast (Lightweight ONNX)
+        # EWMA volatility forecast (exponentially weighted, λ=0.94 RiskMetrics)
         print(
-            "[PortfolioOptimizer] Running Lightweight LSTM (ONNX) Volatility Forecast..."
+            "[PortfolioOptimizer] Running EWMA Volatility Forecast..."
         )
-        predicted_vol_multiplier = 1.0 + np.random.uniform(
-            -0.1, 0.1
-        )  # Mock LSTM output
-        cov_matrix *= predicted_vol_multiplier
+        lam = 0.94
+        sq_returns = returns.values ** 2
+        ewma_var = np.zeros_like(sq_returns)
+        ewma_var[0] = sq_returns[0]
+        for t in range(1, len(sq_returns)):
+            ewma_var[t] = lam * ewma_var[t - 1] + (1 - lam) * sq_returns[t]
+        forecast_var = ewma_var[-1]
+        # Scale covariance by predicted vs historical variance ratio
+        hist_var = np.mean(sq_returns, axis=0) + 1e-12
+        vol_ratio = np.sqrt(forecast_var / hist_var)
+        cov_matrix *= np.outer(vol_ratio, vol_ratio)
 
         num_assets = len(historical_prices_df.columns)
 

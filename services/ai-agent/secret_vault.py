@@ -42,7 +42,7 @@ def save_vault(key, data):
     # Ensure tight permissions on Windows/Linux
     try:
         os.chmod(VAULT_FILE, 0o600)
-    except:
+    except OSError:
         pass
 
 def migrate_env(env_path):

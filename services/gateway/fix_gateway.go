@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,6 +47,7 @@ func (m *FixMessage) encode() string {
 	for k := range m.Fields {
 		keys = append(keys, k)
 	}
+	sort.Ints(keys)
 	for _, k := range keys {
 		tags = append(tags, fmt.Sprintf("%d=%s%s", k, m.Fields[k], SOH))
 	}
@@ -360,18 +362,21 @@ func (e *FixEngine) heartbeatLoop() {
 	for !e.stopped.Load() {
 		<-ticker.C
 
+		// Snapshot state under lock, send outside lock to avoid blocking I/O
 		e.mu.Lock()
 		if !e.connected || e.conn == nil {
 			e.mu.Unlock()
 			return
 		}
+		conn := e.conn
 		hb := Heartbeat(e.senderCompID, e.targetCompID, e.seqNum)
 		e.seqNum++
 		encoded := hb.encode()
-		if _, err := fmt.Fprint(e.conn, encoded); err != nil {
+		e.mu.Unlock()
+
+		if _, err := fmt.Fprint(conn, encoded); err != nil {
 			e.logger.Warn("Heartbeat send failed", "error", err)
 		}
-		e.mu.Unlock()
 	}
 }
 
