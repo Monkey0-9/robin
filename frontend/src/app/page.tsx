@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useTerminalStore } from '../store/useTerminalStore';
+import ErrorBoundary from '../components/ErrorBoundary';
 import Header from '../components/Header';
 import Watchlist from '../components/Watchlist';
 import TradingViewChart from '../components/TradingViewChart';
@@ -208,20 +209,28 @@ export default function Dashboard() {
             <div className="h-full p-2.5 grid grid-cols-12 gap-2.5 overflow-hidden">
               {/* Left Column: Watchlist (Grid col-span-3) */}
               <div className="col-span-12 lg:col-span-3 h-full min-h-0">
-                <Watchlist />
+                <ErrorBoundary title="Watchlist">
+                  <Watchlist />
+                </ErrorBoundary>
               </div>
 
               {/* Center Column: Chart (top) & Active Positions/Orders (bottom) */}
               <div className="col-span-12 lg:col-span-6 h-full flex flex-col gap-2.5 min-h-0">
                 <div className="flex-[3] min-h-0">
-                  <TradingViewChart />
+                  <ErrorBoundary title="Price Chart">
+                    <TradingViewChart />
+                  </ErrorBoundary>
                 </div>
                 <div className="flex-[2] grid grid-cols-2 gap-2.5 min-h-0">
                   <div className="col-span-2 md:col-span-1 min-h-0">
-                    <PositionsTable />
+                    <ErrorBoundary title="Positions">
+                      <PositionsTable />
+                    </ErrorBoundary>
                   </div>
                   <div className="col-span-2 md:col-span-1 min-h-0">
-                    <OrdersTable />
+                    <ErrorBoundary title="Orders">
+                      <OrdersTable />
+                    </ErrorBoundary>
                   </div>
                 </div>
               </div>
@@ -246,11 +255,15 @@ export default function Dashboard() {
                     </div>
                   </div>
                   <div className="flex-1 min-h-0">
-                    {rightPanelTab === 'book' ? <OrderBook /> : <BestPriceComparison />}
+                    <ErrorBoundary title={rightPanelTab === 'book' ? 'Order Book' : 'Smart Router'}>
+                      {rightPanelTab === 'book' ? <OrderBook /> : <BestPriceComparison />}
+                    </ErrorBoundary>
                   </div>
                 </div>
                 <div className="flex-[2] min-h-0">
-                  <OrderEntry />
+                  <ErrorBoundary title="Order Entry">
+                    <OrderEntry />
+                  </ErrorBoundary>
                 </div>
               </div>
             </div>
@@ -419,14 +432,20 @@ export default function Dashboard() {
           {activeTab === 'ai' && (
             <div className="h-full p-2.5 flex flex-col gap-2.5 overflow-hidden">
               <div className="flex-[2] min-h-0">
-                <AIAutonomousPanel />
+                <ErrorBoundary title="AI Autonomous Engine">
+                  <AIAutonomousPanel />
+                </ErrorBoundary>
               </div>
               <div className="flex-[3] grid grid-cols-12 gap-2.5 min-h-0">
                 <div className="col-span-12 md:col-span-6 h-full min-h-0">
-                  <AIPanel />
+                  <ErrorBoundary title="AI Assistant">
+                    <AIPanel />
+                  </ErrorBoundary>
                 </div>
                 <div className="col-span-12 md:col-span-6 h-full min-h-0">
-                  <NewsFeed />
+                  <ErrorBoundary title="News Feed">
+                    <NewsFeed />
+                  </ErrorBoundary>
                 </div>
               </div>
             </div>
@@ -445,10 +464,14 @@ export default function Dashboard() {
           {activeTab === 'screener' && (
             <div className="h-full p-2.5 grid grid-cols-12 gap-2.5 overflow-hidden">
               <div className="col-span-12 lg:col-span-6 h-full min-h-0">
-                <Screener />
+                <ErrorBoundary title="Asset Screener">
+                  <Screener />
+                </ErrorBoundary>
               </div>
               <div className="col-span-12 lg:col-span-6 h-full min-h-0">
-                <Heatmap />
+                <ErrorBoundary title="Sector Heatmap">
+                  <Heatmap />
+                </ErrorBoundary>
               </div>
             </div>
           )}

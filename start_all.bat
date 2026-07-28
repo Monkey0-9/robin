@@ -48,10 +48,10 @@ if exist build\live_feed.exe (
 cd ..\..
 
 :: ── [4/4] Go Gateway / OMS ───────────────────────────────────────────────────
-:: Launched independently (not piped) so it survives if live_feed is absent.
-:: .env vars are already set above via the for-loop loader.
+:: Launched via dedicated batch file so .env vars are properly scoped and
+:: the JWT key paths are set before go run compiles and starts.
 echo [4/4] Starting Go Gateway ^& OMS (port 8080)...
-start "Robin Gateway OMS" cmd /k "cd /d C:\Robin\services\gateway && set ROBIN_JWT_PUBKEY_FILE=C:\Robin\config\keys\public.pem && set ROBIN_JWT_PRIVKEY_FILE=C:\Robin\config\keys\private.pem && set ALPACA_API_KEY=%ALPACA_API_KEY% && set ALPACA_API_SECRET=%ALPACA_API_SECRET% && set ALPACA_BASE_URL=%ALPACA_BASE_URL% && go run ."
+start "Robin Gateway OMS" cmd /k "C:\Robin\start_gateway.bat"
 
 echo ========================================================
 echo ALL AGENTS BOOTED NATIVELY.

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Activity, Shield, User, Globe } from 'lucide-react';
 import { useTerminalStore } from '../store/useTerminalStore';
+import SymbolSearch from './SymbolSearch';
 
 export default function Header() {
   const systemHealth = useTerminalStore(s => s.systemHealth);
@@ -27,6 +28,7 @@ export default function Header() {
         </div>
       </div>
       <div className='flex items-center gap-3 text-xs'>
+        <SymbolSearch />
         <div className='flex items-center gap-2 px-3 py-1.5 rounded-md bg-hover border border-border text-text-secondary'>
           <Shield size={14} className='text-accent-amber' />
           <span>Risk Level: <span className='text-white font-bold'>BALANCED</span></span>

@@ -67,7 +67,7 @@ export default function BestPriceComparison() {
             <span>Best Price algorithm active</span>
           </div>
           <p className='text-[9px]'>
-            Scanning 30 liquidity venues. Dynamic best execution spreads are monitored in real-time. Average execution savings: <strong>+1.8 to +4.5 bps</strong>.
+            Scanning {sorQuotes.length > 0 ? sorQuotes.length : 'active'} liquidity venues. Dynamic best execution spreads are monitored in real-time. Average execution savings: <strong>+1.8 to +4.5 bps</strong>.
           </p>
         </div>
       </div>
