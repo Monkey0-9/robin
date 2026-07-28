@@ -14,26 +14,52 @@ if not exist .env (
     exit /b 1
 )
 
-:: 1. Start Python AI / Data Engine in the background
-echo [1/3] Starting Python AI Engine (Background)...
+:: ── Load .env into the current cmd session ───────────────────────────────────
+:: Each non-comment, non-blank KEY=VALUE line is exported as an env var.
+for /F "usebackq tokens=1,* delims==" %%A in (".env") do (
+    set "line=%%A"
+    if not "!line:~0,1!"=="#" (
+        if not "%%A"=="" (
+            set "%%A=%%B"
+        )
+    )
+)
+
+:: ── [1/4] Python AI / Data Engine ────────────────────────────────────────────
+echo [1/4] Starting Python AI Engine (Background)...
 cd services\ai-agent
 start "Robin AI Agent" cmd /c "python main.py"
 cd ..\..
 
-:: 2. Start C++ Matching Engine (if running paper/sandbox)
-echo [2/3] Starting C++ Matching Engine (Hot Path)...
+:: ── [2/4] C++ Matching Engine ─────────────────────────────────────────────────
+echo [2/4] Starting C++ Matching Engine (Hot Path)...
 cd services\execution-core
 start "Robin Matching Engine" cmd /c "build\matching_engine.exe 9091"
 cd ..\..
 
-:: 3. Start IPC Pipeline: C++ Live Feed -> Go OMS
-echo [3/3] Starting High-Speed Pipeline (C++ Feed -^> Go OMS)...
-:: The C++ live feed outputs JSON signals to stdout
-:: The Go OMS reads JSON signals from stdin
-start "Robin Strategy & OMS Pipeline" cmd /c "set ROBIN_JWT_PUBKEY_FILE=C:\Robin\config\keys\public.pem&& cd services\execution-core && build\live_feed.exe | (cd ..\gateway && go run .)"
+:: ── [3/4] C++ Live Feed (standalone, pipes to gateway via TCP) ───────────────
+echo [3/4] Starting C++ Live Feed...
+cd services\execution-core
+if exist build\live_feed.exe (
+    start "Robin Live Feed" cmd /c "build\live_feed.exe"
+) else (
+    echo   [SKIP] live_feed.exe not found - skipping feed process
+)
+cd ..\..
+
+:: ── [4/4] Go Gateway / OMS ───────────────────────────────────────────────────
+:: Launched independently (not piped) so it survives if live_feed is absent.
+:: .env vars are already set above via the for-loop loader.
+echo [4/4] Starting Go Gateway ^& OMS (port 8080)...
+start "Robin Gateway OMS" cmd /k "cd /d C:\Robin\services\gateway && set ROBIN_JWT_PUBKEY_FILE=C:\Robin\config\keys\public.pem && set ROBIN_JWT_PRIVKEY_FILE=C:\Robin\config\keys\private.pem && set ALPACA_API_KEY=%ALPACA_API_KEY% && set ALPACA_API_SECRET=%ALPACA_API_SECRET% && set ALPACA_BASE_URL=%ALPACA_BASE_URL% && go run ."
 
 echo ========================================================
 echo ALL AGENTS BOOTED NATIVELY.
-echo See individual terminal windows for logs.
+echo   AI Agent    : separate window
+echo   Matching Eng: separate window  (port 9091)
+echo   Live Feed   : separate window  (if built)
+echo   Go Gateway  : separate window  (port 8080)
+echo ========================================================
+echo Frontend: http://localhost:3000
 echo ========================================================
 pause
