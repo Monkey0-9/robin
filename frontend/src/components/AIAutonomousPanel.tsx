@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Cpu, Activity, TrendingUp, TrendingDown, RefreshCw, BarChart2, PlayCircle, StopCircle, Zap } from 'lucide-react';
 
+const AI_AGENT_URL = process.env.NEXT_PUBLIC_AI_AGENT_URL || 'http://localhost:8000';
+
 export default function AIAutonomousPanel() {
   const [status, setStatus] = useState({
     enabled: false,
@@ -11,7 +13,7 @@ export default function AIAutonomousPanel() {
 
   const fetchStatus = async () => {
     try {
-      const res = await fetch('http://localhost:8000/autonomous/status');
+      const res = await fetch(`${AI_AGENT_URL}/autonomous/status`);
       if (res.ok) {
         const data = await res.json();
         setStatus(data);
@@ -29,7 +31,7 @@ export default function AIAutonomousPanel() {
 
   const handleToggle = async () => {
     try {
-      const res = await fetch('http://localhost:8000/autonomous/toggle', { method: 'POST' });
+      const res = await fetch(`${AI_AGENT_URL}/autonomous/toggle`, { method: 'POST' });
       if (res.ok) {
         const data = await res.json();
         setStatus(s => ({ ...s, enabled: data.autonomous_enabled }));
