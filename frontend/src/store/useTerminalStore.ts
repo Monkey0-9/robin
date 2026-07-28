@@ -78,39 +78,14 @@ interface TerminalState {
   fetchScreenerData: () => Promise<void>;
   fetchHeatmapData: () => Promise<void>;
   fetchSorPrices: (symbol: string) => Promise<void>;
+  fetchAlpacaState: () => Promise<void>;
 }
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:8080';
 const WS_URL = GATEWAY_URL.replace(/^http/, 'ws') + '/ws';
 const JWT_TOKEN = process.env.NEXT_PUBLIC_GATEWAY_API_TOKEN || '';
 
-function simulatePrice(assets: Asset[], selectedSymbol: string, orderBook: { bids: OrderBookLevel[]; asks: OrderBookLevel[] }) {
-  const newAssets = assets.map(a => {
-    const move = a.currentPrice * (1 + (Math.random() - 0.5) * 0.0005);
-    return { ...a, currentPrice: move };
-  });
 
-  let totalUnrealized = 0;
-  let totalMargin = 0;
-  const newPositions = ([] as Position[]).map(() => ({}));
-
-  const currentBtcPrice = newAssets.find(a => a.symbol === selectedSymbol)?.currentPrice || 64500;
-  const bids: OrderBookLevel[] = [];
-  const asks: OrderBookLevel[] = [];
-  let totalBid = 0;
-  let totalAsk = 0;
-  for (let i = 0; i < 8; i++) {
-    const bidSize = Number((Math.random() * 2).toFixed(2));
-    totalBid += bidSize;
-    bids.push({ price: currentBtcPrice - (i + 1) * 0.5, size: bidSize, total: totalBid });
-
-    const askSize = Number((Math.random() * 2).toFixed(2));
-    totalAsk += askSize;
-    asks.push({ price: currentBtcPrice + (i + 1) * 0.5, size: askSize, total: totalAsk });
-  }
-
-  return { assets: newAssets, orderBook: { bids, asks } };
-}
 
 function createWebSocket(
   onMessage: (data: any) => void,
@@ -134,23 +109,14 @@ function createWebSocket(
 }
 
 export const useTerminalStore = create<TerminalState>((set, get) => ({
-  assets: [
-    { symbol: 'BTC/USD', name: 'Bitcoin / US Dollar', currentPrice: 64500.50, dailyChangePct: 2.4, type: 'crypto' },
-    { symbol: 'ETH/USD', name: 'Ethereum / US Dollar', currentPrice: 3450.20, dailyChangePct: -1.2, type: 'crypto' },
-    { symbol: 'SOL/USD', name: 'Solana / US Dollar', currentPrice: 145.00, dailyChangePct: 5.7, type: 'crypto' },
-    { symbol: 'AAPL', name: 'Apple Inc.', currentPrice: 185.30, dailyChangePct: 0.5, type: 'equity' },
-    { symbol: 'MSFT', name: 'Microsoft Corp.', currentPrice: 420.00, dailyChangePct: -0.3, type: 'equity' },
-    { symbol: 'TSLA', name: 'Tesla Inc.', currentPrice: 175.00, dailyChangePct: -1.8, type: 'equity' },
-    { symbol: 'NVDA', name: 'NVIDIA Corp.', currentPrice: 120.00, dailyChangePct: 4.1, type: 'equity' },
-    { symbol: 'EUR/USD', name: 'Euro / US Dollar', currentPrice: 1.0850, dailyChangePct: 0.1, type: 'fx' },
-  ],
+  assets: [],
   selectedSymbol: 'BTC/USD',
   notification: null,
   tradeHistory: [],
   positions: [],
   workingOrders: [],
-  balance: 100000,
-  equity: 100000,
+  balance: 0,
+  equity: 0,
   marginUtilization: 0,
   routingMode: 'AUTO',
   screenerAssets: [],
@@ -278,6 +244,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     get().fetchScreenerData();
     get().fetchHeatmapData();
     get().fetchSorPrices(get().selectedSymbol);
+    get().fetchAlpacaState();
 
     // Fetch screener data every 5 seconds
     setInterval(() => {
@@ -437,6 +404,82 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       }
     } catch (e) {
       console.error("Failed to fetch SOR prices", e);
+    }
+  },
+
+  fetchAlpacaState: async () => {
+    try {
+      const headers = { Authorization: `Bearer ${JWT_TOKEN}` };
+
+      // 1. Fetch Account (balance, equity)
+      const accRes = await fetch(`${GATEWAY_URL}/api/alpaca/account`, { headers });
+      if (accRes.ok) {
+        const acc = await accRes.json();
+        set({
+          balance: parseFloat(acc.cash || "0"),
+          equity: parseFloat(acc.portfolio_value || "0"),
+          marginUtilization: parseFloat(acc.initial_margin || "0") / (parseFloat(acc.portfolio_value || "1")) * 100
+        });
+      }
+
+      // 2. Fetch Positions
+      const posRes = await fetch(`${GATEWAY_URL}/api/alpaca/positions`, { headers });
+      if (posRes.ok) {
+        const posData = await posRes.json();
+        const positions: Position[] = posData.map((p: any) => ({
+          id: p.asset_id,
+          symbol: p.symbol,
+          side: p.side === 'long' ? 'LONG' : 'SHORT',
+          size: Math.abs(parseFloat(p.qty)),
+          entryPrice: parseFloat(p.avg_entry_price),
+          marginRequired: 0,
+          unrealizedPnL: parseFloat(p.unrealized_pl),
+          routedExchange: p.exchange
+        }));
+        set({ positions });
+      }
+
+      // 3. Fetch Orders / Trade History
+      const ordRes = await fetch(`${GATEWAY_URL}/api/alpaca/orders`, { headers });
+      if (ordRes.ok) {
+        const ordData = await ordRes.json();
+        const trades = ordData.filter((o: any) => o.status === 'filled').map((o: any) => ({
+          id: o.id,
+          symbol: o.symbol,
+          side: o.side.toUpperCase(),
+          qty: parseFloat(o.filled_qty),
+          price: parseFloat(o.filled_avg_price),
+          realizedPnL: 0,
+          timestamp: new Date(o.filled_at || o.updated_at),
+          routedExchange: o.exchange
+        }));
+        set({ tradeHistory: trades });
+      }
+
+      // 4. Fetch Assets
+      const assetsRes = await fetch(`${GATEWAY_URL}/api/alpaca/assets`, { headers });
+      if (assetsRes.ok) {
+        const assetsData = await assetsRes.json();
+        const activeAssets = assetsData.filter((a: any) => a.tradable && a.fractionable).slice(0, 100);
+        const assets: Asset[] = activeAssets.map((a: any) => ({
+          symbol: a.symbol,
+          name: a.name,
+          currentPrice: 0,
+          dailyChangePct: 0,
+          type: a.class === 'crypto' ? 'crypto' : 'equity'
+        }));
+        if (assets.length > 0) {
+          set({ assets });
+          // Optionally set first asset as selected if none is selected
+          const currentSymbol = get().selectedSymbol;
+          if (!currentSymbol || currentSymbol === 'BTC/USD') {
+             set({ selectedSymbol: assets[0].symbol });
+          }
+        }
+      }
+
+    } catch (e) {
+      console.error("Failed to fetch Alpaca state", e);
     }
   },
 }));

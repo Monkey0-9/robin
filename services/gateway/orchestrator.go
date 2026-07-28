@@ -1330,6 +1330,79 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		io.Copy(w, resp.Body)
 	})))).Methods("GET")
 
+	// GET /api/alpaca/orders — Fetch Alpaca orders (trade history) (JWT Trader required)
+	r.Handle("/api/alpaca/orders", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		alpacaEndpoint := os.Getenv("ALPACA_API_ENDPOINT")
+		if alpacaEndpoint == "" {
+			alpacaEndpoint = "https://paper-api.alpaca.markets/v2"
+		}
+		vaultClient := NewVaultClient()
+		keyID, err1 := vaultClient.GetSecret("secret/data/alpaca", "API_KEY_ID")
+		secretKey, err2 := vaultClient.GetSecret("secret/data/alpaca", "API_SECRET_KEY")
+
+		if err1 != nil || err2 != nil || keyID == "" || secretKey == "" {
+			http.Error(w, `{"error":"Alpaca credentials not configured"}`, http.StatusBadRequest)
+			return
+		}
+
+		u := fmt.Sprintf("%s/orders?status=all", alpacaEndpoint)
+		rReq, err := http.NewRequest("GET", u, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		rReq.Header.Set("APCA-API-KEY-ID", keyID)
+		rReq.Header.Set("APCA-API-SECRET-KEY", secretKey)
+
+		client := &http.Client{}
+		resp, err := client.Do(rReq)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer resp.Body.Close()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	})))).Methods("GET")
+
+	// GET /api/alpaca/assets — Fetch Alpaca assets (JWT Trader required)
+	r.Handle("/api/alpaca/assets", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		alpacaEndpoint := os.Getenv("ALPACA_API_ENDPOINT")
+		if alpacaEndpoint == "" {
+			alpacaEndpoint = "https://paper-api.alpaca.markets/v2"
+		}
+		vaultClient := NewVaultClient()
+		keyID, err1 := vaultClient.GetSecret("secret/data/alpaca", "API_KEY_ID")
+		secretKey, err2 := vaultClient.GetSecret("secret/data/alpaca", "API_SECRET_KEY")
+
+		if err1 != nil || err2 != nil || keyID == "" || secretKey == "" {
+			http.Error(w, `{"error":"Alpaca credentials not configured"}`, http.StatusBadRequest)
+			return
+		}
+
+		u := fmt.Sprintf("%s/assets?status=active", alpacaEndpoint)
+		rReq, err := http.NewRequest("GET", u, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		rReq.Header.Set("APCA-API-KEY-ID", keyID)
+		rReq.Header.Set("APCA-API-SECRET-KEY", secretKey)
+
+		client := &http.Client{}
+		resp, err := client.Do(rReq)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer resp.Body.Close()
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	})))).Methods("GET")
 	// ============================================================================
 	// Institutional Compliance API Routes (Wave 1-6 Gap Closure)
 	// ============================================================================

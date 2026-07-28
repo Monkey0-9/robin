@@ -52,7 +52,10 @@ export default function TradingViewChart() {
   const height = 240;
 
   const getX = (index: number) => (index / (data.length - 1)) * (width - 60) + 10;
-  const getY = (price: number) => height - ((price - minPrice) / range) * (height - 40) - 20;
+  const getY = (price: number) => {
+    if (range === 0) return height / 2;
+    return height - ((price - minPrice) / range) * (height - 40) - 20;
+  };
 
   // Calculate Simple Moving Average helper
   const getSMA = (index: number, period: number) => {
