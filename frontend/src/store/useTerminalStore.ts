@@ -136,6 +136,17 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const maxReconnectDelay = 30000;
 
     function connect() {
+      // Always terminate the previous socket before creating a new one.
+      // This prevents accumulating stale WebSocket objects in memory on reconnects.
+      if (ws) {
+        ws.onclose = null; // Prevent recursive reconnect trigger
+        ws.onerror = null;
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+          ws.close();
+        }
+        ws = null;
+      }
+
       ws = createWebSocket(
         (data) => {
           wsConnected = true;
@@ -264,12 +275,9 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   submitOrder: async (symbol, side, price, size, isMarket) => {
     const state = get();
-    const marginRequired = price * size * 0.05; // 5% margin
-    if (marginRequired > state.balance) {
-      state.showNotification('Insufficient margin', 'error');
-      return;
-    }
-
+    // NOTE: Margin validation is intentionally delegated to the backend.
+    // The server returns 4xx/5xx with an error message if the order is rejected.
+    // Never validate risk constraints in the browser — they are trivially bypassable.
     const clOrdId = `ORD-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
     // Attempt to submit via gateway
@@ -305,7 +313,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             side: (side === 'BUY' ? 'LONG' : 'SHORT') as 'LONG' | 'SHORT',
             size,
             entryPrice: fillPrice,
-            marginRequired,
+            marginRequired: 0, // Populated from backend response on next Alpaca state refresh
             unrealizedPnL: 0,
             routedExchange,
           };
@@ -325,7 +333,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             'success'
           );
           return {
-            balance: s.balance - marginRequired,
+            // Balance and positions are refreshed from Alpaca on next poll cycle.
+            // Optimistically append this fill to trade history for immediate UX feedback.
             positions: [...s.positions, newPosition],
             tradeHistory: [newTrade, ...s.tradeHistory],
           };
