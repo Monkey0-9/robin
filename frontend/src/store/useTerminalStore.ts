@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { useAuthStore } from './useAuthStore';
 
 export interface Asset {
   symbol: string;
@@ -46,13 +47,25 @@ export interface SystemHealth {
   latencyNs: number;
 }
 
+export interface WorkingOrder {
+  id: string;
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  orderType: 'LIMIT' | 'MARKET' | 'STOP';
+  qty: number;
+  price: number;
+  status: 'PENDING' | 'WORKING' | 'FILLED' | 'CANCELED';
+  timestamp: Date;
+  routedExchange: string;
+}
+
 interface TerminalState {
   assets: Asset[];
   selectedSymbol: string;
   notification: Notification | null;
   tradeHistory: Trade[];
   positions: Position[];
-  workingOrders: any[];
+  workingOrders: WorkingOrder[];
   balance: number;
   equity: number;
   marginUtilization: number;
@@ -60,6 +73,7 @@ interface TerminalState {
   screenerAssets: any[];
   heatmapSectors: any[];
   sorQuotes: any[];
+  portfolioWeights: Record<string, number>;
   
   orderBook: {
     bids: OrderBookLevel[];
@@ -72,19 +86,22 @@ interface TerminalState {
   dismissNotification: () => void;
   exportToCSV: () => void;
   showNotification: (msg: string, type: 'success' | 'error' | 'info') => void;
-  submitOrder: (symbol: string, side: 'BUY' | 'SELL', price: number, size: number, isMarket: boolean) => void;
+  submitOrder: (symbol: string, side: 'BUY' | 'SELL', price: number, size: number, isMarket?: boolean, orderType?: 'MARKET' | 'LIMIT' | 'STOP') => Promise<void>;
+  cancelOrder: (id: string) => Promise<void>;
   setSelectedSymbol: (symbol: string) => void;
   setRoutingMode: (mode: string) => void;
   fetchScreenerData: () => Promise<void>;
   fetchHeatmapData: () => Promise<void>;
   fetchSorPrices: (symbol: string) => Promise<void>;
   fetchAlpacaState: () => Promise<void>;
+  fetchPortfolioWeights: () => Promise<void>;
 }
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:8080';
 const WS_URL = GATEWAY_URL.replace(/^http/, 'ws') + '/ws';
-const JWT_TOKEN = process.env.NEXT_PUBLIC_GATEWAY_API_TOKEN || '';
 
+/** Helper: get the current in-memory JWT from the auth store. */
+const getToken = () => useAuthStore.getState().getToken() || '';
 
 
 function createWebSocket(
@@ -92,7 +109,8 @@ function createWebSocket(
   onDisconnect: () => void,
 ): WebSocket {
   const url = `${WS_URL}`;
-  const ws = new WebSocket(url, ['token', JWT_TOKEN]);
+  const token = getToken();
+  const ws = new WebSocket(url, token ? ['token', token] : []);
   ws.onopen = () => console.log('WebSocket connected');
   ws.onmessage = (event) => {
     try {
@@ -123,12 +141,31 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   heatmapSectors: [],
   sorQuotes: [],
 
+  portfolioWeights: {},
+
   orderBook: { bids: [], asks: [] },
   systemHealth: { healthy: 0, degraded: 0, failed: 0, latencyNs: 65000 },
 
   init: () => {
-    console.log("Terminal store initialized");
-    get().showNotification("Connected to Gateway", "success");
+    console.log('Terminal store initialized');
+    get().showNotification('Connected to Gateway', 'success');
+
+    // Seed assets immediately from /api/assets (no auth required)
+    fetch(`${GATEWAY_URL}/api/assets`)
+      .then(r => r.ok ? r.json() : [])
+      .then((data: any[]) => {
+        if (Array.isArray(data) && data.length > 0) {
+          const assets = data.map((a: any) => ({
+            symbol: a.symbol,
+            name: a.name,
+            currentPrice: a.base_price || 0,
+            dailyChangePct: 0,
+            type: (a.type === 'crypto' ? 'crypto' : a.type === 'fx' ? 'fx' : 'equity') as 'crypto' | 'equity' | 'index' | 'fx',
+          }));
+          set({ assets, selectedSymbol: assets[0].symbol });
+        }
+      })
+      .catch(e => console.warn('Failed to seed assets from /api/assets:', e));
 
     let ws: WebSocket | null = null;
     let wsConnected = false;
@@ -136,10 +173,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const maxReconnectDelay = 30000;
 
     function connect() {
-      // Always terminate the previous socket before creating a new one.
-      // This prevents accumulating stale WebSocket objects in memory on reconnects.
       if (ws) {
-        ws.onclose = null; // Prevent recursive reconnect trigger
+        ws.onclose = null;
         ws.onerror = null;
         if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
           ws.close();
@@ -225,13 +260,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
     connect();
 
-    // Price ticking fallback removed to preserve real-time data integrity.
-
     // Poll the Go Gateway
     setInterval(async () => {
       try {
         const statsRes = await fetch(`${GATEWAY_URL}/stats`, {
-          headers: { Authorization: `Bearer ${JWT_TOKEN}` }
+          headers: { Authorization: `Bearer ${getToken()}` }
         });
         const stats = await statsRes.json();
         
@@ -246,16 +279,17 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             latencyNs: stats.avg_lat_ns || 65000
           }
         });
-      } catch (e) {
+      } catch {
         set({ systemHealth: { healthy: 0, degraded: 0, failed: 5, latencyNs: 0 } });
       }
     }, 2000);
 
-    // Initial triggers for screener, heatmap, and quotes
+    // Initial triggers for screener, heatmap, quotes, alpaca, portfolio
     get().fetchScreenerData();
     get().fetchHeatmapData();
     get().fetchSorPrices(get().selectedSymbol);
     get().fetchAlpacaState();
+    get().fetchPortfolioWeights();
 
     // Fetch screener data every 5 seconds
     setInterval(() => {
@@ -273,12 +307,28 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }, 2000);
   },
 
-  submitOrder: async (symbol, side, price, size, isMarket) => {
+  submitOrder: async (symbol, side, price, size, isMarket = true, orderType = 'MARKET') => {
     const state = get();
-    // NOTE: Margin validation is intentionally delegated to the backend.
-    // The server returns 4xx/5xx with an error message if the order is rejected.
-    // Never validate risk constraints in the browser — they are trivially bypassable.
     const clOrdId = `ORD-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+    // If LIMIT or STOP, record in workingOrders state
+    if (orderType === 'LIMIT' || orderType === 'STOP') {
+      const workingOrd: WorkingOrder = {
+        id: clOrdId,
+        symbol,
+        side,
+        orderType,
+        qty: size,
+        price,
+        status: 'WORKING',
+        timestamp: new Date(),
+        routedExchange: state.routingMode === 'AUTO' ? 'Robin Pools' : state.routingMode,
+      };
+      set((s) => ({
+        workingOrders: [workingOrd, ...s.workingOrders],
+      }));
+      state.showNotification(`Working ${orderType} order submitted: ${side} ${size} ${symbol} @ $${price.toFixed(2)}`, 'info');
+    }
 
     // Attempt to submit via gateway
     try {
@@ -286,14 +336,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${JWT_TOKEN}`,
+          Authorization: `Bearer ${getToken()}`,
         },
         body: JSON.stringify({
           symbol,
           side,
           price,
           qty: size,
-          order_type: isMarket ? 'MARKET' : 'LIMIT',
+          order_type: orderType,
           cl_ord_id: clOrdId,
           exchange: state.routingMode,
         }),
@@ -313,7 +363,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             side: (side === 'BUY' ? 'LONG' : 'SHORT') as 'LONG' | 'SHORT',
             size,
             entryPrice: fillPrice,
-            marginRequired: 0, // Populated from backend response on next Alpaca state refresh
+            marginRequired: 0,
             unrealizedPnL: 0,
             routedExchange,
           };
@@ -333,16 +383,39 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             'success'
           );
           return {
-            // Balance and positions are refreshed from Alpaca on next poll cycle.
-            // Optimistically append this fill to trade history for immediate UX feedback.
             positions: [...s.positions, newPosition],
             tradeHistory: [newTrade, ...s.tradeHistory],
+            // Remove from working orders if filled immediately
+            workingOrders: s.workingOrders.filter(w => w.id !== clOrdId),
           };
         });
         return;
       }
     } catch (e) {
-      state.showNotification('Order Execution Failed: Gateway Offline / Server Unreachable', 'error');
+      if (orderType === 'MARKET') {
+        state.showNotification('Order Execution Failed: Gateway Offline / Server Unreachable', 'error');
+      }
+    }
+  },
+
+  cancelOrder: async (id: string) => {
+    set((s) => ({
+      workingOrders: s.workingOrders.filter(w => w.id !== id),
+    }));
+    get().showNotification(`Working order ${id} canceled`, 'info');
+  },
+
+  fetchPortfolioWeights: async () => {
+    try {
+      const res = await fetch(`${GATEWAY_URL}/api/portfolio/weights`, {
+        headers: { Authorization: `Bearer ${getToken()}` }
+      });
+      if (res.ok) {
+        const weights = await res.json();
+        set({ portfolioWeights: weights });
+      }
+    } catch (e) {
+      console.error('Failed to fetch portfolio weights', e);
     }
   },
 
@@ -418,7 +491,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   fetchAlpacaState: async () => {
     try {
-      const headers = { Authorization: `Bearer ${JWT_TOKEN}` };
+      const headers = { Authorization: `Bearer ${getToken()}` };
 
       // 1. Fetch Account (balance, equity)
       const accRes = await fetch(`${GATEWAY_URL}/api/alpaca/account`, { headers });

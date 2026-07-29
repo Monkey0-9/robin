@@ -282,6 +282,9 @@ func NewOrchestrator() *Orchestrator {
 	orch.loadConfig()
 	orch.initDB()
 
+	// Seed default users (admin/admin, trader/trader) for development
+	ensureDefaultUsers(orch.db, logger)
+
 	// Initialize institutional compliance modules after DB is ready
 	orch.killSwitch = NewKillSwitchManager(orch.db, logger, wsHub)
 	orch.surveillance = NewSurveillanceEngine(orch.db, logger)
@@ -1488,17 +1491,110 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		json.NewEncoder(w).Encode(weights)
 	}))).Methods("GET")
 
+	// ── Auth: Login & Refresh ────────────────────────────────────────────────────
+	// POST /api/auth/login — username + password → JWT (no prior auth needed)
+	r.HandleFunc("/api/auth/login", handleLogin(o.db, o.logger)).Methods("POST", "OPTIONS")
+	// POST /api/auth/refresh — re-issue token (requires valid JWT)
+	r.Handle("/api/auth/refresh", jwtAuthMiddleware(handleRefreshToken())).Methods("POST")
+
+	// ── GET /api/assets — canonical tradable symbol list ────────────────────────
+	r.HandleFunc("/api/assets", func(w http.ResponseWriter, req *http.Request) {
+		type AssetInfo struct {
+			Symbol       string  `json:"symbol"`
+			Name         string  `json:"name"`
+			Type         string  `json:"type"`
+			InstrumentID int     `json:"instrument_id"`
+			BasePrice    float64 `json:"base_price"`
+		}
+		assets := []AssetInfo{
+			{"BTC/USD", "Bitcoin", "crypto", 1, 64500.0},
+			{"ETH/USD", "Ethereum", "crypto", 2, 3450.0},
+			{"SOL/USD", "Solana", "crypto", 5, 145.0},
+			{"AAPL", "Apple Inc.", "equity", 3, 185.30},
+			{"MSFT", "Microsoft Corp.", "equity", 6, 420.0},
+			{"TSLA", "Tesla Inc.", "equity", 7, 175.0},
+			{"NVDA", "NVIDIA Corp.", "equity", 8, 120.0},
+			{"EUR/USD", "Euro / US Dollar", "fx", 4, 1.0850},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(assets)
+	}).Methods("GET", "OPTIONS")
+
+	// ── GET /api/candles — OHLCV candle data (proxied from AI agent) ─────────────
+	r.HandleFunc("/api/candles", func(w http.ResponseWriter, req *http.Request) {
+		symbol := req.URL.Query().Get("symbol")
+		resolution := req.URL.Query().Get("resolution")
+		if symbol == "" {
+			symbol = "BTC/USD"
+		}
+		if resolution == "" {
+			resolution = "1m"
+		}
+
+		// Try to get from AI agent first
+		aiURL := fmt.Sprintf("http://127.0.0.1:8000/candles?symbol=%s&resolution=%s", symbol, resolution)
+		client := &http.Client{Timeout: 3 * time.Second}
+		if proxyReq, err := http.NewRequest("GET", aiURL, nil); err == nil {
+			if aiResp, aiErr := client.Do(proxyReq); aiErr == nil {
+				defer aiResp.Body.Close()
+				if aiResp.StatusCode == http.StatusOK {
+					w.Header().Set("Content-Type", "application/json")
+					io.Copy(w, aiResp.Body)
+					return
+				}
+			}
+		}
+
+		// Fallback: generate deterministic OHLCV candles from base price
+		basePrice := 64500.0
+		switch symbol {
+		case "ETH/USD": basePrice = 3450.0
+		case "SOL/USD": basePrice = 145.0
+		case "AAPL":    basePrice = 185.30
+		case "MSFT":    basePrice = 420.0
+		case "TSLA":    basePrice = 175.0
+		case "NVDA":    basePrice = 120.0
+		case "EUR/USD": basePrice = 1.085
+		}
+		type Candle struct {
+			Time  int64   `json:"time"`
+			Open  float64 `json:"open"`
+			High  float64 `json:"high"`
+			Low   float64 `json:"low"`
+			Close float64 `json:"close"`
+		}
+		now := time.Now().Truncate(time.Minute).Unix()
+		candles := make([]Candle, 100)
+		price := basePrice * 0.98
+		for i := 0; i < 100; i++ {
+			delta := price * 0.001
+			opn := price
+			cls := price + delta*(float64(i%7)-3.0)
+			hi := math.Max(opn, cls) + delta*0.5
+			lo := math.Min(opn, cls) - delta*0.5
+			candles[i] = Candle{now - int64(100-i)*60, opn, hi, lo, cls}
+			price = cls
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(candles)
+	}).Methods("GET", "OPTIONS")
+
 	// Apply middleware chain: requestID → rateLimit → router
+
 	handler := requestIDMiddleware(rateLimitMiddleware(1000, r))
 
-
-	// Apply CORS — restrict to explicit origin in production
+	// Apply CORS — allow localhost:3000 in dev, restrict to explicit origin in production
 	allowedOrigin := os.Getenv("ROBIN_CORS_ORIGIN")
+	var allowedOrigins []string
 	if allowedOrigin == "" {
-		allowedOrigin = "https://trade.robin.local" // Strict default
+		// Dev mode: allow Next.js dev server origins
+		allowedOrigins = []string{"http://localhost:3000", "http://localhost:3001", "http://127.0.0.1:3000"}
+		o.logger.Warn("CORS: dev mode — allowing localhost:3000. Set ROBIN_CORS_ORIGIN for production.")
+	} else {
+		allowedOrigins = []string{allowedOrigin}
 	}
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{allowedOrigin},
+		AllowedOrigins:   allowedOrigins,
 		AllowCredentials: true,
 		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type", "X-Request-ID"},

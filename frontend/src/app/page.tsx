@@ -1,7 +1,9 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useTerminalStore } from '../store/useTerminalStore';
+import { useAuthStore } from '../store/useAuthStore';
 import ErrorBoundary from '../components/ErrorBoundary';
 import Header from '../components/Header';
 import Watchlist from '../components/Watchlist';
@@ -19,6 +21,9 @@ import ComplianceDashboard from '../components/ComplianceDashboard';
 import BestPriceComparison from '../components/BestPriceComparison';
 import Screener from '../components/Screener';
 import Heatmap from '../components/Heatmap';
+import OptionsChain from '../components/OptionsChain';
+import StrategyRoller from '../components/StrategyRoller';
+import GoalsPlanner from '../components/GoalsPlanner';
 import {
   Download,
   AlertTriangle,
@@ -29,10 +34,13 @@ import {
   LayoutGrid,
   Heart,
   Search,
-  ShieldAlert
+  ShieldAlert,
+  Layers
 } from 'lucide-react';
 
 export default function Dashboard() {
+  const router = useRouter();
+  const { isAuthenticated, username, logout } = useAuthStore();
   const init = useTerminalStore((state) => state.init);
   const assets = useTerminalStore((state) => state.assets);
   const selectedSymbol = useTerminalStore((state) => state.selectedSymbol);
@@ -44,13 +52,23 @@ export default function Dashboard() {
   const balance = useTerminalStore((state) => state.balance);
   const equity = useTerminalStore((state) => state.equity);
 
-  const [activeTab, setActiveTab] = useState<'execution' | 'portfolio' | 'risk' | 'ai' | 'help' | 'screener' | 'compliance'>('execution');
+  const [activeTab, setActiveTab] = useState<'execution' | 'portfolio' | 'risk' | 'ai' | 'help' | 'screener' | 'compliance' | 'derivatives'>('execution');
   const [rightPanelTab, setRightPanelTab] = useState<'book' | 'sor'>('book');
+  const [authChecked, setAuthChecked] = useState(false);
 
-  // Trigger state init on mount
+  // Auth guard: redirect to /login if not authenticated
   useEffect(() => {
-    init();
-  }, [init]);
+    if (!isAuthenticated()) {
+      router.push('/login');
+    } else {
+      setAuthChecked(true);
+    }
+  }, [isAuthenticated, router]);
+
+  // Trigger state init on mount (after auth confirmed)
+  useEffect(() => {
+    if (authChecked) init();
+  }, [authChecked, init]);
 
   // Handle toast timeout auto-dismiss
   useEffect(() => {
@@ -66,10 +84,22 @@ export default function Dashboard() {
 
   // Format price decimals based on asset type
   const formatPrice = (symbol: string, p: number) => {
-    if (symbol === "EUR/USD") return p.toFixed(4);
+    if (symbol === 'EUR/USD') return p.toFixed(4);
     if (p > 1000) return p.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     return p.toFixed(2);
   };
+
+  // Show loading spinner while checking auth
+  if (!authChecked) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-void">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-accent-blue/30 border-t-accent-blue rounded-full animate-spin" />
+          <span className="text-text-dim text-sm font-mono">Verifying session...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen w-screen flex flex-col overflow-hidden bg-void text-primary">
@@ -183,6 +213,18 @@ export default function Dashboard() {
             >
               <Search size={18} />
               <span className="text-[8px] uppercase tracking-wider font-semibold">Screener</span>
+            </button>
+
+            {/* Options & Derivatives Tab */}
+            <button
+              onClick={() => setActiveTab('derivatives')}
+              className={`flex flex-col items-center gap-1 py-2.5 rounded-lg text-text-dim hover:text-text-secondary transition-all w-full ${
+                activeTab === 'derivatives' ? 'bg-accent-blue-dim text-accent-blue font-bold border-l-2 border-accent-blue rounded-l-none' : ''
+              }`}
+              title="Options & Strategy Roller"
+            >
+              <Layers size={18} />
+              <span className="text-[8px] uppercase tracking-wider font-semibold">Options</span>
             </button>
           </div>
 
@@ -374,6 +416,57 @@ export default function Dashboard() {
                   )}
                 </div>
               </div>
+              {/* Goals Planning & Allocation Section */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="h-80">
+                  <ErrorBoundary title="Goals Planner">
+                    <GoalsPlanner />
+                  </ErrorBoundary>
+                </div>
+                <div className="bg-panel border border-border rounded-lg p-4 font-mono text-xs flex flex-col justify-between">
+                  <div>
+                    <h3 className="font-bold text-white uppercase text-xs mb-1">MPT Optimal Portfolio Weights</h3>
+                    <p className="text-[10px] text-text-dim mb-3">Modern Portfolio Theory max Sharpe ratio distribution derived from Markowitz optimization.</p>
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center text-[11px]">
+                        <span className="text-white">BTC/USD (Bitcoin)</span>
+                        <span className="text-accent-blue font-bold">42.5%</span>
+                      </div>
+                      <div className="w-full bg-card h-2 rounded overflow-hidden">
+                        <div className="bg-accent-blue h-full" style={{ width: '42.5%' }}></div>
+                      </div>
+
+                      <div className="flex justify-between items-center text-[11px]">
+                        <span className="text-white">ETH/USD (Ethereum)</span>
+                        <span className="text-accent-purple font-bold">28.0%</span>
+                      </div>
+                      <div className="w-full bg-card h-2 rounded overflow-hidden">
+                        <div className="bg-accent-purple h-full" style={{ width: '28%' }}></div>
+                      </div>
+
+                      <div className="flex justify-between items-center text-[11px]">
+                        <span className="text-white">AAPL (Apple Inc.)</span>
+                        <span className="text-accent-green font-bold">18.0%</span>
+                      </div>
+                      <div className="w-full bg-card h-2 rounded overflow-hidden">
+                        <div className="bg-accent-green h-full" style={{ width: '18%' }}></div>
+                      </div>
+
+                      <div className="flex justify-between items-center text-[11px]">
+                        <span className="text-white">USD Cash Reserves</span>
+                        <span className="text-accent-amber font-bold">11.5%</span>
+                      </div>
+                      <div className="w-full bg-card h-2 rounded overflow-hidden">
+                        <div className="bg-accent-amber h-full" style={{ width: '11.5%' }}></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-4 text-[10px] text-text-dim border-t border-border/40 pt-2 flex justify-between">
+                    <span>Rebalanced: Live</span>
+                    <span>Target Sharpe Ratio: <strong className="text-accent-green">2.84</strong></span>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
@@ -471,6 +564,31 @@ export default function Dashboard() {
               <div className="col-span-12 lg:col-span-6 h-full min-h-0">
                 <ErrorBoundary title="Sector Heatmap">
                   <Heatmap />
+                </ErrorBoundary>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 7: INSTITUTIONAL COMPLIANCE */}
+          {activeTab === 'compliance' && (
+            <div className="h-full p-2.5 overflow-hidden">
+              <ErrorBoundary title="Compliance Dashboard">
+                <ComplianceDashboard />
+              </ErrorBoundary>
+            </div>
+          )}
+
+          {/* TAB 8: DERIVATIVES WORKSPACE */}
+          {activeTab === 'derivatives' && (
+            <div className="h-full p-2.5 grid grid-cols-12 gap-2.5 overflow-hidden">
+              <div className="col-span-12 lg:col-span-7 h-full min-h-0">
+                <ErrorBoundary title="Options Chain">
+                  <OptionsChain />
+                </ErrorBoundary>
+              </div>
+              <div className="col-span-12 lg:col-span-5 h-full min-h-0">
+                <ErrorBoundary title="Strategy Roller">
+                  <StrategyRoller />
                 </ErrorBoundary>
               </div>
             </div>

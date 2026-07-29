@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity, Shield, User, Globe } from 'lucide-react';
+import { Activity, Shield, User, Globe, Fish } from 'lucide-react';
 import { useTerminalStore } from '../store/useTerminalStore';
 import SymbolSearch from './SymbolSearch';
 
@@ -28,6 +28,15 @@ export default function Header() {
         </div>
       </div>
       <div className='flex items-center gap-3 text-xs'>
+        <a 
+          href="http://localhost:3001" 
+          target="_blank" 
+          rel="noreferrer"
+          className='flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-hover border border-border text-text-secondary hover:bg-hover-light hover:text-white transition-colors cursor-pointer'
+        >
+          <Fish size={14} className='text-accent-teal' />
+          <span>MiroFish Engine</span>
+        </a>
         <SymbolSearch />
         <div className='flex items-center gap-2 px-3 py-1.5 rounded-md bg-hover border border-border text-text-secondary'>
           <Shield size={14} className='text-accent-amber' />

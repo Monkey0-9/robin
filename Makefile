@@ -1,120 +1,99 @@
-.PHONY: all build build-cpp build-rust build-go build-compliance build-kernel \
-        test test-rust test-go test-compliance test-cpp test-lint \
-        clean help
+.PHONY: dev dev-gateway dev-ai dev-frontend dev-robin-swarm build test e2e docker-up docker-down clean
 
-SHELL    := /bin/bash
-# Pin g++-12 explicitly to match CI environment; fall back to g++ if not found.
-CXX      := $(shell command -v g++-12 2>/dev/null || echo g++)
-RUST     := cargo
-GO       := go
-NPROC    := $(shell nproc 2>/dev/null || echo 4)
+# ── Local Development ──────────────────────────────────────────────────────────
 
-all: build
+## Start all services natively (Gateway + AI Agent + Frontend + Swarm)
+dev-native:
+	@start "Robin Gateway" cmd /k "C:\Robin\start_gateway.bat"
+	@timeout /t 2 /nobreak > nul
+	@start "Robin AI Agent" cmd /k "cd services\ai-agent && python main.py"
+	@timeout /t 2 /nobreak > nul
+	@start "Robin Frontend" cmd /k "cd frontend && npm run dev"
+	@start "Robin Swarm" cmd /k "docker-compose up robin-swarm -d"
+	@echo "[Robin] Services starting. Open http://localhost:3000"
 
-# ============================================================================
-# Build
-# ============================================================================
-build: build-cpp build-rust build-go build-compliance
-	@echo "[BUILD] All services built."
+## Start only the Go gateway
+dev-gateway:
+	cd services\gateway && go run .
 
-## C++ execution core, pricing, ingestion, network-bridge
-build-cpp:
-	@echo "[BUILD] C++ services (compiler: $(CXX))..."
-	cmake -S services/execution-core \
-	      -B services/execution-core/build \
-	      -DCMAKE_BUILD_TYPE=Release \
-	      -DCMAKE_CXX_COMPILER=$(CXX)
-	cmake --build services/execution-core/build -j$(NPROC)
+## Start only the Python AI agent
+dev-ai:
+	cd services\ai-agent && python main.py
 
-## C++ options pricing engine (Research)
-build-pricing:
-	@echo "[BUILD] C++ options pricing engine..."
-	mkdir -p research/pricing/build
-	cd research/pricing/build && cmake .. \
-	      -DCMAKE_BUILD_TYPE=Release \
-	      -DCMAKE_CXX_COMPILER=$(CXX)
-	cmake --build research/pricing/build -j$(NPROC)
+## Start only the Next.js frontend
+dev-frontend:
+	cd frontend && npm run dev
 
-## Rust risk gate (library + bin)
-build-rust:
-	@echo "[BUILD] Rust risk analytics..."
-	cd services/risk-analytics && $(RUST) build --release
+## Start Robin Swarm engine
+dev-robin-swarm:
+	@echo "Starting Robin Swarm engine..."
+	docker-compose up robin-swarm -d
 
-## Go orchestrator
-build-go:
-	@echo "[BUILD] Go orchestrator..."
-	cd services/gateway && $(GO) build -o ../../build/orchestrator .
+# ── Build ──────────────────────────────────────────────────────────────────────
 
-## Compliance daemon (Rust)
-build-compliance:
-	@echo "[BUILD] Compliance daemon..."
-	cd services/compliance && $(RUST) build --release
+## Build Go gateway binary
+build-gateway:
+	cd services\gateway && go build -o gateway.exe .
 
-## GPIO kill switch kernel module (Linux only)
-build-kernel:
-	@echo "[BUILD] Kernel module (requires Linux kernel headers)..."
-	$(MAKE) -C services/kernel
+## Build Next.js production bundle
+build-frontend:
+	cd frontend && npm run build
 
-# ============================================================================
-# Tests
-# ============================================================================
-test: test-rust test-compliance test-go test-lint
-	@echo "[TEST] All tests complete."
+## Build everything
+build: build-gateway build-frontend
 
-## Rust risk-analytics unit tests
-test-rust:
-	@echo "[TEST] Rust risk-analytics..."
-	cd services/risk-analytics && $(RUST) test 2>&1
+# ── Testing ────────────────────────────────────────────────────────────────────
 
-## Compliance daemon unit tests
-test-compliance:
-	@echo "[TEST] Rust compliance..."
-	cd services/compliance && $(RUST) test 2>&1
-
-## Go unit tests (all packages)
+## Run Go unit tests
 test-go:
-	@echo "[TEST] Go gateway..."
-	cd services/gateway && $(GO) test -v ./... 2>&1
+	cd services\gateway && go test ./... -v -timeout 30s
 
-## C++ unit tests (via CTest, if cmake targets exist)
-test-cpp:
-	@echo "[TEST] C++ (CTest)..."
-	if [ -d services/execution-core/build ]; then \
-	    cd services/execution-core/build && ctest --output-on-failure; \
-	else \
-	    echo "[SKIP] C++ not built yet — run make build-cpp first"; \
-	fi
+## Run frontend tests (vitest)
+test-frontend:
+	cd frontend && npm test -- --run
 
-## Lint all Rust code (requires clippy)
-test-lint:
-	@echo "[LINT] Rust clippy..."
-	cd services/risk-analytics && $(RUST) clippy -- -D warnings
-	cd services/compliance     && $(RUST) clippy -- -D warnings
+## Run all tests
+test: test-go test-frontend
 
-## Integration smoke test (Linux only)
-test-integration:
-	@echo "[TEST] Integration smoke test..."
-	bash scripts/integration_smoke_test.sh
+## Run E2E integration test against running services
+e2e:
+	powershell -ExecutionPolicy Bypass -File scripts\e2e_test.ps1
 
-# ============================================================================
-# Utility
-# ============================================================================
+# ── Docker ─────────────────────────────────────────────────────────────────────
 
-## Clean all build artifacts
+## Start all services via Docker Compose
+docker-up:
+	docker-compose up --build -d
+
+## Stop all Docker Compose services
+docker-down:
+	docker-compose down
+
+## Show Docker Compose logs
+docker-logs:
+	docker-compose logs -f
+
+# ── Utilities ──────────────────────────────────────────────────────────────────
+
+## Remove build artifacts
 clean:
-	rm -rf build/
-	rm -rf services/execution-core/build/
-	rm -rf services/pricing/build/
-	cd services/risk-analytics && $(RUST) clean
-	cd services/compliance     && $(RUST) clean
-	$(MAKE) -C services/kernel clean
-	rm -rf logs/robin_audit_test.log
+	cd services\gateway && del /f gateway.exe 2>nul
+	cd frontend && rmdir /s /q .next 2>nul
+	@echo "[Robin] Cleaned build artifacts."
+
+## Check gateway health
+health:
+	curl -s http://localhost:8080/health | python -m json.tool
 
 ## Show help
 help:
-	@echo "Robin Trading Platform — Makefile targets:"
-	@echo ""
-	@grep -E '^##' Makefile | sed 's/## /  /'
-	@echo ""
-	@echo "Compiler: $(CXX)"
-	@echo "NPROC:    $(NPROC)"
+	@echo.
+	@echo   Robin Institutional Trading Platform
+	@echo   make dev              Start all services (no Docker)
+	@echo   make build            Build all binaries
+	@echo   make test             Run all tests
+	@echo   make e2e              Run E2E integration tests
+	@echo   make docker-up        Start via Docker Compose
+	@echo   make health           Check gateway health endpoint
+	@echo   make clean            Remove build artifacts
+	@echo.

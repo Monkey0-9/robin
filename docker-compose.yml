@@ -1,0 +1,90 @@
+version: '3.9'
+
+# ============================================================================
+# Robin Institutional Trading Platform — Local Development Compose
+# ============================================================================
+# Services:
+#   gateway   — Go HTTP gateway (port 8080)
+#   ai-agent  — Python FastAPI AI engine (port 8000)
+#   frontend  — Next.js dev server (port 3000)
+#   robin-swarm  — Swarm Intelligence Engine (ports 3001, 5001)
+#
+# Prerequisites:
+#   1. RSA keys in ./keys/ (auto-generated on first run by gateway in dev mode)
+#   2. No C++ matching engine needed — gateway returns 503 on missing engine
+#
+# Usage:
+#   docker-compose up            # Start all services
+#   docker-compose up gateway    # Start just the gateway
+#   docker-compose logs -f       # Stream all logs
+# ============================================================================
+
+services:
+  gateway:
+    build:
+      context: ./services/gateway
+      dockerfile: Dockerfile
+    container_name: robin-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - ORCH_PORT=8080
+      - ROBIN_CORS_ORIGIN=http://localhost:3000
+      - ROBIN_BYPASS_AUTH=0
+      # Keys auto-generated in dev mode (no ROBIN_JWT_*_FILE set)
+    volumes:
+      - ./services/gateway/robin.db:/app/robin.db
+      - ./services/gateway/config_state.json:/app/config_state.json
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  ai-agent:
+    build:
+      context: ./services/ai-agent
+      dockerfile: Dockerfile
+    container_name: robin-ai-agent
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: robin-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_GATEWAY_URL=http://localhost:8080
+      - NODE_ENV=development
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+  robin-swarm:
+    build:
+      context: ./services/robin-swarm
+    container_name: robin-swarm
+    env_file:
+      - ./services/robin-swarm/.env
+    ports:
+      - "3001:3000"
+      - "5001:5001"
+    volumes:
+      - ./services/robin-swarm/backend/uploads:/app/backend/uploads
+    restart: unless-stopped

@@ -17,9 +17,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BrainCircuit, Send, Loader2, Info } from 'lucide-react';
 import { useTerminalStore } from '../store/useTerminalStore';
+import { useAuthStore } from '../store/useAuthStore';
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:8080';
-const JWT_TOKEN = process.env.NEXT_PUBLIC_GATEWAY_API_TOKEN || '';
+
 
 interface Message {
   role: 'user' | 'ai';
@@ -94,7 +95,7 @@ export default function AIPanel() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${JWT_TOKEN}`,
+          Authorization: `Bearer ${useAuthStore.getState().getToken() || ''}`,
         },
         body: JSON.stringify({
           message: text,
