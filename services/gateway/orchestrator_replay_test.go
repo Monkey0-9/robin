@@ -117,8 +117,8 @@ func TestDeterministicReplay(t *testing.T) {
 
 	// 1. Send an order as a trader (fixed-point: price*1e8, qty*1e8)
 	code, resp := sendOrder("BTC/USD", "BUY", "LIMIT", 60000*100000000, 15*100000000, traderToken)
-	if code != http.StatusOK || resp["status"] != "FILLED" {
-		t.Errorf("expected OK and FILLED, got code %d, status %v", code, resp["status"])
+	if code != http.StatusOK || resp["status"] != "WORKING" {
+		t.Errorf("expected OK and WORKING, got code %d, status %v", code, resp["status"])
 	}
 
 	// 2. Send an order as an admin (should be forbidden)
@@ -129,6 +129,9 @@ func TestDeterministicReplay(t *testing.T) {
 	if errStr, ok := resp2["error"].(string); !ok || errStr != "forbidden: insufficient permissions" {
 		t.Errorf("expected forbidden error, got %v", resp2["error"])
 	}
+
+	// Give async routing time to complete
+	time.Sleep(100 * time.Millisecond)
 
 	// 3. Check stats as admin
 	req, _ := http.NewRequest("GET", "/stats", nil)

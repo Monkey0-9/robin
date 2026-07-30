@@ -47,6 +47,11 @@ func main() {
 	// Initialize position manager (fetches live prices from AI agent)
 	initPositionManager()
 
+	// Initialize tick logger for flat-file persistence
+	if err := InitTickLogger("c:\\Robin\\kdb_storage"); err != nil {
+		logger.Error("Failed to initialize tick logger", "error", err)
+	}
+
 	orch.StartHealthProbes(ctx, 100*time.Millisecond)
 
 

@@ -43,6 +43,10 @@ if(USE_ONNX_RUNTIME)
     message(STATUS "ONNX Runtime enabled for live_feed ML signal engine")
 endif()
 
+# ─── C++ Strategy Python Bindings (DLL/SO) ────────────────────────────────────
+add_library(strategy_bindings SHARED src/strategy_bindings.cpp)
+target_include_directories(strategy_bindings PRIVATE src)
+
 # ─── Benchmarks ───────────────────────────────────────────────────────────────
 add_executable(order_book_benchmark bench/order_book_benchmark.cpp)
 target_include_directories(order_book_benchmark PRIVATE src)

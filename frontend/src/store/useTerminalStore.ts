@@ -9,6 +9,24 @@ export interface Asset {
   type: 'crypto' | 'equity' | 'index' | 'fx';
 }
 
+export interface VolumeStats {
+  symbol: string;
+  volume: number;
+  vwap: number;
+  cvd: number;
+}
+
+export interface TechnicalIndicators {
+  symbol: string;
+  price: number;
+  sma20: number;
+  upperBand: number;
+  lowerBand: number;
+  macd: number;
+  rsi: number;
+  timestamp: number;
+}
+
 export interface Position {
   id: string;
   symbol: string;
@@ -73,7 +91,9 @@ interface TerminalState {
   screenerAssets: any[];
   heatmapSectors: any[];
   sorQuotes: any[];
-  portfolioWeights: Record<string, number>;
+  portfolioWeights: { symbol: string; targetWeight: number }[];
+  volumeStats: Record<string, VolumeStats>;
+  indicators: Record<string, TechnicalIndicators>;
   
   orderBook: {
     bids: OrderBookLevel[];
@@ -141,10 +161,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   heatmapSectors: [],
   sorQuotes: [],
 
-  portfolioWeights: {},
+  portfolioWeights: [],
+  volumeStats: {},
+  indicators: {},
 
   orderBook: { bids: [], asks: [] },
-  systemHealth: { healthy: 0, degraded: 0, failed: 0, latencyNs: 65000 },
+  systemHealth: { healthy: 4, degraded: 0, failed: 0, latencyNs: 65000 },
 
   init: () => {
     console.log('Terminal store initialized');
@@ -189,12 +211,12 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
           if (data.type === 'orderbook') {
             const { symbol, bids, asks } = data.data;
-            const orderBookBids: OrderBookLevel[] = bids.slice(0, 8).map(([price, size]: number[], i: number) => ({
+            const orderBookBids: OrderBookLevel[] = bids.slice(0, 20).map(([price, size]: number[], i: number) => ({
               price,
               size,
               total: bids.slice(0, i + 1).reduce((s: number, [_, sz]: number[]) => s + sz, 0),
             }));
-            const orderBookAsks: OrderBookLevel[] = asks.slice(0, 8).map(([price, size]: number[], i: number) => ({
+            const orderBookAsks: OrderBookLevel[] = asks.slice(0, 20).map(([price, size]: number[], i: number) => ({
               price,
               size,
               total: asks.slice(0, i + 1).reduce((s: number, [_, sz]: number[]) => s + sz, 0),
@@ -245,6 +267,43 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
                 realizedPnL: 0,
                 timestamp: new Date(trade.timestamp),
               }, ...state.tradeHistory],
+            }));
+          } else if (data.type === 'order_update') {
+            const update = data.data;
+            set((state) => {
+              const currentOrders = [...state.workingOrders];
+              const idx = currentOrders.findIndex(o => o.id === update.cl_ord_id);
+              if (idx !== -1) {
+                if (update.status === 'FILLED' || update.status === 'CANCELED' || update.status === 'REJECTED') {
+                  // Remove from working orders
+                  currentOrders.splice(idx, 1);
+                } else {
+                  // Update status
+                  currentOrders[idx] = { ...currentOrders[idx], status: update.status };
+                }
+              }
+              return { workingOrders: currentOrders };
+            });
+          } else if (data.type === 'volume_stats') {
+            const stats = data.data;
+            set((state) => ({
+              volumeStats: {
+                ...state.volumeStats,
+                [stats.symbol]: {
+                  symbol: stats.symbol,
+                  volume: stats.volume,
+                  vwap: stats.vwap,
+                  cvd: stats.cvd,
+                }
+              }
+            }));
+          } else if (data.type === 'indicators') {
+            const inds = data.data;
+            set((state) => ({
+              indicators: {
+                ...state.indicators,
+                [inds.symbol]: inds
+              }
             }));
           }
         },
@@ -311,24 +370,24 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const state = get();
     const clOrdId = `ORD-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
-    // If LIMIT or STOP, record in workingOrders state
-    if (orderType === 'LIMIT' || orderType === 'STOP') {
-      const workingOrd: WorkingOrder = {
-        id: clOrdId,
-        symbol,
-        side,
-        orderType,
-        qty: size,
-        price,
-        status: 'WORKING',
-        timestamp: new Date(),
-        routedExchange: state.routingMode === 'AUTO' ? 'Robin Pools' : state.routingMode,
-      };
-      set((s) => ({
-        workingOrders: [workingOrd, ...s.workingOrders],
-      }));
-      state.showNotification(`Working ${orderType} order submitted: ${side} ${size} ${symbol} @ $${price.toFixed(2)}`, 'info');
-    }
+    // Record in workingOrders state for all orders initially
+    const workingOrd: WorkingOrder = {
+      id: clOrdId,
+      symbol,
+      side,
+      orderType,
+      qty: size,
+      price,
+      status: 'WORKING',
+      timestamp: new Date(),
+      routedExchange: state.routingMode === 'AUTO' ? 'Robin Pools' : state.routingMode,
+    };
+    
+    set((s) => ({
+      workingOrders: [workingOrd, ...s.workingOrders],
+    }));
+    
+    state.showNotification(`Order submitted: ${side} ${size} ${symbol} @ $${price.toFixed(2)}`, 'info');
 
     // Attempt to submit via gateway
     try {
@@ -350,51 +409,14 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         signal: AbortSignal.timeout(3000),
       });
 
-      if (res.ok) {
-        const fill = await res.json();
-        const fillPrice = fill.fill_price ?? price;
-        const routedExchange = fill.routed_exchange || 'Robin Pools';
-        const priceImprovement = fill.price_improvement_bps || 0.0;
-
-        set((s) => {
-          const newPosition = {
-            id: fill.exec_id ?? clOrdId,
-            symbol,
-            side: (side === 'BUY' ? 'LONG' : 'SHORT') as 'LONG' | 'SHORT',
-            size,
-            entryPrice: fillPrice,
-            marginRequired: 0,
-            unrealizedPnL: 0,
-            routedExchange,
-          };
-          const newTrade = {
-            id: fill.exec_id ?? clOrdId,
-            symbol,
-            side: side as 'BUY' | 'SELL',
-            qty: size,
-            price: fillPrice,
-            realizedPnL: 0,
-            timestamp: new Date(),
-            routedExchange,
-            priceImprovement,
-          };
-          s.showNotification(
-            `Order FILLED via ${routedExchange}: ${side} ${size} ${symbol} @ $${fillPrice.toFixed(2)} (+${priceImprovement.toFixed(1)}bps saved)`,
-            'success'
-          );
-          return {
-            positions: [...s.positions, newPosition],
-            tradeHistory: [newTrade, ...s.tradeHistory],
-            // Remove from working orders if filled immediately
-            workingOrders: s.workingOrders.filter(w => w.id !== clOrdId),
-          };
-        });
-        return;
+      if (!res.ok) {
+        throw new Error("Order rejected by gateway");
       }
     } catch (e) {
-      if (orderType === 'MARKET') {
-        state.showNotification('Order Execution Failed: Gateway Offline / Server Unreachable', 'error');
-      }
+      set((s) => ({
+        workingOrders: s.workingOrders.filter(w => w.id !== clOrdId),
+      }));
+      state.showNotification('Order Execution Failed: Gateway Offline / Server Unreachable', 'error');
     }
   },
 

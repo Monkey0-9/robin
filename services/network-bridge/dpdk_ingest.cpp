@@ -70,7 +70,6 @@ struct alignas(CACHE_LINE_SIZE) CoreStats {
     uint64_t max_latency_ns;
     uint64_t total_latency_ns;
     uint64_t burst_count;
-    uint8_t pad_[CACHE_LINE_SIZE - 9*8];
 };
 
 // AF_XDP socket configuration
@@ -84,6 +83,12 @@ struct AFXDPConfig {
     uint32_t comp_ring_size;
     uint32_t rx_ring_size;
     uint32_t tx_ring_size;
+};
+
+struct PacketMeta {
+    uint8_t* data;
+    uint32_t length;
+    uint64_t timestamp_ns;
 };
 
 class DPDKZeroCopyEngine {
@@ -377,11 +382,7 @@ private:
     struct rte_mempool* mbuf_pool_ = nullptr;
 };
 
-struct PacketMeta {
-    uint8_t* data;
-    uint32_t length;
-    uint64_t timestamp_ns;
-};
+
 
 // AF_XDP kernel bypass as lighter alternative
 class AFXDPIngestionEngine {

@@ -3,7 +3,7 @@ import { List } from 'lucide-react';
 import { useTerminalStore } from '../store/useTerminalStore';
 
 export default function OrderBook() {
-  const { orderBook, assets, selectedSymbol } = useTerminalStore();
+  const { orderBook, assets, selectedSymbol, volumeStats } = useTerminalStore();
   const currentPrice = assets.find(a => a.symbol === selectedSymbol)?.currentPrice || 0;
 
   return (
@@ -30,7 +30,7 @@ export default function OrderBook() {
           <span className='text-accent-green font-bold text-sm'>{currentPrice.toFixed(2)}</span>
           <span className='text-text-dim'>Spread: $1.00</span>
         </div>
-        <div className='flex-1 flex flex-col gap-0.5 mt-1'>
+        <div className='flex-1 flex flex-col gap-0.5 mt-1 mb-2'>
           {orderBook.bids.map((bid, i) => (
             <div key={i} className='grid grid-cols-3 px-2 py-0.5 hover:bg-hover rounded relative overflow-hidden group cursor-pointer'>
               <div className='absolute right-0 top-0 bottom-0 bg-accent-green-dim opacity-20' style={{width: Math.min((bid.total / 10) * 100, 100) + '%'}}></div>
@@ -40,6 +40,24 @@ export default function OrderBook() {
             </div>
           ))}
         </div>
+        {volumeStats[selectedSymbol] && (
+          <div className='border-t border-border pt-2 mt-auto grid grid-cols-3 text-[10px] text-center gap-1 bg-card rounded p-1 shadow-inner'>
+            <div className='flex flex-col'>
+              <span className='text-text-dim'>Vol</span>
+              <span className='text-white font-bold'>{volumeStats[selectedSymbol].volume.toFixed(2)}</span>
+            </div>
+            <div className='flex flex-col'>
+              <span className='text-text-dim'>VWAP</span>
+              <span className='text-accent-amber font-bold'>{volumeStats[selectedSymbol].vwap.toFixed(2)}</span>
+            </div>
+            <div className='flex flex-col'>
+              <span className='text-text-dim'>CVD</span>
+              <span className={`font-bold ${volumeStats[selectedSymbol].cvd > 0 ? 'text-accent-green' : volumeStats[selectedSymbol].cvd < 0 ? 'text-accent-red' : 'text-white'}`}>
+                {volumeStats[selectedSymbol].cvd > 0 ? '+' : ''}{volumeStats[selectedSymbol].cvd.toFixed(2)}
+              </span>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

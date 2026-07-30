@@ -328,7 +328,9 @@ class TestTrainModels:
 class TestCORSSecurity:
     def test_cors_not_wildcard(self):
         """Verify main.py doesn't use wildcard CORS origins in actual code."""
-        with open("main.py", "r") as f:
+        import os
+        main_path = os.path.join(os.path.dirname(__file__), "..", "main.py")
+        with open(main_path, "r", encoding="utf-8") as f:
             lines = f.readlines()
         # Skip docstring lines (those starting with # or inside """ blocks)
         # Check code lines only (not inside docstrings/comments)
@@ -351,14 +353,18 @@ class TestCORSSecurity:
 
     def test_cors_localhost_only(self):
         """Verify CORS is restricted to localhost."""
-        with open("main.py", "r") as f:
+        import os
+        main_path = os.path.join(os.path.dirname(__file__), "..", "main.py")
+        with open(main_path, "r", encoding="utf-8") as f:
             content = f.read()
         assert "localhost" in content
         assert "127.0.0.1" in content
 
     def test_no_random_price(self):
         """Verify random price generation is removed from main.py."""
-        with open("main.py", "r") as f:
+        import os
+        main_path = os.path.join(os.path.dirname(__file__), "..", "main.py")
+        with open(main_path, "r", encoding="utf-8") as f:
             content = f.read()
         # Should NOT have the old random price line
         assert "65000.0 + random.uniform" not in content, \

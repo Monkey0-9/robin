@@ -292,6 +292,9 @@ class DataEngine:
         df["price_vs_sma50"]  = (close / df["sma_50"])  - 1
         df["price_vs_sma200"] = (close / df["sma_200"]) - 1
 
+        # Target (Future 5-day return)
+        df["target_5d"] = df["close"].shift(-5) / df["close"] - 1
+
         return df
 
     # ─── Dataset loading ─────────────────────────────────────────────────────

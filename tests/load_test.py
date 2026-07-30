@@ -38,7 +38,7 @@ except ImportError:
 # ============================================================================
 
 @dataclass
-class TestResult:
+class LoadTestResult:
     scenario: str
     total_requests: int = 0
     successful: int = 0
@@ -201,9 +201,9 @@ class LoadTestRunner:
     # ========================================================================
     async def scenario_baseline_throughput(
         self, target_rps: int = 1000, duration_s: int = 60
-    ) -> TestResult:
+    ) -> LoadTestResult:
         """Sustained throughput test at target_rps for duration_s seconds."""
-        result = TestResult(scenario=f"baseline_throughput_{target_rps}rps_{duration_s}s")
+        result = LoadTestResult(scenario=f"baseline_throughput_{target_rps}rps_{duration_s}s")
         result.start_time_ns = time.time_ns()
         end_ns = result.start_time_ns + int(duration_s * 1e9)
 
@@ -249,9 +249,9 @@ class LoadTestRunner:
     # ========================================================================
     # Scenario 2: Burst test
     # ========================================================================
-    async def scenario_burst(self, burst_size: int = 10_000) -> TestResult:
+    async def scenario_burst(self, burst_size: int = 10_000) -> LoadTestResult:
         """Send burst_size orders concurrently (maximum load spike)."""
-        result = TestResult(scenario=f"burst_{burst_size}_orders")
+        result = LoadTestResult(scenario=f"burst_{burst_size}_orders")
         result.start_time_ns = time.time_ns()
 
         print(f"\n[{result.scenario}] Sending {burst_size:,} orders concurrently...")
@@ -280,7 +280,7 @@ class LoadTestRunner:
     # ========================================================================
     # Scenario 3: Kill switch under load
     # ========================================================================
-    async def scenario_kill_switch(self, orders_after_trip: int = 100) -> TestResult:
+    async def scenario_kill_switch(self, orders_after_trip: int = 100) -> LoadTestResult:
         """
         1. Send 50 orders (should succeed)
         2. Trip system kill switch
@@ -288,7 +288,7 @@ class LoadTestRunner:
         4. Reset kill switch via dual-person flow
         5. Verify orders resume
         """
-        result = TestResult(scenario="kill_switch_under_load")
+        result = LoadTestResult(scenario="kill_switch_under_load")
         result.start_time_ns = time.time_ns()
         print(f"\n[{result.scenario}] Testing kill switch atomicity...")
 
@@ -345,9 +345,9 @@ class LoadTestRunner:
     # ========================================================================
     # Scenario 4: Health endpoint latency
     # ========================================================================
-    async def scenario_health_latency(self, n: int = 1000) -> TestResult:
+    async def scenario_health_latency(self, n: int = 1000) -> LoadTestResult:
         """Measure /health endpoint latency under concurrent load."""
-        result = TestResult(scenario=f"health_latency_{n}")
+        result = LoadTestResult(scenario=f"health_latency_{n}")
         result.start_time_ns = time.time_ns()
 
         tasks = [self._get("/health") for _ in range(n)]
@@ -371,9 +371,9 @@ class LoadTestRunner:
     # ========================================================================
     # Scenario 5: Supervisory workflow
     # ========================================================================
-    async def scenario_supervisory_workflow(self) -> TestResult:
+    async def scenario_supervisory_workflow(self) -> LoadTestResult:
         """Submit a large order ($2M notional) and verify supervisory pending state."""
-        result = TestResult(scenario="supervisory_workflow")
+        result = LoadTestResult(scenario="supervisory_workflow")
         result.start_time_ns = time.time_ns()
         print(f"\n[{result.scenario}] Testing FINRA 3110 supervisory workflow...")
 

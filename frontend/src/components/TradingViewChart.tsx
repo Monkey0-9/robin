@@ -82,7 +82,7 @@ function buildCandles(currentPrice: number, count = 80): OHLCBar[] {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function TradingViewChart() {
-  const { selectedSymbol, assets } = useTerminalStore();
+  const { selectedSymbol, assets, indicators } = useTerminalStore();
   const asset = assets.find(a => a.symbol === selectedSymbol);
   const currentPrice = asset?.currentPrice ?? 0;
   const dailyChangePct = asset?.dailyChangePct ?? 0;
@@ -279,6 +279,26 @@ export default function TradingViewChart() {
           <div className='absolute inset-0 flex flex-col items-center justify-center gap-2 text-text-dim pointer-events-none'>
             <Activity size={24} className='animate-pulse opacity-40' />
             <span className='text-[11px]'>Waiting for live price data…</span>
+          </div>
+        )}
+        {/* Technical Indicators Overlay */}
+        {indicators[selectedSymbol] && (
+          <div className='absolute top-2 left-2 flex gap-4 text-[10px] font-mono z-10 pointer-events-none bg-black/40 px-2 py-1 rounded backdrop-blur-sm border border-white/5'>
+            <span className='text-accent-blue/80'>
+              SMA(20): <span className='font-bold text-accent-blue'>{indicators[selectedSymbol].sma20.toFixed(2)}</span>
+            </span>
+            <span className='text-accent-amber/80'>
+              BB UP: <span className='font-bold text-accent-amber'>{indicators[selectedSymbol].upperBand.toFixed(2)}</span>
+            </span>
+            <span className='text-accent-amber/80'>
+              BB DN: <span className='font-bold text-accent-amber'>{indicators[selectedSymbol].lowerBand.toFixed(2)}</span>
+            </span>
+            <span className='text-accent-purple/80'>
+              MACD: <span className='font-bold text-accent-purple'>{indicators[selectedSymbol].macd.toFixed(2)}</span>
+            </span>
+            <span className='text-accent-green/80'>
+              RSI(14): <span className='font-bold text-accent-green'>{indicators[selectedSymbol].rsi.toFixed(2)}</span>
+            </span>
           </div>
         )}
       </div>

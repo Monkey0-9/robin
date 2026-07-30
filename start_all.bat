@@ -47,6 +47,12 @@ if exist build\live_feed.exe (
 )
 cd ..\..
 
+:: ── [3.5/4] Rust Risk Analytics Engine ───────────────────────────────────────
+echo [3.5/4] Starting Rust Risk Analytics Engine (port 9092)...
+cd services\risk-analytics
+start "Robin Risk Engine" cmd /c "..\..\target\release\robin-risk-daemon.exe"
+cd ..\..
+
 :: ── [4/4] Go Gateway / OMS ───────────────────────────────────────────────────
 :: Launched via dedicated batch file so .env vars are properly scoped and
 :: the JWT key paths are set before go run compiles and starts.
