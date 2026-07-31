@@ -12,6 +12,30 @@ Research prototype for ultra-low latency quantitative trading concepts.
 
 ---
 
+## ?? Quick Start & How to Use
+
+To run the entire Robin Trading Platform stack (including all backend engines and frontend interfaces) locally, simply execute the `start_all.bat` script provided in the root directory:
+
+```bash
+# On Windows
+start_all.bat
+```
+
+This will automatically spin up all the necessary services and background processes. Once the script finishes, you can access the platform at the following URLs:
+
+- **Robin Terminal (Main Frontend)**: [http://localhost:3000](http://localhost:3000)
+- **Robin Swarm Engine (MiroFish)**: [http://localhost:3001](http://localhost:3001)
+- **Go Gateway API & OMS**: `http://localhost:8080`
+- **Robin AI Engine**: `http://localhost:8000`
+- **C++ Matching Engine**: Port `9091`
+- **Rust Risk Analytics Engine**: Port `9092`
+
+### Default Login Credentials
+- **Username**: `admin`
+- **Password**: `admin`
+
+---
+
 ## Current Implementation Status
 
 | Component | Status | Language | What It Does | Known Gaps |
