@@ -1,3 +1,4 @@
+$schema: https://compose-spec.io/schemas/docker-compose.yaml
 version: '3.8'
 
 services:

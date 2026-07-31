@@ -74,7 +74,8 @@ impl RiskGateFast {
             let collar_bps = self.thresholds.price_collar_bps as u64;
             // Use u128 to prevent overflow on large reference prices
             let max_allowed = (ref_p as u128 * (10000 + collar_bps) as u128 / 10000) as u64;
-            let min_allowed = (ref_p as u128 * (10000u64.saturating_sub(collar_bps)) as u128 / 10000) as u64;
+            let min_allowed =
+                (ref_p as u128 * (10000u64.saturating_sub(collar_bps)) as u128 / 10000) as u64;
 
             let price_ok = match order.side {
                 OrderSide::Bid => order_p <= max_allowed,

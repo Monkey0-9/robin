@@ -1,0 +1,637 @@
+'use client';
+
+import React, { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useTerminalStore } from '../store/useTerminalStore';
+import { useAuthStore } from '../store/useAuthStore';
+import ErrorBoundary from './ErrorBoundary';
+import Header from './Header';
+import Watchlist from './Watchlist';
+import TradingViewChart from './TradingViewChart';
+import OrderBook from './OrderBook';
+import OrderEntry from './OrderEntry';
+import PositionsTable from './PositionsTable';
+import OrdersTable from './OrdersTable';
+import RiskMetrics from './RiskMetrics';
+import AIPanel from './AIPanel';
+import AIAutonomousPanel from './AIAutonomousPanel';
+import NewsFeed from './NewsFeed';
+import Disclaimers from './Disclaimers';
+import ComplianceDashboard from './ComplianceDashboard';
+import BestPriceComparison from './BestPriceComparison';
+import Screener from './Screener';
+import Heatmap from './Heatmap';
+import OptionsChain from './OptionsChain';
+import StrategyRoller from './StrategyRoller';
+import GoalsPlanner from './GoalsPlanner';
+import {
+  Download,
+  AlertTriangle,
+  Activity,
+  Award,
+  BookOpen,
+  PieChart,
+  LayoutGrid,
+  Heart,
+  Search,
+  ShieldAlert,
+  Layers
+} from 'lucide-react';
+
+export default function Dashboard() {
+  const router = useRouter();
+  const { isAuthenticated, username, logout } = useAuthStore();
+  const init = useTerminalStore((state) => state.init);
+  const assets = useTerminalStore((state) => state.assets);
+  const selectedSymbol = useTerminalStore((state) => state.selectedSymbol);
+  const notification = useTerminalStore((state) => state.notification);
+  const dismissNotification = useTerminalStore((state) => state.dismissNotification);
+  const exportToCSV = useTerminalStore((state) => state.exportToCSV);
+  const tradeHistory = useTerminalStore((state) => state.tradeHistory);
+  const positions = useTerminalStore((state) => state.positions);
+  const balance = useTerminalStore((state) => state.balance);
+  const equity = useTerminalStore((state) => state.equity);
+
+  const [activeTab, setActiveTab] = useState<'execution' | 'portfolio' | 'risk' | 'ai' | 'help' | 'screener' | 'compliance' | 'derivatives'>('execution');
+  const [rightPanelTab, setRightPanelTab] = useState<'book' | 'sor'>('book');
+  const [authChecked, setAuthChecked] = useState(false);
+
+  // Auth guard: redirect to /login if not authenticated
+  useEffect(() => {
+    if (!isAuthenticated()) {
+      router.push('/login');
+    } else {
+      setAuthChecked(true);
+    }
+  }, [isAuthenticated, router]);
+
+  // Trigger state init on mount (after auth confirmed)
+  useEffect(() => {
+    if (authChecked) init();
+  }, [authChecked, init]);
+
+  // Handle toast timeout auto-dismiss
+  useEffect(() => {
+    if (notification) {
+      const timer = setTimeout(() => {
+        dismissNotification();
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [notification, dismissNotification]);
+
+
+
+  // Format price decimals based on asset type
+  const formatPrice = (symbol: string, p: number) => {
+    if (symbol === 'EUR/USD') return p.toFixed(4);
+    if (p > 1000) return p.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return p.toFixed(2);
+  };
+
+  // Show loading spinner while checking auth
+  if (!authChecked) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-void">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-accent-blue/30 border-t-accent-blue rounded-full animate-spin" />
+          <span className="text-text-dim text-sm font-mono">Verifying session...</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-screen w-screen flex flex-col overflow-hidden bg-void text-primary">
+
+      {/* Header Panel */}
+      <Header />
+
+      {/* Ticker Tape */}
+      <div className="bg-card border-b border-border/80 h-7 overflow-hidden flex items-center relative select-none z-30">
+        <div className="flex gap-8 whitespace-nowrap animate-[marquee_50s_linear_infinite] hover:[animation-play-state:paused] px-4">
+          {assets.map((asset, index) => {
+            const isPos = asset.dailyChangePct >= 0;
+            return (
+              <div key={`${asset.symbol}-${index}`} className="flex items-center gap-1.5 font-mono text-[10px]">
+                <span className={`font-bold ${isPos ? 'text-accent-green' : 'text-accent-red'}`}>{asset.symbol}</span>
+                <span className={`${isPos ? 'text-accent-green/80' : 'text-accent-red/80'}`}>{formatPrice(asset.symbol, asset.currentPrice)}</span>
+                <span className={`font-semibold ${isPos ? 'text-accent-green' : 'text-accent-red'}`}>
+                  {isPos ? '▲' : '▼'} {isPos ? '+' : ''}{asset.dailyChangePct}%
+                </span>
+              </div>
+            );
+          })}
+          {/* Duplicate for seamless scrolling marquee */}
+          {assets.map((asset, index) => {
+            const isPos = asset.dailyChangePct >= 0;
+            return (
+              <div key={`${asset.symbol}-dup-${index}`} className="flex items-center gap-1.5 font-mono text-[10px]">
+                <span className={`font-bold ${isPos ? 'text-accent-green' : 'text-accent-red'}`}>{asset.symbol}</span>
+                <span className={`${isPos ? 'text-accent-green/80' : 'text-accent-red/80'}`}>{formatPrice(asset.symbol, asset.currentPrice)}</span>
+                <span className={`font-semibold ${isPos ? 'text-accent-green' : 'text-accent-red'}`}>
+                  {isPos ? '▲' : '▼'} {isPos ? '+' : ''}{asset.dailyChangePct}%
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Main Grid Workspace Container */}
+      <div className="flex-1 flex overflow-hidden min-h-0">
+        {/* Navigation Sidebar */}
+        <aside className="w-14 bg-panel border-r border-border flex flex-col items-center py-4 justify-between select-none z-30">
+          <div className="flex flex-col gap-3 w-full px-2">
+            {/* Execution tab */}
+            <button
+              onClick={() => setActiveTab('execution')}
+              className={`flex flex-col items-center gap-1 py-2.5 rounded-lg text-text-dim hover:text-text-secondary transition-all w-full ${
+                activeTab === 'execution' ? 'bg-accent-blue-dim text-accent-blue font-bold border-l-2 border-accent-blue rounded-l-none' : ''
+              }`}
+              title="Execution Terminal"
+            >
+              <LayoutGrid size={18} />
+              <span className="text-[8px] uppercase tracking-wider font-semibold">Trade</span>
+            </button>
+
+            {/* Portfolio tab */}
+            <button
+              onClick={() => setActiveTab('portfolio')}
+              className={`flex flex-col items-center gap-1 py-2.5 rounded-lg text-text-dim hover:text-text-secondary transition-all w-full ${
+                activeTab === 'portfolio' ? 'bg-accent-blue-dim text-accent-blue font-bold border-l-2 border-accent-blue rounded-l-none' : ''
+              }`}
+              title="Portfolio Sync"
+            >
+              <PieChart size={18} />
+              <span className="text-[8px] uppercase tracking-wider font-semibold">Port</span>
+            </button>
+
+            {/* Risk tab */}
+            <button
+              onClick={() => setActiveTab('risk')}
+              className={`flex flex-col items-center gap-1 py-2.5 rounded-lg text-text-dim hover:text-text-secondary transition-all w-full ${
+                activeTab === 'risk' ? 'bg-accent-blue-dim text-accent-blue font-bold border-l-2 border-accent-blue rounded-l-none' : ''
+              }`}
+              title="Risk Settings"
+            >
+              <Activity size={18} />
+              <span className="text-[8px] uppercase tracking-wider font-semibold">Risk</span>
+            </button>
+
+            {/* Compliance tab */}
+            <button
+              onClick={() => setActiveTab('compliance')}
+              className={`flex flex-col items-center gap-1 py-2.5 rounded-lg text-text-dim hover:text-text-secondary transition-all w-full ${
+                activeTab === 'compliance' ? 'bg-accent-blue-dim text-accent-blue font-bold border-l-2 border-accent-blue rounded-l-none' : ''
+              }`}
+              title="Compliance"
+            >
+              <ShieldAlert size={18} />
+              <span className="text-[8px] uppercase tracking-wider font-semibold">Comp</span>
+            </button>
+
+            {/* AI Signal Pane */}
+            <button
+              onClick={() => setActiveTab('ai')}
+              className={`flex flex-col items-center gap-1 py-2.5 rounded-lg text-text-dim hover:text-text-secondary transition-all w-full ${
+                activeTab === 'ai' ? 'bg-accent-blue-dim text-accent-blue font-bold border-l-2 border-accent-blue rounded-l-none' : ''
+              }`}
+              title="AI Signals & News"
+            >
+              <Award size={18} />
+              <span className="text-[8px] uppercase tracking-wider font-semibold">Signals</span>
+            </button>
+
+            {/* Screener & Heatmap Tab */}
+            <button
+              onClick={() => setActiveTab('screener')}
+              className={`flex flex-col items-center gap-1 py-2.5 rounded-lg text-text-dim hover:text-text-secondary transition-all w-full ${
+                activeTab === 'screener' ? 'bg-accent-blue-dim text-accent-blue font-bold border-l-2 border-accent-blue rounded-l-none' : ''
+              }`}
+              title="Market Screener"
+            >
+              <Search size={18} />
+              <span className="text-[8px] uppercase tracking-wider font-semibold">Screener</span>
+            </button>
+
+            {/* Options & Derivatives Tab */}
+            <button
+              onClick={() => setActiveTab('derivatives')}
+              className={`flex flex-col items-center gap-1 py-2.5 rounded-lg text-text-dim hover:text-text-secondary transition-all w-full ${
+                activeTab === 'derivatives' ? 'bg-accent-blue-dim text-accent-blue font-bold border-l-2 border-accent-blue rounded-l-none' : ''
+              }`}
+              title="Options & Strategy Roller"
+            >
+              <Layers size={18} />
+              <span className="text-[8px] uppercase tracking-wider font-semibold">Options</span>
+            </button>
+          </div>
+
+          <div className="flex flex-col gap-3 w-full px-2">
+            {/* Help/Disclaimer */}
+            <button
+              onClick={() => setActiveTab('help')}
+              className={`flex flex-col items-center gap-1 py-2.5 rounded-lg text-text-dim hover:text-text-secondary transition-all w-full ${
+                activeTab === 'help' ? 'bg-accent-blue-dim text-accent-blue font-bold border-l-2 border-accent-blue rounded-l-none' : ''
+              }`}
+              title="Education Guide"
+            >
+              <BookOpen size={18} />
+              <span className="text-[8px] uppercase tracking-wider font-semibold">Guide</span>
+            </button>
+          </div>
+        </aside>
+
+        {/* View Workspace Contents */}
+        <main className="flex-1 overflow-hidden min-h-0 bg-bg-base relative">
+          
+          {/* TAB 1: EXECUTION WORKSPACE */}
+          {activeTab === 'execution' && (
+            <div className="h-full p-2.5 grid grid-cols-12 gap-2.5 overflow-hidden">
+              {/* Left Column: Watchlist (Grid col-span-3) */}
+              <div className="col-span-12 lg:col-span-3 h-full min-h-0">
+                <ErrorBoundary title="Watchlist">
+                  <Watchlist />
+                </ErrorBoundary>
+              </div>
+
+              {/* Center Column: Chart (top) & Active Positions/Orders (bottom) */}
+              <div className="col-span-12 lg:col-span-6 h-full flex flex-col gap-2.5 min-h-0">
+                <div className="flex-[3] min-h-0">
+                  <ErrorBoundary title="Price Chart">
+                    <TradingViewChart />
+                  </ErrorBoundary>
+                </div>
+                <div className="flex-[2] grid grid-cols-2 gap-2.5 min-h-0">
+                  <div className="col-span-2 md:col-span-1 min-h-0">
+                    <ErrorBoundary title="Positions">
+                      <PositionsTable />
+                    </ErrorBoundary>
+                  </div>
+                  <div className="col-span-2 md:col-span-1 min-h-0">
+                    <ErrorBoundary title="Orders">
+                      <OrdersTable />
+                    </ErrorBoundary>
+                  </div>
+                </div>
+              </div>
+
+              {/* Right Column: Tabbed Order Book / Best Price SOR (top) & Order Ticket (bottom) */}
+              <div className="col-span-12 lg:col-span-3 h-full flex flex-col gap-2.5 min-h-0">
+                <div className="flex-[3] min-h-0 flex flex-col bg-panel border border-border rounded-lg overflow-hidden">
+                  <div className="h-8 border-b border-border bg-card px-2.5 flex items-center justify-between flex-shrink-0">
+                    <div className="flex rounded bg-hover p-0.5 text-[9px] font-bold">
+                      <button
+                        onClick={() => setRightPanelTab('book')}
+                        className={`px-2 py-0.5 rounded transition-all ${rightPanelTab === 'book' ? 'bg-accent-blue text-white' : 'text-text-dim hover:text-white'}`}
+                      >
+                        Order Book
+                      </button>
+                      <button
+                        onClick={() => setRightPanelTab('sor')}
+                        className={`px-2 py-0.5 rounded transition-all ${rightPanelTab === 'sor' ? 'bg-accent-blue text-white' : 'text-text-dim hover:text-white'}`}
+                      >
+                        Smart Routing (SOR)
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex-1 min-h-0">
+                    <ErrorBoundary title={rightPanelTab === 'book' ? 'Order Book' : 'Smart Router'}>
+                      {rightPanelTab === 'book' ? <OrderBook /> : <BestPriceComparison />}
+                    </ErrorBoundary>
+                  </div>
+                </div>
+                <div className="flex-[2] min-h-0">
+                  <ErrorBoundary title="Order Entry">
+                    <OrderEntry />
+                  </ErrorBoundary>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 2: PORTFOLIO WORKSPACE */}
+          {activeTab === 'portfolio' && (
+            <div className="h-full p-6 overflow-auto scrollbar space-y-6">
+              <div className="flex items-center justify-between border-b border-border pb-3">
+                <div>
+                  <h2 className="text-lg font-bold text-white">Portfolio Management Synchronization</h2>
+                  <p className="text-xs text-text-secondary">Simulated ledger accounting & capital distributions.</p>
+                </div>
+                {/* Download CSV button */}
+                <button
+                  onClick={exportToCSV}
+                  disabled={tradeHistory.length === 0}
+                  className="bg-accent-blue hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold text-xs px-3 py-1.5 rounded flex items-center gap-1.5 transition-all shadow-lg"
+                >
+                  <Download size={13} />
+                  <span>Export Trade Log (CSV)</span>
+                </button>
+              </div>
+
+              {/* Portfolio stats cards */}
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="bg-panel border border-border rounded-lg p-4">
+                  <span className="text-[10px] uppercase tracking-wider text-text-dim font-bold">Total Capital AUM</span>
+                  <div className="font-mono text-xl font-bold text-white mt-1">
+                    ${balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </div>
+                  <div className="text-[10px] text-text-secondary mt-1 flex items-center gap-1">
+                    <span>Account initial: $100,000.00</span>
+                  </div>
+                </div>
+                <div className="bg-panel border border-border rounded-lg p-4">
+                  <span className="text-[10px] uppercase tracking-wider text-text-dim font-bold">Total Portfolio Equity</span>
+                  <div className="font-mono text-xl font-bold text-accent-blue mt-1">
+                    ${equity.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </div>
+                  <div className="text-[10px] text-accent-green mt-1">
+                    Floating P&L: ${(equity - balance) >= 0 ? '+' : ''}${(equity - balance).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </div>
+                </div>
+                <div className="bg-panel border border-border rounded-lg p-4">
+                  <span className="text-[10px] uppercase tracking-wider text-text-dim font-bold">Leverage Used</span>
+                  <div className="font-mono text-xl font-bold text-accent-purple mt-1">
+                    {positions.length > 0 ? 'Dynamic' : '0.00x'}
+                  </div>
+                  <div className="text-[10px] text-text-secondary mt-1">
+                    Open Positions: {positions.length}
+                  </div>
+                </div>
+                <div className="bg-panel border border-border rounded-lg p-4">
+                  <span className="text-[10px] uppercase tracking-wider text-text-dim font-bold">Export Logs Status</span>
+                  <div className="font-mono text-xl font-bold text-accent-amber mt-1">
+                    {tradeHistory.length} Trades
+                  </div>
+                  <div className="text-[10px] text-text-secondary mt-1">
+                    Pending logs: {tradeHistory.filter((t: any) => t.realizedPnL === 0).length}
+                  </div>
+                </div>
+              </div>
+
+              {/* Holdings Section */}
+              <div className="bg-panel border border-border rounded-lg overflow-hidden">
+                <div className="bg-card px-4 py-2 border-b border-border font-bold text-xs uppercase tracking-wider">
+                  Open Exposure Ledger
+                </div>
+                <div className="p-4">
+                  {positions.length === 0 ? (
+                    <div className="text-center py-6 text-text-dim font-mono text-xs">
+                      No open holdings. Open trades in the Execution tab.
+                    </div>
+                  ) : (
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="border-b border-border text-text-dim font-mono uppercase text-[10px]">
+                          <th className="py-2">Symbol</th>
+                          <th className="py-2">Side</th>
+                          <th className="py-2 text-right">Size</th>
+                          <th className="py-2 text-right">Entry Avg</th>
+                          <th className="py-2 text-right">Required Margin</th>
+                          <th className="py-2 text-right">Floating P&L</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border/20 font-mono">
+                        {positions.map((pos) => (
+                          <tr key={pos.id}>
+                            <td className="py-3 font-bold text-white">{pos.symbol}</td>
+                            <td className="py-3">
+                              <span className={`px-1.5 py-0.5 rounded font-bold text-[9px] ${
+                                pos.side === 'LONG' ? 'text-accent-green bg-emerald-950/40 border border-emerald-900/60' : 'text-accent-red bg-red-950/40 border border-red-900/60'
+                              }`}>{pos.side}</span>
+                            </td>
+                            <td className="py-3 text-right text-white">{pos.size}</td>
+                            <td className="py-3 text-right text-text-secondary">${pos.entryPrice.toLocaleString()}</td>
+                            <td className="py-3 text-right text-accent-purple">${pos.marginRequired.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                            <td className="py-3 text-right">
+                              <span className={pos.unrealizedPnL >= 0 ? 'text-accent-green' : 'text-accent-red'}>
+                                {pos.unrealizedPnL >= 0 ? '+' : ''}${pos.unrealizedPnL.toLocaleString()}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+              {/* Goals Planning & Allocation Section */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="h-80">
+                  <ErrorBoundary title="Goals Planner">
+                    <GoalsPlanner />
+                  </ErrorBoundary>
+                </div>
+                <div className="bg-panel border border-border rounded-lg p-4 font-mono text-xs flex flex-col justify-between">
+                  <div>
+                    <h3 className="font-bold text-white uppercase text-xs mb-1">MPT Optimal Portfolio Weights</h3>
+                    <p className="text-[10px] text-text-dim mb-3">Modern Portfolio Theory max Sharpe ratio distribution derived from Markowitz optimization.</p>
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center text-[11px]">
+                        <span className="text-white">BTC/USD (Bitcoin)</span>
+                        <span className="text-accent-blue font-bold">42.5%</span>
+                      </div>
+                      <div className="w-full bg-card h-2 rounded overflow-hidden">
+                        <div className="bg-accent-blue h-full" style={{ width: '42.5%' }}></div>
+                      </div>
+
+                      <div className="flex justify-between items-center text-[11px]">
+                        <span className="text-white">ETH/USD (Ethereum)</span>
+                        <span className="text-accent-purple font-bold">28.0%</span>
+                      </div>
+                      <div className="w-full bg-card h-2 rounded overflow-hidden">
+                        <div className="bg-accent-purple h-full" style={{ width: '28%' }}></div>
+                      </div>
+
+                      <div className="flex justify-between items-center text-[11px]">
+                        <span className="text-white">AAPL (Apple Inc.)</span>
+                        <span className="text-accent-green font-bold">18.0%</span>
+                      </div>
+                      <div className="w-full bg-card h-2 rounded overflow-hidden">
+                        <div className="bg-accent-green h-full" style={{ width: '18%' }}></div>
+                      </div>
+
+                      <div className="flex justify-between items-center text-[11px]">
+                        <span className="text-white">USD Cash Reserves</span>
+                        <span className="text-accent-amber font-bold">11.5%</span>
+                      </div>
+                      <div className="w-full bg-card h-2 rounded overflow-hidden">
+                        <div className="bg-accent-amber h-full" style={{ width: '11.5%' }}></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-4 text-[10px] text-text-dim border-t border-border/40 pt-2 flex justify-between">
+                    <span>Rebalanced: Live</span>
+                    <span>Target Sharpe Ratio: <strong className="text-accent-green">2.84</strong></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 3: RISK METRICS */}
+          {activeTab === 'risk' && (
+            <div className="h-full p-6 overflow-auto scrollbar space-y-6">
+              <div className="border-b border-border pb-3">
+                <h2 className="text-lg font-bold text-white">Risk Management Controls</h2>
+                <p className="text-xs text-text-secondary">Audit drawdown parameters and configure loss safeguards.</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="md:col-span-1">
+                  <RiskMetrics />
+                </div>
+                
+                <div className="md:col-span-2 space-y-4">
+                  <div className="bg-panel border border-border rounded-lg p-4 space-y-3">
+                    <h3 className="text-sm font-bold text-white">Understanding Risk Gate Enforcement</h3>
+                    <div className="space-y-2 text-xs text-text-secondary leading-relaxed">
+                      <p>
+                        ⚡ <strong className="text-white">Drawdown Limits:</strong> Max drawdown measures your peak account value versus the current equity level. Minimizing drawdown is the core metric used to assess institutional trader performance.
+                      </p>
+                      <p>
+                        🛡️ <strong className="text-white">Margin Calls (50%):</strong> If your margin ratio approaches high thresholds and equity drops to 50% of the required margin cache, an automatic liquidation fires. The simulator immediately trigger the Emergency Kill Switch to close all open trades to prevent negative balance states.
+                      </p>
+                      <p>
+                        🚨 <strong className="text-white">Daily Loss Safeguard:</strong> This customizable threshold will lock trading actions in the ticket panel if loss targets are breached. Feel free to adjust the gate value to simulate tighter constraints.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="bg-panel border border-border rounded-lg p-4">
+                    <h3 className="text-xs uppercase tracking-wider text-text-dim font-bold mb-2">Simulated Stress Tests</h3>
+                    <div className="space-y-2 text-xs font-mono">
+                      <div className="flex justify-between border-b border-border/40 py-1.5">
+                        <span className="text-text-secondary">Crypto Market Shock (-15%)</span>
+                        <span className="text-accent-red font-semibold">Simulated Margin Call</span>
+                      </div>
+                      <div className="flex justify-between border-b border-border/40 py-1.5">
+                        <span className="text-text-secondary">Equity Index Decline (-5%)</span>
+                        <span className="text-accent-amber font-semibold">Elevated Volatility Check</span>
+                      </div>
+                      <div className="flex justify-between border-b border-border/40 py-1.5">
+                        <span className="text-text-secondary">USD Sudden Breakout (+2%)</span>
+                        <span className="text-accent-green font-semibold">Exposure Balance Preserved</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 4: AI SIGNAL & NEWS FEED */}
+          {activeTab === 'ai' && (
+            <div className="h-full p-2.5 flex flex-col gap-2.5 overflow-hidden">
+              <div className="flex-[2] min-h-0">
+                <ErrorBoundary title="AI Autonomous Engine">
+                  <AIAutonomousPanel />
+                </ErrorBoundary>
+              </div>
+              <div className="flex-[3] grid grid-cols-12 gap-2.5 min-h-0">
+                <div className="col-span-12 md:col-span-6 h-full min-h-0">
+                  <ErrorBoundary title="AI Assistant">
+                    <AIPanel />
+                  </ErrorBoundary>
+                </div>
+                <div className="col-span-12 md:col-span-6 h-full min-h-0">
+                  <ErrorBoundary title="News Feed">
+                    <NewsFeed />
+                  </ErrorBoundary>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 5: HELP & DISCLAIMERS */}
+          {activeTab === 'help' && (
+            <div className="h-full p-6 overflow-auto scrollbar">
+              <div className="max-w-3xl mx-auto">
+                <Disclaimers />
+              </div>
+            </div>
+          )}
+
+          {/* TAB 6: SCREENER & HEATMAP */}
+          {activeTab === 'screener' && (
+            <div className="h-full p-2.5 grid grid-cols-12 gap-2.5 overflow-hidden">
+              <div className="col-span-12 lg:col-span-6 h-full min-h-0">
+                <ErrorBoundary title="Asset Screener">
+                  <Screener />
+                </ErrorBoundary>
+              </div>
+              <div className="col-span-12 lg:col-span-6 h-full min-h-0">
+                <ErrorBoundary title="Sector Heatmap">
+                  <Heatmap />
+                </ErrorBoundary>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 7: INSTITUTIONAL COMPLIANCE */}
+          {activeTab === 'compliance' && (
+            <div className="h-full p-2.5 overflow-hidden">
+              <ErrorBoundary title="Compliance Dashboard">
+                <ComplianceDashboard />
+              </ErrorBoundary>
+            </div>
+          )}
+
+          {/* TAB 8: DERIVATIVES WORKSPACE */}
+          {activeTab === 'derivatives' && (
+            <div className="h-full p-2.5 grid grid-cols-12 gap-2.5 overflow-hidden">
+              <div className="col-span-12 lg:col-span-7 h-full min-h-0">
+                <ErrorBoundary title="Options Chain">
+                  <OptionsChain />
+                </ErrorBoundary>
+              </div>
+              <div className="col-span-12 lg:col-span-5 h-full min-h-0">
+                <ErrorBoundary title="Strategy Roller">
+                  <StrategyRoller />
+                </ErrorBoundary>
+              </div>
+            </div>
+          )}
+
+        </main>
+      </div>
+
+      {/* Footer Bar */}
+      <footer className="h-7 min-h-[28px] bg-panel border-t border-border flex items-center justify-between px-4 z-40 text-[10px] text-text-dim select-none font-mono">
+        <div className="flex items-center gap-1.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-accent-green animate-pulse"></span>
+          <span>SYSTEM STAT: <span className="text-accent-green font-bold">CONNECTED</span></span>
+          <span className="text-border/80 mx-1">|</span>
+          <span>ENV: <span className="text-accent-blue font-bold">PRODUCTION</span></span>
+        </div>
+        <div className="flex items-center gap-1">
+          <span>Robin Trading Engine v1.5.0 Live</span>
+        </div>
+      </footer>
+
+      {/* Floating Notifications (Toast) */}
+      {notification && (
+        <div className="fixed bottom-10 right-4 z-50 pointer-events-none max-w-sm w-full animate-toast-in">
+          <div className={`p-3 rounded border shadow-xl flex items-start gap-2.5 pointer-events-auto bg-panel ${
+            notification.type === 'success'
+              ? 'border-accent-green/60 text-accent-green bg-emerald-950/20'
+              : notification.type === 'error'
+              ? 'border-accent-red/60 text-accent-red bg-red-950/20'
+              : 'border-accent-blue/60 text-accent-blue bg-blue-950/20'
+          }`}>
+            <div className="flex-1 text-[11px] font-mono leading-relaxed">
+              {notification.message}
+            </div>
+            <button
+              onClick={dismissNotification}
+              className="text-text-dim hover:text-white text-xs px-1 font-bold"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

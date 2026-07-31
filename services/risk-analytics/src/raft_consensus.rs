@@ -69,7 +69,11 @@ impl RaftConsensus {
         // If this is a single-node cluster, initialize directly as Leader.
         let initial_leader = peers.is_empty();
         let is_leader = Arc::new(AtomicBool::new(initial_leader));
-        let role = Arc::new(Mutex::new(if initial_leader { RaftRole::Leader } else { RaftRole::Follower }));
+        let role = Arc::new(Mutex::new(if initial_leader {
+            RaftRole::Leader
+        } else {
+            RaftRole::Follower
+        }));
 
         Self {
             node_id,
@@ -111,9 +115,7 @@ impl RaftConsensus {
 
             while running.load(Ordering::Relaxed) {
                 // Snapshot role with lock dropped before state transitions
-                let current_role = {
-                    *role.lock().unwrap()
-                };
+                let current_role = { *role.lock().unwrap() };
 
                 match current_role {
                     RaftRole::Leader => {
@@ -145,7 +147,8 @@ impl RaftConsensus {
                         let mut transition_to_candidate = false;
                         {
                             let hb = last_heartbeat.lock().unwrap();
-                            if hb.elapsed() > Duration::from_millis(election_timeout + (rng % 150)) {
+                            if hb.elapsed() > Duration::from_millis(election_timeout + (rng % 150))
+                            {
                                 let mut r = role.lock().unwrap();
                                 if *r == RaftRole::Follower {
                                     *r = RaftRole::Candidate;

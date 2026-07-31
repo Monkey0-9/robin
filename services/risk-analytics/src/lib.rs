@@ -1,4 +1,5 @@
 pub mod gate;
+pub mod order_state;
 pub mod shm_bridge;
 pub mod gpio_kill_switch;
 pub mod risk_gate_fast;

@@ -1,4 +1,5 @@
 {
+  "$schema": "https://json.schemastore.org/package.json",
   "name": "robin-swarm",
   "version": "0.1.0",
   "description": "Robin Swarm - 简洁通用的群体智能引擎，预测万物",

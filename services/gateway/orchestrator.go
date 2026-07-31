@@ -1690,15 +1690,32 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			InstrumentID int     `json:"instrument_id"`
 			BasePrice    float64 `json:"base_price"`
 		}
-		assets := []AssetInfo{
-			{"BTC/USD", "Bitcoin", "crypto", 1, 64500.0},
-			{"ETH/USD", "Ethereum", "crypto", 2, 3450.0},
-			{"SOL/USD", "Solana", "crypto", 5, 145.0},
-			{"AAPL", "Apple Inc.", "equity", 3, 185.30},
-			{"MSFT", "Microsoft Corp.", "equity", 6, 420.0},
-			{"TSLA", "Tesla Inc.", "equity", 7, 175.0},
-			{"NVDA", "NVIDIA Corp.", "equity", 8, 120.0},
-			{"EUR/USD", "Euro / US Dollar", "fx", 4, 1.0850},
+		prices := globalMarketData.GetAllPrices()
+		var assets []AssetInfo
+		idCounter := 1
+		// Map predefined names for popular crypto
+		nameMap := map[string]string{
+			"BTC/USD": "Bitcoin",
+			"ETH/USD": "Ethereum",
+			"SOL/USD": "Solana",
+		}
+for symbol, price := range prices {
+			name, ok := nameMap[symbol]
+			if !ok {
+				name = symbol
+			}
+			assets = append(assets, AssetInfo{
+				Symbol:       symbol,
+				Name:         name,
+				Type:         "crypto",
+				InstrumentID: idCounter,
+				BasePrice:    price,
+			})
+			idCounter++
+		}
+		// If no assets yet, at least return an empty array, not null
+		if assets == nil {
+			assets = []AssetInfo{}
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(assets)

@@ -1,5 +1,4 @@
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use coarsetime::Clock;
 
@@ -41,11 +40,13 @@ impl RiskCircuitBreaker {
 
         let current_peak = self.peak_equity.load(Ordering::Relaxed);
         if peak_equity > f64::from_bits(current_peak) {
-            self.peak_equity.store(peak_equity.to_bits(), Ordering::Release);
+            self.peak_equity
+                .store(peak_equity.to_bits(), Ordering::Release);
         }
 
         let actual_peak = f64::from_bits(self.peak_equity.load(Ordering::Acquire));
-        self.current_equity.store(current_equity.to_bits(), Ordering::Release);
+        self.current_equity
+            .store(current_equity.to_bits(), Ordering::Release);
 
         if actual_peak > 0.0 {
             let dd_bps = (((actual_peak - current_equity) / actual_peak) * 10000.0) as i64;

@@ -11,7 +11,6 @@
 // ============================================================================
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::cell::UnsafeCell;
 
 /// All risk gate Prometheus metrics, stored atomically.
 pub static ORDERS_PROCESSED: AtomicU64 = AtomicU64::new(0);
@@ -48,11 +47,21 @@ pub fn record_order(latency_ns: u64, approved: bool) {
     LATENCY_SUM_NS.fetch_add(latency_ns, Ordering::Relaxed);
     LATENCY_COUNT.fetch_add(1, Ordering::Relaxed);
 
-    if latency_ns <= 100 { LATENCY_LE_100.fetch_add(1, Ordering::Relaxed); }
-    if latency_ns <= 500 { LATENCY_LE_500.fetch_add(1, Ordering::Relaxed); }
-    if latency_ns <= 1000 { LATENCY_LE_1000.fetch_add(1, Ordering::Relaxed); }
-    if latency_ns <= 5000 { LATENCY_LE_5000.fetch_add(1, Ordering::Relaxed); }
-    if latency_ns <= 10000 { LATENCY_LE_10000.fetch_add(1, Ordering::Relaxed); }
+    if latency_ns <= 100 {
+        LATENCY_LE_100.fetch_add(1, Ordering::Relaxed);
+    }
+    if latency_ns <= 500 {
+        LATENCY_LE_500.fetch_add(1, Ordering::Relaxed);
+    }
+    if latency_ns <= 1000 {
+        LATENCY_LE_1000.fetch_add(1, Ordering::Relaxed);
+    }
+    if latency_ns <= 5000 {
+        LATENCY_LE_5000.fetch_add(1, Ordering::Relaxed);
+    }
+    if latency_ns <= 10000 {
+        LATENCY_LE_10000.fetch_add(1, Ordering::Relaxed);
+    }
 
     // Update max latency (global CAS — rare, acceptable for observability)
     let mut cur = LATENCY_MAX_NS.load(Ordering::Relaxed);

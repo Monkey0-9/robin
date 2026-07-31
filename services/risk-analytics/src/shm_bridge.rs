@@ -1,6 +1,6 @@
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::fs::OpenOptions;
 use memmap2::MmapOptions;
+use std::fs::OpenOptions;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[repr(C, align(64))]
 pub struct ShmHeader {
@@ -61,7 +61,7 @@ unsafe impl Sync for ShmBridge {}
 impl ShmBridge {
     pub fn new(path: &str, create: bool) -> Result<Self, String> {
         let shm_size = std::mem::size_of::<ShmHeader>() + SHM_CAPACITY * SHM_MSG_SIZE;
-        
+
         let file = if create {
             OpenOptions::new()
                 .read(true)
@@ -104,13 +104,10 @@ impl ShmBridge {
             }
         }
 
-        let ring = unsafe { mmap.as_mut_ptr().add(std::mem::size_of::<ShmHeader>()) as *mut ShmMessage };
+        let ring =
+            unsafe { mmap.as_mut_ptr().add(std::mem::size_of::<ShmHeader>()) as *mut ShmMessage };
 
-        Ok(Self {
-            mmap,
-            header,
-            ring,
-        })
+        Ok(Self { mmap, header, ring })
     }
 
     #[inline(always)]

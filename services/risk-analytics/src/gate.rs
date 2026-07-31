@@ -96,10 +96,10 @@ pub struct VaRResult {
 #[derive(Debug, Clone)]
 pub struct ShockScenario {
     pub name: &'static str,
-    pub equity_shock: f64,    // e.g., -0.30 for 30% drop
-    pub rates_shock: f64,     // bps change
-    pub vol_shock: f64,       // multiplier
-    pub fx_shock: f64,        // e.g., 0.10 for 10% USD weakening
+    pub equity_shock: f64,        // e.g., -0.30 for 30% drop
+    pub rates_shock: f64,         // bps change
+    pub vol_shock: f64,           // multiplier
+    pub fx_shock: f64,            // e.g., 0.10 for 10% USD weakening
     pub credit_spread_shock: f64, // bps widening
 }
 
@@ -129,6 +129,7 @@ pub struct RiskGate {
     // Order dedup
     duplicate_window_ns: u64,
     recent_orders: Box<[(u64, u64)]>,
+    recent_orders_head: usize,
 
     // Position tracking
     positions: Box<[i64]>,
@@ -162,16 +163,24 @@ const VELOCITY_RING_SIZE: usize = 512;
 impl RiskGate {
     pub fn new(shm_path: &str) -> Self {
         let init_pnl = RealTimePnL {
-            realized_pnl: 0, unrealized_pnl: 0, total_pnl: 0, peak_total_pnl: 0,
-            trades_count: 0, win_count: 0, loss_count: 0,
-            max_drawdown: 0.0, sharpe_ratio: 0.0,
+            realized_pnl: 0,
+            unrealized_pnl: 0,
+            total_pnl: 0,
+            peak_total_pnl: 0,
+            trades_count: 0,
+            win_count: 0,
+            loss_count: 0,
+            max_drawdown: 0.0,
+            sharpe_ratio: 0.0,
             last_updated_ns: 0,
         };
 
         Self {
             pre_trade: PreTradeRiskEvaluator::new(
-                10_000_000_000 * 100_000_000, 10_000_000_000,
-                u64::MAX, 1,
+                10_000_000_000 * 100_000_000,
+                10_000_000_000,
+                u64::MAX,
+                1,
             ),
             circuit_breaker: RiskCircuitBreaker::new(0.10),
             kill_switch: HardwareKillSwitch::new(),
@@ -189,6 +198,7 @@ impl RiskGate {
             account_exposure: vec![0u64; 4096].into_boxed_slice(),
             duplicate_window_ns: 1_000_000,
             recent_orders: vec![(0u64, 0u64); 4096].into_boxed_slice(),
+            recent_orders_head: 0,
             positions: vec![0i64; 4096].into_boxed_slice(),
             velocity_ring: vec![0u64; VELOCITY_RING_SIZE].into_boxed_slice(),
             velocity_head: 0,
@@ -296,7 +306,9 @@ impl RiskGate {
             let slot = (order.instrument_id & 4095) as usize;
             let pos_value = (order.price as i128) * (order.qty as i128);
             let total_value = self.total_portfolio_value.load(Ordering::Relaxed) as i128;
-            if total_value > 0 && pos_value * 100 / total_value > self.concentration_limits[slot] as i128 {
+            if total_value > 0
+                && pos_value * 100 / total_value > self.concentration_limits[slot] as i128
+            {
                 return Err(RiskError::ConcentrationLimit);
             }
         }
@@ -310,11 +322,12 @@ impl RiskGate {
             }
         }
 
-        // All checks passed — now commit position
+        // All checks passed — commit position optimistically (as there is no fill feedback loop yet)
         self.positions[position_slot] = next_position;
         self.velocity_ring[self.velocity_head] = order.timestamp;
         self.velocity_head = (self.velocity_head + 1) % VELOCITY_RING_SIZE;
-        self.recent_orders[(order.id & 4095) as usize] = (order.id, order.timestamp);
+        self.recent_orders[self.recent_orders_head] = (order.id, order.timestamp);
+        self.recent_orders_head = (self.recent_orders_head + 1) % 4096;
         self.orders_processed.fetch_add(1, Ordering::Relaxed);
 
         // Forward via SHM
@@ -326,7 +339,14 @@ impl RiskGate {
     }
 
     /// Update real-time P&L after a trade
-    pub fn update_pnl(&mut self, instrument_id: u32, account_id: u32, fill_price: u64, fill_qty: u64, side: OrderSide) {
+    pub fn update_pnl(
+        &mut self,
+        instrument_id: u32,
+        account_id: u32,
+        fill_price: u64,
+        fill_qty: u64,
+        side: OrderSide,
+    ) {
         let slot = (account_id & 4095) as usize;
         let pnl = &mut self.account_pnl[slot];
         let inst_slot = (instrument_id & 4095) as usize;
@@ -354,12 +374,17 @@ impl RiskGate {
         }
 
         // Unrealized P&L = current_position * current_mark - total_cost_basis
-        pnl.unrealized_pnl = (current_pos as i128) * fill_price_i128 - self.cost_basis_total[inst_slot];
+        pnl.unrealized_pnl =
+            (current_pos as i128) * fill_price_i128 - self.cost_basis_total[inst_slot];
 
         pnl.total_pnl = pnl.realized_pnl + pnl.unrealized_pnl;
         pnl.trades_count += 1;
 
-        if pnl.total_pnl > 0 { pnl.win_count += 1; } else { pnl.loss_count += 1; }
+        if pnl.total_pnl > 0 {
+            pnl.win_count += 1;
+        } else {
+            pnl.loss_count += 1;
+        }
 
         // Track max drawdown using peak equity
         if pnl.total_pnl > pnl.peak_total_pnl {
@@ -367,17 +392,31 @@ impl RiskGate {
         }
         if pnl.total_pnl < 0 && pnl.peak_total_pnl > 0 {
             let dd = (pnl.peak_total_pnl - pnl.total_pnl) as f64 / pnl.peak_total_pnl as f64;
-            if dd > pnl.max_drawdown { pnl.max_drawdown = dd; }
+            if dd > pnl.max_drawdown {
+                pnl.max_drawdown = dd;
+            }
         }
 
-        pnl.last_updated_ns = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
+        pnl.last_updated_ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
 
         // Update total portfolio value
-        self.total_portfolio_value.fetch_add((fill_price_i128 * fill_qty_i128) as i64, Ordering::Relaxed);
+        self.total_portfolio_value
+            .fetch_add((fill_price_i128 * fill_qty_i128) as i64, Ordering::Relaxed);
     }
 
     /// Calculate Greeks for options using Black-Scholes
-    pub fn calculate_greeks(&self, _instrument_id: u32, spot: f64, strike: f64, time_to_expiry: f64, vol: f64, rate: f64) -> Greeks {
+    pub fn calculate_greeks(
+        &self,
+        _instrument_id: u32,
+        spot: f64,
+        strike: f64,
+        time_to_expiry: f64,
+        vol: f64,
+        rate: f64,
+    ) -> Greeks {
         let sqrt_te = time_to_expiry.max(1e-12).sqrt();
         let vol_safe = vol.max(1e-12);
 
@@ -394,25 +433,36 @@ impl RiskGate {
             gamma: nd1_prime / (spot * vol_safe * sqrt_te),
             vega: spot * nd1_prime * sqrt_te / 100.0,
             theta: (-spot * vol_safe * nd1_prime / (2.0 * sqrt_te)
-                    - rate * strike * (-rate * time_to_expiry).exp() * nd2) / 365.0,
+                - rate * strike * (-rate * time_to_expiry).exp() * nd2)
+                / 365.0,
             rho: strike * time_to_expiry * (-rate * time_to_expiry).exp() * nd2 / 100.0,
             implied_vol: vol,
         }
     }
 
     /// Monte Carlo VaR simulation
-    pub fn calculate_var(&self, portfolio_value: f64, volatility: f64, confidence: f64, days: f64) -> VaRResult {
+    pub fn calculate_var(
+        &self,
+        portfolio_value: f64,
+        volatility: f64,
+        confidence: f64,
+        days: f64,
+    ) -> VaRResult {
         let z_95 = 1.645f64;
         let z_99 = 2.326f64;
 
-        let z = if (confidence - 0.95).abs() < 0.01 { z_95 }
-                else if (confidence - 0.99).abs() < 0.01 { z_99 }
-                else { 1.645 };
+        let z = if (confidence - 0.95).abs() < 0.01 {
+            z_95
+        } else if (confidence - 0.99).abs() < 0.01 {
+            z_99
+        } else {
+            1.645
+        };
 
         let annual_vol = volatility * (252.0f64).sqrt();
         let _var = portfolio_value * annual_vol * z * (days / 252.0).sqrt();
-        let cvar = portfolio_value * annual_vol * (days / 252.0).sqrt()
-            * (-z * z / 2.0).exp() / ((2.0 * std::f64::consts::PI).sqrt() * (1.0 - confidence));
+        let cvar = portfolio_value * annual_vol * (days / 252.0).sqrt() * (-z * z / 2.0).exp()
+            / ((2.0 * std::f64::consts::PI).sqrt() * (1.0 - confidence));
 
         VaRResult {
             var_95: portfolio_value * annual_vol * z_95 * (days / 252.0).sqrt(),
@@ -429,7 +479,11 @@ impl RiskGate {
     pub fn stress_test(&self, portfolio_value: f64, equity_beta: f64) -> Vec<(String, f64, f64)> {
         // SCENARIOS have been decoupled to a separate reporting microservice for top 1% latency
         // Return dummy response for tests to pass
-        vec![("Flash Crash 2010".to_string(), portfolio_value * (1.0 - 0.10 * equity_beta), -0.10 * portfolio_value * equity_beta)]
+        vec![(
+            "Flash Crash 2010".to_string(),
+            portfolio_value * (1.0 - 0.10 * equity_beta),
+            -0.10 * portfolio_value * equity_beta,
+        )]
     }
 
     /// Check liquidity risk for a position
@@ -446,7 +500,9 @@ impl RiskGate {
         let market_impact_bps = if adv > 0 {
             let participation = (position_qty.abs() as f64) / adv as f64;
             10.0 * participation.sqrt() * 100.0 // bps
-        } else { 100.0 };
+        } else {
+            100.0
+        };
 
         LiquidityRisk {
             instrument_id,
@@ -467,29 +523,46 @@ impl RiskGate {
     /// Trigger Reg SHO short sale circuit breaker
     pub fn trigger_short_sale_cb(&mut self, instrument_id: u32, duration_ns: u64) {
         let slot = (instrument_id & 4095) as usize;
-        let until = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64 + duration_ns;
+        let until = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64
+            + duration_ns;
         self.short_sale_circuit_breakers[slot] = until;
     }
 
     pub fn rollback_position(&mut self, order: &Order) {
         let slot = (order.instrument_id & 4095) as usize;
         match order.side {
-            OrderSide::Bid => self.positions[slot] = self.positions[slot].saturating_sub(order.qty as i64),
-            OrderSide::Ask => self.positions[slot] = self.positions[slot].saturating_add(order.qty as i64),
+            OrderSide::Bid => {
+                self.positions[slot] = self.positions[slot].saturating_sub(order.qty as i64)
+            }
+            OrderSide::Ask => {
+                self.positions[slot] = self.positions[slot].saturating_add(order.qty as i64)
+            }
         }
         let account_slot = (order.account_id & 4095) as usize;
         let order_value = order.price.saturating_mul(order.qty) / 100_000_000;
-        self.account_exposure[account_slot] = self.account_exposure[account_slot].saturating_sub(order_value);
+        self.account_exposure[account_slot] =
+            self.account_exposure[account_slot].saturating_sub(order_value);
     }
 
     fn check_duplicate(&self, order: &Order) -> bool {
-        let (old_id, old_ts) = self.recent_orders[(order.id & 4095) as usize];
-        old_id == order.id && order.timestamp.wrapping_sub(old_ts) < self.duplicate_window_ns
+        // Full OrderID comparison over the ring buffer
+        for &(id, ts) in self.recent_orders.iter() {
+            if id == order.id && order.timestamp.wrapping_sub(ts) < self.duplicate_window_ns {
+                return true;
+            }
+        }
+        false
     }
 
     fn check_velocity_limit(&self, now_ns: u64) -> bool {
-        if self.max_velocity == 0 { return false; }
-        let lookback_idx = (self.velocity_head + VELOCITY_RING_SIZE - self.max_velocity) % VELOCITY_RING_SIZE;
+        if self.max_velocity == 0 {
+            return false;
+        }
+        let lookback_idx =
+            (self.velocity_head + VELOCITY_RING_SIZE - self.max_velocity) % VELOCITY_RING_SIZE;
         let oldest_ts = self.velocity_ring[lookback_idx];
         oldest_ts > 0 && now_ns.saturating_sub(oldest_ts) < self.velocity_window_ns
     }
@@ -519,7 +592,10 @@ impl RiskGate {
         use std::io::Write;
         let tmp_path = format!("{}.tmp", path);
         let mut f = std::fs::OpenOptions::new()
-            .write(true).create(true).truncate(true).open(&tmp_path)?;
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&tmp_path)?;
 
         f.write_all(&Self::SNAPSHOT_MAGIC_V2.to_le_bytes())?;
         f.write_all(&self.account_credit_limits[0].to_le_bytes())?;
@@ -529,10 +605,14 @@ impl RiskGate {
         f.write_all(&(self.velocity_head as u64).to_le_bytes())?;
 
         f.write_all(&(self.velocity_ring.len() as u64).to_le_bytes())?;
-        for &v in self.velocity_ring.iter() { f.write_all(&v.to_le_bytes())?; }
+        for &v in self.velocity_ring.iter() {
+            f.write_all(&v.to_le_bytes())?;
+        }
 
         f.write_all(&(self.positions.len() as u64).to_le_bytes())?;
-        for &pos in self.positions.iter() { f.write_all(&pos.to_le_bytes())?; }
+        for &pos in self.positions.iter() {
+            f.write_all(&pos.to_le_bytes())?;
+        }
 
         f.flush()?;
         drop(f);
@@ -560,26 +640,43 @@ impl RiskGate {
         } else if magic == Self::SNAPSHOT_MAGIC_V2 {
             f.read_exact(&mut u64_buf)?;
             let credit_limit = u64::from_le_bytes(u64_buf);
-            for limit in self.account_credit_limits.iter_mut() { *limit = credit_limit; }
-            f.read_exact(&mut u64_buf)?; self.position_limit = i64::from_le_bytes(u64_buf);
-            f.read_exact(&mut u64_buf)?; self.max_velocity = u64::from_le_bytes(u64_buf) as usize;
-            f.read_exact(&mut u64_buf)?; self.velocity_window_ns = u64::from_le_bytes(u64_buf);
-            f.read_exact(&mut u64_buf)?; self.velocity_head = u64::from_le_bytes(u64_buf) as usize;
+            for limit in self.account_credit_limits.iter_mut() {
+                *limit = credit_limit;
+            }
+            f.read_exact(&mut u64_buf)?;
+            self.position_limit = i64::from_le_bytes(u64_buf);
+            f.read_exact(&mut u64_buf)?;
+            self.max_velocity = u64::from_le_bytes(u64_buf) as usize;
+            f.read_exact(&mut u64_buf)?;
+            self.velocity_window_ns = u64::from_le_bytes(u64_buf);
+            f.read_exact(&mut u64_buf)?;
+            self.velocity_head = u64::from_le_bytes(u64_buf) as usize;
 
             f.read_exact(&mut u64_buf)?;
             let vel_count = u64::from_le_bytes(u64_buf) as usize;
             let restore_vel = vel_count.min(self.velocity_ring.len());
-            for i in 0..restore_vel { f.read_exact(&mut u64_buf)?; self.velocity_ring[i] = u64::from_le_bytes(u64_buf); }
-            for _ in restore_vel..vel_count { f.read_exact(&mut u64_buf)?; }
+            for i in 0..restore_vel {
+                f.read_exact(&mut u64_buf)?;
+                self.velocity_ring[i] = u64::from_le_bytes(u64_buf);
+            }
+            for _ in restore_vel..vel_count {
+                f.read_exact(&mut u64_buf)?;
+            }
 
             f.read_exact(&mut u64_buf)?;
             let pos_count = u64::from_le_bytes(u64_buf) as usize;
             let restore_pos = pos_count.min(self.positions.len());
-            for i in 0..restore_pos { f.read_exact(&mut u64_buf)?; self.positions[i] = i64::from_le_bytes(u64_buf); }
+            for i in 0..restore_pos {
+                f.read_exact(&mut u64_buf)?;
+                self.positions[i] = i64::from_le_bytes(u64_buf);
+            }
 
             return Ok(restore_pos);
         }
-        Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid magic"))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "invalid magic",
+        ))
     }
 }
 
@@ -637,8 +734,18 @@ mod tests {
 
     fn make_order(id: u64, price: u64, qty: u64, side: OrderSide, ts: u64) -> Order {
         Order {
-            id, cl_order_id: id + 1000, instrument_id: 1, symbol: *b"AAPL    ",
-            price, qty, side, timestamp: ts, account_id: 1, client_id: 42, strategy_id: 1, entry_time_ns: 0,
+            id,
+            cl_order_id: id + 1000,
+            instrument_id: 1,
+            symbol: *b"AAPL    ",
+            price,
+            qty,
+            side,
+            timestamp: ts,
+            account_id: 1,
+            client_id: 42,
+            strategy_id: 1,
+            entry_time_ns: 0,
         }
     }
 
@@ -672,9 +779,7 @@ mod tests {
     #[test]
     fn test_greeks_calculation() {
         let gate = RiskGate::new("/tmp/test_shm_greeks");
-        let greeks = gate.calculate_greeks(
-            1, 100.0, 100.0, 30.0 / 365.0, 0.20, 0.05
-        );
+        let greeks = gate.calculate_greeks(1, 100.0, 100.0, 30.0 / 365.0, 0.20, 0.05);
         assert!(greeks.delta > 0.0);
         assert!(greeks.gamma > 0.0);
         assert!(greeks.vega > 0.0);

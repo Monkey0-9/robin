@@ -34,6 +34,16 @@ func (m *MarketDataCache) GetPrice(symbol string) float64 {
 	return m.prices[symbol]
 }
 
+func (m *MarketDataCache) GetAllPrices() map[string]float64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	prices := make(map[string]float64)
+	for k, v := range m.prices {
+		prices[k] = v
+	}
+	return prices
+}
+
 type CoinbaseFeed struct {
 	wsHub *WebSocketHub
 }
@@ -63,6 +73,7 @@ func (c *CoinbaseFeed) connectAndListen() {
 			"product_ids": []string{
 				"BTC-USD",
 				"ETH-USD",
+				"SOL-USD",
 			},
 			"channels": []string{
 				"ticker",
