@@ -10,7 +10,6 @@ import (
 	"io"
 	"log/slog"
 	"math"
-	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -520,19 +519,7 @@ type RiskData struct {
 	Theta   float64 `json:"theta"`
 }
 
-// buildOrderBookLevels generates synthetic bid/ask levels around midPrice.
-func buildOrderBookLevels(midPrice float64, depth int) ([][2]float64, [][2]float64) {
-	tick := math.Max(midPrice*0.0001, 0.01) // 1bps tick size, min $0.01
-	bids := make([][2]float64, depth)
-	asks := make([][2]float64, depth)
-	for i := 0; i < depth; i++ {
-		spread := tick * float64(i+1)
-		size := math.Round((0.1+rand.Float64()*2)*100) / 100
-		bids[i] = [2]float64{midPrice - spread, size}
-		asks[i] = [2]float64{midPrice + spread, size}
-	}
-	return bids, asks
-}
+
 
 func (o *Orchestrator) runHealthChecks() {
 	o.mu.RLock()
@@ -1079,6 +1066,17 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			tx.Commit()
 		}
 
+		if o.matchClient == nil || !o.matchClient.IsEnabled() {
+			o.RecordReject()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status": "REJECTED",
+				"reason": "MATCHING_ENGINE_UNAVAILABLE",
+			})
+			return
+		}
+
 		// Asynchronous routing to matching engine / risk
 		go func() {
 			if o.matchClient != nil && o.matchClient.IsEnabled() {
@@ -1097,11 +1095,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 								finalStatus = "FILLED"
 							}
 						} else if meResp.Error == "engine offline" {
-							// Paper Trading Simulator fallback (if no execution engine)
-							time.Sleep(500 * time.Millisecond) // Simulated routing latency
-							finalStatus = "FILLED"
-							meResp.FillPrice = int64(fillPrice * 100000000.0)
-							meResp.FillQty = int64(orderReq.Qty)
+							finalStatus = "REJECTED"
 						}
 						
 						// Update state
@@ -1141,48 +1135,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 					}
 				}
 			} else {
-				// Paper Trading Simulator fallback (if no execution engine)
-				time.Sleep(500 * time.Millisecond) // Simulated routing latency
-				finalStatus := "FILLED"
-				fillQty := float64(orderReq.Qty) / 100000000.0
-				
-				// Update state machine with fill
-				if globalOrderSM != nil {
-					globalOrderSM.RecordFill(orderReq.ClientOrdID, fillQty, fillPrice)
-				}
-				
-				if o.db != nil {
-					now := time.Now().UnixNano()
-					o.db.Exec(`UPDATE orders SET status = ?, updated_at_ns = ? WHERE cl_order_id = ?`, finalStatus, now, orderReq.ClientOrdID)
-				}
-				
-				o.wsHub.BroadcastJSON(map[string]interface{}{
-					"type": "order_update",
-					"data": map[string]interface{}{
-						"cl_ord_id": orderReq.ClientOrdID,
-						"status":    finalStatus,
-						"fill_price": fillPrice,
-						"fill_qty":   float64(orderReq.Qty) / 100000000.0, 
-					},
-				})
-
-				if finalStatus == "FILLED" {
-					o.RecordTrade()
-					o.wsHub.BroadcastTrade(TradePayload{
-						ID:        execID,
-						Symbol:    orderReq.Symbol,
-						Side:      orderReq.Side,
-						Qty:       float64(orderReq.Qty) / 100000000.0,
-						Price:     fillPrice,
-						Timestamp: time.Now().UnixMilli(),
-					})
-					if globalPositionManager != nil {
-						globalPositionManager.OnFill(
-							execID, orderReq.Symbol, orderReq.Side,
-							float64(orderReq.Qty) / 100000000.0, fillPrice,
-						)
-					}
-				}
+				o.logger.Warn("Matching engine disabled but order routed asynchronously")
 			}
 		}()
 
@@ -1388,24 +1341,12 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			symbol = "BTC/USD"
 		}
 
-		basePrice := 64500.0
-		switch symbol {
-		case "BTC/USD":
-			basePrice = 64500.0
-		case "ETH/USD":
-			basePrice = 3450.0
-		case "SOL/USD":
-			basePrice = 145.0
-		case "AAPL":
-			basePrice = 185.30
-		case "MSFT":
-			basePrice = 420.0
-		case "TSLA":
-			basePrice = 175.0
-		case "NVDA":
-			basePrice = 120.0
-		case "EUR/USD":
-			basePrice = 1.0850
+		basePrice := globalMarketData.GetPrice(symbol)
+		if basePrice == 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte("[]"))
+			return
 		}
 
 		quotes := GenerateQuotes(symbol, basePrice)
@@ -1447,21 +1388,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			{"EUR/USD", "Euro / US Dollar", "FX", globalMarketData.GetPrice("EUR/USD"), 0.0, 0.0, 0.0, "EU"},
 		}
 		
-		// Fallbacks if data feed is warming up
-		for i := range assets {
-			if assets[i].Price == 0 {
-				switch assets[i].Symbol {
-				case "BTC/USD": assets[i].Price = 64500.5
-				case "ETH/USD": assets[i].Price = 3450.2
-				case "SOL/USD": assets[i].Price = 145.0
-				case "AAPL": assets[i].Price = 185.30
-				case "MSFT": assets[i].Price = 420.0
-				case "TSLA": assets[i].Price = 175.0
-				case "NVDA": assets[i].Price = 120.0
-				case "EUR/USD": assets[i].Price = 1.0850
-				}
-			}
-		}
+
 		json.NewEncoder(w).Encode(assets)
 	}).Methods("GET")
 
@@ -1478,12 +1405,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		}
 		
 		getDynamicChange := func(symbol string, baseChange float64) float64 {
-			price := globalMarketData.GetPrice(symbol)
-			if price == 0 {
-				return baseChange
-			}
-			// Deterministic fluctuation based on current price for visual liveliness
-			return baseChange + math.Sin(price)*0.5
+			return baseChange
 		}
 		
 		heatmap := []HeatmapSector{
@@ -1801,44 +1723,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		// Serve real aggregated candles from live feeds
 		bars := globalCandleAgg.GetCandles(symbol, resolution, count)
 
-		// If not enough real data yet, seed with price-anchored candles
-		// so the chart renders something immediately while feeds warm up.
-		if len(bars) < 5 {
-			basePrice := globalMarketData.GetPrice(symbol)
-			if basePrice == 0 {
-				switch symbol {
-				case "BTC/USD":
-					basePrice = 64500.0
-				case "ETH/USD":
-					basePrice = 3450.0
-				case "SOL/USD":
-					basePrice = 145.0
-				case "AAPL":
-					basePrice = 185.30
-				case "MSFT":
-					basePrice = 420.0
-				case "TSLA":
-					basePrice = 175.0
-				case "NVDA":
-					basePrice = 120.0
-				case "EUR/USD":
-					basePrice = 1.085
-				}
-			}
-			// Return empty if no price available rather than fake data
-			if basePrice > 0 {
-				w.Header().Set("Content-Type", "application/json")
-				w.Header().Set("X-Candle-Source", "warming-up")
-				w.WriteHeader(http.StatusOK)
-				// Return only current price bar so frontend knows we are connected
-				nowSec := time.Now().Truncate(time.Minute).Unix()
-				singleBar := []CandleBar{{
-					Time: nowSec, Open: basePrice, High: basePrice,
-					Low: basePrice, Close: basePrice, Volume: 0,
-				}}
-				json.NewEncoder(w).Encode(singleBar)
-				return
-			}
+		if len(bars) == 0 {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("[]"))

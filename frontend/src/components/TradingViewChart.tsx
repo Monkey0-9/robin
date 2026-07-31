@@ -287,7 +287,7 @@ export default function TradingViewChart() {
     const volumeSeries = volumeSeriesRef.current;
     if (!chart || !priceSeries || !volumeSeries) return;
 
-    const bars = candleData.length > 0 ? candleData : buildFallbackCandles(currentPrice);
+    const bars = candleData;
     if (bars.length === 0) return;
 
     try {
@@ -430,30 +430,4 @@ export default function TradingViewChart() {
       </div>
     </div>
   );
-}
-
-function buildFallbackCandles(currentPrice: number): OHLCVBar[] {
-  if (!currentPrice || currentPrice <= 0) return [];
-  const nowSec = Math.floor(Date.now() / 1000);
-  const count = 80;
-  const bars: OHLCVBar[] = [];
-  let price = currentPrice * 0.985;
-  for (let i = 0; i < count; i++) {
-    const drift = Math.sin(i * 0.3) * (currentPrice * 0.004) + i * 0.00015 * currentPrice;
-    const close = Math.max(price + drift, 0.01);
-    const open = i === 0 ? price : bars[i - 1].close;
-    const spread = currentPrice * 0.003;
-    const high = Math.max(open, close) + Math.random() * spread;
-    const low = Math.min(open, close) - Math.random() * spread;
-    const volume = Math.random() * 1000 + 100;
-    bars.push({ time: nowSec - (count - i) * 60, open, high, low, close, volume });
-    price = close;
-  }
-  if (bars.length > 0) {
-    const last = bars[bars.length - 1];
-    last.close = currentPrice;
-    last.high = Math.max(last.high, currentPrice);
-    last.low = Math.min(last.low, currentPrice);
-  }
-  return bars;
 }
