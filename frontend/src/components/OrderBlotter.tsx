@@ -23,38 +23,7 @@ interface OrderBlotterProps {
 export const OrderBlotter: React.FC<OrderBlotterProps> = ({ orders = [], onCancelOrder }) => {
   const [filter, setFilter] = useState<'ALL' | 'WORKING' | 'FILLED'>('ALL');
 
-  const defaultOrders: BlotterOrder[] = [
-    {
-      id: 'ORD-9021',
-      symbol: 'BTC/USD',
-      side: 'BUY',
-      type: 'LIMIT',
-      qty: 2.5,
-      price: 64450.0,
-      filledQty: 1.0,
-      avgPrice: 64448.5,
-      status: 'PARTIAL',
-      timestamp: new Date().toLocaleTimeString(),
-      account: 'PROP-DESK-1',
-      strategy: 'ALPHA-STATARB',
-    },
-    {
-      id: 'ORD-9022',
-      symbol: 'ETH/USD',
-      side: 'SELL',
-      type: 'TWAP',
-      qty: 15.0,
-      price: 3455.0,
-      filledQty: 15.0,
-      avgPrice: 3454.2,
-      status: 'FILLED',
-      timestamp: new Date(Date.now() - 120000).toLocaleTimeString(),
-      account: 'QUANT-FUND-A',
-      strategy: 'TWAP-SLICER',
-    },
-  ];
-
-  const activeOrders = orders.length > 0 ? orders : defaultOrders;
+  const activeOrders = orders;
 
   const filteredOrders = activeOrders.filter((ord) => {
     if (filter === 'WORKING') return ord.status === 'WORKING' || ord.status === 'PARTIAL';
@@ -121,36 +90,44 @@ export const OrderBlotter: React.FC<OrderBlotterProps> = ({ orders = [], onCance
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800/50 text-slate-300">
-            {filteredOrders.map((ord) => (
-              <tr key={ord.id} className="hover:bg-slate-800/40 transition-colors">
-                <td className="py-2 px-3 text-slate-400">{ord.id}</td>
-                <td className="py-2 px-3 text-slate-500">{ord.timestamp}</td>
-                <td className="py-2 px-3 font-semibold text-slate-200">{ord.symbol}</td>
-                <td className="py-2 px-3">
-                  <span className={ord.side === 'BUY' ? 'text-emerald-400 font-semibold' : 'text-rose-400 font-semibold'}>
-                    {ord.side}
-                  </span>
-                </td>
-                <td className="py-2 px-3 text-slate-400">{ord.type}</td>
-                <td className="py-2 px-3 text-right">{ord.qty.toFixed(2)}</td>
-                <td className="py-2 px-3 text-right">${ord.price.toFixed(2)}</td>
-                <td className="py-2 px-3 text-right">{ord.filledQty.toFixed(2)}</td>
-                <td className="py-2 px-3 text-right">
-                  {ord.avgPrice > 0 ? `$${ord.avgPrice.toFixed(2)}` : '-'}
-                </td>
-                <td className="py-2 px-3 text-center">{getStatusBadge(ord.status)}</td>
-                <td className="py-2 px-3 text-right">
-                  {(ord.status === 'WORKING' || ord.status === 'PARTIAL' || ord.status === 'NEW') && (
-                    <button
-                      onClick={() => onCancelOrder && onCancelOrder(ord.id)}
-                      className="bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 px-2 py-0.5 rounded border border-rose-800/50 text-[10px]"
-                    >
-                      Cancel
-                    </button>
-                  )}
+            {filteredOrders.length === 0 ? (
+              <tr>
+                <td colSpan={11} className="py-8 text-center text-slate-500 italic">
+                  No active orders match the current filter.
                 </td>
               </tr>
-            ))}
+            ) : (
+              filteredOrders.map((ord) => (
+                <tr key={ord.id} className="hover:bg-slate-800/40 transition-colors">
+                  <td className="py-2 px-3 text-slate-400">{ord.id}</td>
+                  <td className="py-2 px-3 text-slate-500">{ord.timestamp}</td>
+                  <td className="py-2 px-3 font-semibold text-slate-200">{ord.symbol}</td>
+                  <td className="py-2 px-3">
+                    <span className={ord.side === 'BUY' ? 'text-emerald-400 font-semibold' : 'text-rose-400 font-semibold'}>
+                      {ord.side}
+                    </span>
+                  </td>
+                  <td className="py-2 px-3 text-slate-400">{ord.type}</td>
+                  <td className="py-2 px-3 text-right">{ord.qty.toFixed(2)}</td>
+                  <td className="py-2 px-3 text-right">${ord.price.toFixed(2)}</td>
+                  <td className="py-2 px-3 text-right">{ord.filledQty.toFixed(2)}</td>
+                  <td className="py-2 px-3 text-right">
+                    {ord.avgPrice > 0 ? `$${ord.avgPrice.toFixed(2)}` : '-'}
+                  </td>
+                  <td className="py-2 px-3 text-center">{getStatusBadge(ord.status)}</td>
+                  <td className="py-2 px-3 text-right">
+                    {(ord.status === 'WORKING' || ord.status === 'PARTIAL' || ord.status === 'NEW') && (
+                      <button
+                        onClick={() => onCancelOrder && onCancelOrder(ord.id)}
+                        className="bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 px-2 py-0.5 rounded border border-rose-800/50 text-[10px]"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))
+            )}
           </tbody>
         </table>
       </div>

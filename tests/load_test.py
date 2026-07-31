@@ -17,6 +17,7 @@ Usage:
   python load_test.py --target http://localhost:8080 --scenario all --duration 60
 """
 
+import os
 import argparse
 import asyncio
 import random
@@ -137,7 +138,15 @@ class LoadTestRunner:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            connector = aiohttp.TCPConnector(limit=2000, ttl_dns_cache=300)
+            import ssl
+            ssl_ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+            ssl_ctx.check_hostname = False
+            ssl_ctx.verify_mode = ssl.CERT_NONE
+            cert_path = 'config/certs/client.crt'
+            key_path = 'config/certs/client.key'
+            if os.path.exists(cert_path) and os.path.exists(key_path):
+                ssl_ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
+            connector = aiohttp.TCPConnector(limit=2000, ttl_dns_cache=300, ssl=ssl_ctx)
             self._session = aiohttp.ClientSession(
                 connector=connector,
                 timeout=aiohttp.ClientTimeout(total=5),
@@ -426,6 +435,22 @@ async def main():
     parser.add_argument("--duration", type=int, default=30, help="Duration in seconds for baseline")
     parser.add_argument("--burst-size", type=int, default=5000, help="Burst scenario size")
     args = parser.parse_args()
+
+    if not args.jwt:
+        key_path = "config/keys/private.pem"
+        if os.path.exists(key_path):
+            try:
+                import jwt
+                with open(key_path, "rb") as f:
+                    private_key = f.read()
+                args.jwt = jwt.encode({
+                    "aud": "robin-services",
+                    "exp": int(time.time()) + 3600,
+                    "iss": "robin-gateway",
+                    "role": "trader"
+                }, private_key, algorithm="RS256")
+            except Exception as e:
+                print(f"JWT auto-generation note: {e}")
 
     runner = LoadTestRunner(target=args.target, jwt_token=args.jwt)
     results = []

@@ -25,6 +25,10 @@ add_executable(matching_engine
     src/risk_checks.hpp
     src/order_server.hpp
     src/latency_benchmark.hpp
+    src/indicators.cpp
+    src/indicators.hpp
+    src/twap_engine.cpp
+    src/twap_engine.hpp
 )
 target_include_directories(matching_engine PRIVATE src)
 

@@ -1,4 +1,4 @@
-﻿"""
+"""
 图谱构建服务
 接口2：使用Zep API构建Standalone Graph
 """
@@ -127,7 +127,7 @@ class GraphBuilderService:
         chunk_size: int,
         chunk_overlap: int,
         batch_size: int,
-        locale: str = 'zh'
+        locale: str = 'en'
     ):
         """图谱构建工作线程"""
         set_locale(locale)

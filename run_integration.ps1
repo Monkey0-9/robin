@@ -8,7 +8,7 @@ Write-Host "Matching Engine PID: $($MatchingEngine.Id)"
 
 # Start risk daemon
 Set-Location C:\Robin\services\risk-analytics
-$RiskDaemon = Start-Process -FilePath "cargo" -ArgumentList "run --bin robin-risk-daemon" -PassThru -NoNewWindow -RedirectStandardOutput "..\..\risk_out.log" -RedirectStandardError "..\..\risk_err.log"
+$RiskDaemon = Start-Process -FilePath "C:\Robin\target\release\robin-risk-daemon.exe" -PassThru -NoNewWindow -RedirectStandardOutput "..\..\risk_out.log" -RedirectStandardError "..\..\risk_err.log"
 Write-Host "Risk Daemon PID: $($RiskDaemon.Id)"
 
 # Start gateway and live feed

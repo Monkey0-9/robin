@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity, Shield, User, Globe, Fish } from 'lucide-react';
+import { Activity, Shield, User, Globe, Bird } from 'lucide-react';
 import { useTerminalStore } from '../store/useTerminalStore';
 import SymbolSearch from './SymbolSearch';
 
@@ -10,10 +10,10 @@ export default function Header() {
     <header className='bg-panel border-b border-border h-14 px-4 flex items-center justify-between z-40 select-none shadow-md backdrop-blur-sm bg-opacity-90'>
       <div className='flex items-center gap-4'>
         <div className='flex items-center gap-2'>
-          <div className='w-6 h-6 rounded bg-accent-blue flex items-center justify-center shadow-lg shadow-blue-500/20'>
-            <Globe size={14} className='text-white' />
+          <div className='w-8 h-8 rounded-lg overflow-hidden border border-[#C8102E]/20 shadow-lg shadow-[#C8102E]/30'>
+            <img src="/robin_logo.png" alt="Red Robin Logo" className="w-full h-full object-cover" />
           </div>
-          <span className='font-bold text-lg tracking-tight text-white'>ROBIN<span className='text-accent-blue'>PRO</span></span>
+          <span className='font-bold text-lg tracking-tight text-white'>ROBIN<span className='text-[#C8102E]'>PRO</span></span>
         </div>
         <div className='h-4 w-px bg-border mx-2' />
         <div className='flex items-center gap-3 text-xs font-mono'>
@@ -34,8 +34,8 @@ export default function Header() {
           rel="noreferrer"
           className='flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-hover border border-border text-text-secondary hover:bg-hover-light hover:text-white transition-colors cursor-pointer'
         >
-          <Fish size={14} className='text-accent-teal' />
-          <span>MiroFish Engine</span>
+          <Bird size={14} className='text-[#C8102E]' />
+          <span>Robin Engine</span>
         </a>
         <SymbolSearch />
         <div className='flex items-center gap-2 px-3 py-1.5 rounded-md bg-hover border border-border text-text-secondary'>

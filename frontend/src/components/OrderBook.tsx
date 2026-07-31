@@ -28,7 +28,9 @@ export default function OrderBook() {
         </div>
         <div className='py-2 text-center border-y border-border my-1 flex justify-between items-center px-4 bg-hover/50 rounded'>
           <span className='text-accent-green font-bold text-sm'>{currentPrice.toFixed(2)}</span>
-          <span className='text-text-dim'>Spread: $1.00</span>
+          <span className='text-text-dim'>
+            Spread: {orderBook.asks.length > 0 && orderBook.bids.length > 0 ? `$${(orderBook.asks[0].price - orderBook.bids[0].price).toFixed(2)}` : 'N/A'}
+          </span>
         </div>
         <div className='flex-1 flex flex-col gap-0.5 mt-1 mb-2'>
           {orderBook.bids.map((bid, i) => (

@@ -52,7 +52,7 @@ func main() {
 		logger.Error("Failed to initialize tick logger", "error", err)
 	}
 
-	orch.StartHealthProbes(ctx, 100*time.Millisecond)
+	orch.StartHealthProbes(ctx, 5*time.Second)
 
 
 	httpPort := 8080

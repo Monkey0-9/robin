@@ -1,90 +1,56 @@
-version: '3.9'
-
-# ============================================================================
-# Robin Institutional Trading Platform — Local Development Compose
-# ============================================================================
-# Services:
-#   gateway   — Go HTTP gateway (port 8080)
-#   ai-agent  — Python FastAPI AI engine (port 8000)
-#   frontend  — Next.js dev server (port 3000)
-#   robin-swarm  — Swarm Intelligence Engine (ports 3001, 5001)
-#
-# Prerequisites:
-#   1. RSA keys in ./keys/ (auto-generated on first run by gateway in dev mode)
-#   2. No C++ matching engine needed — gateway returns 503 on missing engine
-#
-# Usage:
-#   docker-compose up            # Start all services
-#   docker-compose up gateway    # Start just the gateway
-#   docker-compose logs -f       # Stream all logs
-# ============================================================================
+version: '3.8'
 
 services:
+  matching_engine:
+    build:
+      context: ./services/execution-core
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - LATENCY_PROFILE=ultra-low
+    restart: unless-stopped
+
   gateway:
     build:
       context: ./services/gateway
       dockerfile: Dockerfile
-    container_name: robin-gateway
     ports:
       - "8080:8080"
     environment:
-      - ORCH_PORT=8080
-      - ROBIN_CORS_ORIGIN=http://localhost:3000
-      - ROBIN_BYPASS_AUTH=0
-      # Keys auto-generated in dev mode (no ROBIN_JWT_*_FILE set)
-    volumes:
-      - ./services/gateway/robin.db:/app/robin.db
-      - ./services/gateway/config_state.json:/app/config_state.json
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-    restart: unless-stopped
-
-  ai-agent:
-    build:
-      context: ./services/ai-agent
-      dockerfile: Dockerfile
-    container_name: robin-ai-agent
-    ports:
-      - "8000:8000"
-    environment:
-      - PYTHONUNBUFFERED=1
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
+      - MATCHING_ENGINE_URL=http://matching_engine:8000
+      - JWT_SECRET=robin-institutional-secret
+      - LIVE_FEED_ENABLED=true
+    depends_on:
+      - matching_engine
     restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile.dev
-    container_name: robin-frontend
+      dockerfile: Dockerfile
     ports:
       - "3000:3000"
     environment:
       - NEXT_PUBLIC_GATEWAY_URL=http://localhost:8080
-      - NODE_ENV=development
-    volumes:
-      - ./frontend/src:/app/src
-      - ./frontend/public:/app/public
     depends_on:
-      gateway:
-        condition: service_healthy
+      - gateway
     restart: unless-stopped
 
-  robin-swarm:
-    build:
-      context: ./services/robin-swarm
-    container_name: robin-swarm
-    env_file:
-      - ./services/robin-swarm/.env
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
     ports:
       - "3001:3000"
-      - "5001:5001"
-    volumes:
-      - ./services/robin-swarm/backend/uploads:/app/backend/uploads
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
     restart: unless-stopped

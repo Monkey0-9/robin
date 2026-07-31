@@ -184,6 +184,9 @@ func (c *CoinbaseFeed) connectAndListen() {
 				
 				vwap := vs.TotalValue / vs.TotalVolume
 				
+				// Feed real tick into candle aggregator
+				globalCandleAgg.AddTick(normalizedID, price, size, time.Now())
+				
 				// Log trade to persistence layer
 				if globalTickLogger != nil {
 					tradeID, _ := msg["trade_id"].(float64)
@@ -191,7 +194,15 @@ func (c *CoinbaseFeed) connectAndListen() {
 					globalTickLogger.LogTrade(normalizedID, tradeIDStr, side, price, size, time.Now())
 				}
 				
-				// Broadcast volume stats
+				// Compute full institutional indicators from real candle history
+				if fullInds := ComputeFullIndicators(normalizedID, vwap); fullInds != nil {
+					c.wsHub.BroadcastJSON(map[string]interface{}{
+						"type": "indicators",
+						"data": fullInds,
+					})
+				}
+				
+				// Broadcast volume stats (VWAP + CVD)
 				c.wsHub.BroadcastJSON(map[string]interface{}{
 					"type": "volume_stats",
 					"data": map[string]interface{}{
@@ -263,6 +274,221 @@ func (c *CoinbaseFeed) connectAndListen() {
 				}
 				
 				c.wsHub.BroadcastOrderBook(normalizedID, flatBids, flatAsks)
+
+				// Broadcast VWAP and volume stats periodically
+				if vs, ok := volStats[normalizedID]; ok && vs.TotalVolume > 0 {
+					vwap := vs.TotalValue / vs.TotalVolume
+					c.wsHub.BroadcastJSON(map[string]interface{}{
+						"type": "volume_stats",
+						"data": map[string]interface{}{
+							"symbol": normalizedID,
+							"volume": vs.TotalVolume,
+							"vwap":   vwap,
+							"cvd":    vs.CVD,
+						},
+					})
+				}
+			}
+		}
+	}
+}
+
+// ─── Binance WebSocket Feed ──────────────────────────────────────────────────
+
+type BinanceFeed struct {
+	wsHub *WebSocketHub
+}
+
+func NewBinanceFeed(hub *WebSocketHub) *BinanceFeed {
+	return &BinanceFeed{wsHub: hub}
+}
+
+func (b *BinanceFeed) Start() {
+	go b.connectAndListen()
+}
+
+func (b *BinanceFeed) connectAndListen() {
+	for {
+		conn, _, err := websocket.DefaultDialer.Dial(
+			"wss://stream.binance.com:9443/ws/btcusdt@depth20@100ms/ethusdt@depth20@100ms/btcusdt@trade/ethusdt@trade",
+			nil,
+		)
+		if err != nil {
+			slog.Error("Binance WebSocket connection failed, retrying...", "error", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		slog.Info("Connected to Binance WebSocket")
+		for {
+			_, message, err := conn.ReadMessage()
+			if err != nil {
+				slog.Error("Binance read error, reconnecting", "error", err)
+				conn.Close()
+				time.Sleep(5 * time.Second)
+				break
+			}
+
+			var msg map[string]interface{}
+			if err := json.Unmarshal(message, &msg); err != nil {
+				continue
+			}
+
+			data, ok := msg["data"].(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			// Map Binance symbol to internal format
+			rawSymbol, _ := data["s"].(string)
+			var normalizedID string
+			switch rawSymbol {
+			case "BTCUSDT":
+				normalizedID = "BTC/USD"
+			case "ETHUSDT":
+				normalizedID = "ETH/USD"
+			default:
+				continue
+			}
+
+			// Update price from trade events
+			if p, ok := data["p"].(string); ok {
+				if price, err := strconv.ParseFloat(p, 64); err == nil {
+					globalMarketData.UpdatePrice(normalizedID, price)
+				}
+			}
+
+			// Broadcast depth snapshot
+			if bidsRaw, ok := data["bids"].([]interface{}); ok {
+				var flatBids [][2]float64
+				for _, b := range bidsRaw {
+					level := b.([]interface{})
+					price, _ := strconv.ParseFloat(level[0].(string), 64)
+					size, _ := strconv.ParseFloat(level[1].(string), 64)
+					flatBids = append(flatBids, [2]float64{price, size})
+				}
+				asksRaw, _ := data["asks"].([]interface{})
+				var flatAsks [][2]float64
+				for _, a := range asksRaw {
+					level := a.([]interface{})
+					price, _ := strconv.ParseFloat(level[0].(string), 64)
+					size, _ := strconv.ParseFloat(level[1].(string), 64)
+					flatAsks = append(flatAsks, [2]float64{price, size})
+				}
+				if len(flatBids) > 0 && len(flatAsks) > 0 {
+					b.wsHub.BroadcastOrderBook(normalizedID, flatBids, flatAsks)
+				}
+			}
+		}
+	}
+}
+
+// ─── Kraken WebSocket Feed ────────────────────────────────────────────────────
+
+type KrakenFeed struct {
+	wsHub *WebSocketHub
+}
+
+func NewKrakenFeed(hub *WebSocketHub) *KrakenFeed {
+	return &KrakenFeed{wsHub: hub}
+}
+
+func (k *KrakenFeed) Start() {
+	go k.connectAndListen()
+}
+
+func (k *KrakenFeed) connectAndListen() {
+	for {
+		conn, _, err := websocket.DefaultDialer.Dial("wss://ws.kraken.com", nil)
+		if err != nil {
+			slog.Error("Kraken WebSocket connection failed, retrying...", "error", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		sub := map[string]interface{}{
+			"event": "subscribe",
+			"pair":  []string{"XBT/USD", "ETH/USD"},
+			"subscription": map[string]interface{}{
+				"name": "book",
+				"depth": 10,
+			},
+		}
+		if err := conn.WriteJSON(sub); err != nil {
+			conn.Close()
+			continue
+		}
+
+		slog.Info("Connected to Kraken WebSocket")
+		for {
+			_, message, err := conn.ReadMessage()
+			if err != nil {
+				slog.Error("Kraken read error, reconnecting", "error", err)
+				conn.Close()
+				time.Sleep(5 * time.Second)
+				break
+			}
+
+			var msg json.RawMessage
+			if err := json.Unmarshal(message, &msg); err != nil {
+				continue
+			}
+
+			var arr []interface{}
+			if err := json.Unmarshal(msg, &arr); err != nil || len(arr) < 4 {
+				continue
+			}
+
+			channelName, _ := arr[2].(string)
+			if channelName != "book-10" {
+				continue
+			}
+
+			pair, _ := arr[3].(string)
+			var normalizedID string
+			switch pair {
+			case "XBT/USD":
+				normalizedID = "BTC/USD"
+			case "ETH/USD":
+				normalizedID = "ETH/USD"
+			default:
+				continue
+			}
+
+			data, _ := arr[1].(map[string]interface{})
+			if data == nil {
+				continue
+			}
+
+			var flatBids [][2]float64
+			var flatAsks [][2]float64
+
+			if bs, ok := data["bs"].([]interface{}); ok {
+				for _, b := range bs {
+					if level, ok := b.([]interface{}); ok && len(level) >= 2 {
+						price, _ := strconv.ParseFloat(level[0].(string), 64)
+						size, _ := strconv.ParseFloat(level[1].(string), 64)
+						flatBids = append(flatBids, [2]float64{price, size})
+					}
+				}
+			}
+			if as, ok := data["as"].([]interface{}); ok {
+				for _, a := range as {
+					if level, ok := a.([]interface{}); ok && len(level) >= 2 {
+						price, _ := strconv.ParseFloat(level[0].(string), 64)
+						size, _ := strconv.ParseFloat(level[1].(string), 64)
+						flatAsks = append(flatAsks, [2]float64{price, size})
+					}
+				}
+			}
+
+			if len(flatBids) > 0 || len(flatAsks) > 0 {
+				k.wsHub.BroadcastOrderBook(normalizedID, flatBids, flatAsks)
+				// Update best bid/ask as mid price
+				if len(flatBids) > 0 && len(flatAsks) > 0 {
+					mid := (flatBids[0][0] + flatAsks[0][0]) / 2
+					globalMarketData.UpdatePrice(normalizedID, mid)
+				}
 			}
 		}
 	}

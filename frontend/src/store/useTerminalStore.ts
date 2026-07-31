@@ -19,12 +19,29 @@ export interface VolumeStats {
 export interface TechnicalIndicators {
   symbol: string;
   price: number;
+  timestamp: number;
+  // Moving averages
   sma20: number;
+  ema12: number;
+  ema26: number;
+  ema50: number;
+  // Bollinger Bands
   upperBand: number;
   lowerBand: number;
+  midBand: number;
+  bbWidth: number;
+  // MACD
   macd: number;
+  macdSignal: number;
+  macdHistogram: number;
+  // Momentum
   rsi: number;
-  timestamp: number;
+  stochK: number;
+  stochD: number;
+  // Volatility
+  atr: number;
+  // Volume
+  vwap: number;
 }
 
 export interface Position {
@@ -56,6 +73,18 @@ export interface OrderBookLevel {
 export interface Notification {
   message: string;
   type: 'success' | 'error' | 'info';
+}
+
+export interface RiskUpdate {
+  var_95: number;
+  cvar_95: number;
+  drawdown: number;
+  sharpe: number;
+  sortino: number;
+  delta: number;
+  gamma: number;
+  vega: number;
+  theta: number;
 }
 
 export interface SystemHealth {
@@ -94,7 +123,8 @@ interface TerminalState {
   portfolioWeights: { symbol: string; targetWeight: number }[];
   volumeStats: Record<string, VolumeStats>;
   indicators: Record<string, TechnicalIndicators>;
-  
+  riskData: RiskUpdate | null;
+
   orderBook: {
     bids: OrderBookLevel[];
     asks: OrderBookLevel[];
@@ -115,6 +145,7 @@ interface TerminalState {
   fetchSorPrices: (symbol: string) => Promise<void>;
   fetchAlpacaState: () => Promise<void>;
   fetchPortfolioWeights: () => Promise<void>;
+  fetchCandles: (symbol: string, resolution?: string) => Promise<any[]>;
 }
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:8080';
@@ -164,9 +195,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   portfolioWeights: [],
   volumeStats: {},
   indicators: {},
+  riskData: null,
 
   orderBook: { bids: [], asks: [] },
-  systemHealth: { healthy: 4, degraded: 0, failed: 0, latencyNs: 65000 },
+  systemHealth: { healthy: 0, degraded: 0, failed: 0, latencyNs: 0 },
 
   init: () => {
     console.log('Terminal store initialized');
@@ -305,6 +337,8 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
                 [inds.symbol]: inds
               }
             }));
+          } else if (data.type === 'risk_update') {
+            set({ riskData: data.data });
           }
         },
         () => {
@@ -585,6 +619,19 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     } catch (e) {
       console.error("Failed to fetch Alpaca state", e);
     }
+  },
+
+  fetchCandles: async (symbol: string, resolution = '1m') => {
+    try {
+      const res = await fetch(
+        `${GATEWAY_URL}/api/candles?symbol=${encodeURIComponent(symbol)}&resolution=${resolution}`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      if (res.ok) return await res.json();
+    } catch (e) {
+      console.error('Failed to fetch candles', e);
+    }
+    return [];
   },
 }));
 

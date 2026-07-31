@@ -2,7 +2,7 @@
   <div class="home-container">
     <!-- ????? -->
     <nav class="navbar">
-      <div class="nav-brand">ROBIN SWARM</div>
+      <div class="nav-brand" style="color: white;">ROBIN <span style="color: #C8102E;">SWARM</span></div>
       <div class="nav-links">
         <LanguageSwitcher />
         <a href="https://github.com/RobinAI/Robin Swarm" target="_blank" class="github-link">
@@ -44,7 +44,7 @@
         <div class="hero-right">
           <!-- Logo ?? -->
           <div class="logo-container">
-            <img src="../assets/logo/Robin Swarm_logo_left.jpeg" alt="Robin Swarm Logo" class="hero-logo" />
+            <img src="/robin_logo.png" alt="Robin Logo" style="border-radius: 20px; box-shadow: 0 10px 30px rgba(200, 16, 46, 0.3); border: 2px solid rgba(200,16,46,0.1);" class="hero-logo" />
           </div>
           
           <button class="scroll-down-btn" @click="scrollToBottom">
@@ -58,7 +58,7 @@
         <!-- ??:????? -->
         <div class="left-panel">
           <div class="panel-header">
-            <span class="status-dot">¦</span> {{ $t('home.systemStatus') }}
+            <span class="status-dot"></span> {{ $t('home.systemStatus') }}
           </div>
           
           <h2 class="section-title">{{ $t('home.systemReady') }}</h2>
@@ -161,7 +161,7 @@
                   <div v-for="(file, index) in files" :key="index" class="file-item">
                     <span class="file-icon">??</span>
                     <span class="file-name">{{ file.name }}</span>
-                    <button @click.stop="removeFile(index)" class="remove-btn">×</button>
+                    <button @click.stop="removeFile(index)" class="remove-btn"></button>
                   </div>
                 </div>
               </div>
@@ -314,9 +314,9 @@ const startSimulation = () => {
 <style scoped>
 /* ??????? */
 :root {
-  --black: #000000;
-  --white: #FFFFFF;
-  --orange: #FF4500;
+  --black: #FFFFFF;
+  --white: #0A0A0A;
+  --orange: #C8102E;
   --gray-light: #F5F5F5;
   --gray-text: #666666;
   --border: #E5E5E5;
@@ -331,9 +331,9 @@ const startSimulation = () => {
 
 .home-container {
   min-height: 100vh;
-  background: var(--white);
+  background: #0A0A0A; color: #FFFFFF;
   font-family: var(--font-sans);
-  color: var(--black);
+  color: #FFFFFF;
 }
 
 /* ???? */
@@ -430,7 +430,7 @@ const startSimulation = () => {
   font-weight: 500;
   margin: 0 0 40px 0;
   letter-spacing: -2px;
-  color: var(--black);
+  color: #FFFFFF;
 }
 
 .gradient-text {
@@ -455,7 +455,7 @@ const startSimulation = () => {
 }
 
 .highlight-bold {
-  color: var(--black);
+  color: #FFFFFF;
   font-weight: 700;
 }
 
@@ -471,14 +471,14 @@ const startSimulation = () => {
   border-radius: 2px;
   font-family: var(--font-mono);
   font-size: 0.9em;
-  color: var(--black);
+  color: #FFFFFF;
   font-weight: 600;
 }
 
 .slogan-text {
   font-size: 1.2rem;
   font-weight: 520;
-  color: var(--black);
+  color: #FFFFFF;
   letter-spacing: 1px;
   border-left: 3px solid var(--orange);
   padding-left: 15px;
@@ -594,6 +594,8 @@ const startSimulation = () => {
 }
 
 .metric-card {
+    background: rgba(200, 16, 46, 0.1);
+    border: 1px solid rgba(200, 16, 46, 0.2);
   border: 1px solid var(--border);
   padding: 20px 30px;
   min-width: 150px;
@@ -648,7 +650,7 @@ const startSimulation = () => {
 .step-num {
   font-family: var(--font-mono);
   font-weight: 700;
-  color: var(--black);
+  color: #FFFFFF;
   opacity: 0.3;
 }
 
@@ -753,7 +755,7 @@ const startSimulation = () => {
 .file-item {
   display: flex;
   align-items: center;
-  background: var(--white);
+  background: #0A0A0A; color: #FFFFFF;
   padding: 8px 12px;
   border: 1px solid #EEE;
   font-family: var(--font-mono);
