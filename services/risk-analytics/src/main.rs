@@ -3,10 +3,20 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use robin_risk::gate::{RiskGate, Order, OrderSide};
+use robin_risk::metrics;
+use robin_risk::config::PORT_RISK_METRICS;
 use serde_json::Value;
 
 fn main() {
     println!("[RISK] Starting Risk Analytics Daemon on port 9092...");
+
+    // Serve Prometheus metrics on a dedicated port in a background thread.
+    {
+        let metrics_port = PORT_RISK_METRICS;
+        std::thread::spawn(move || {
+            metrics::serve_metrics(metrics_port);
+        });
+    }
     
     let mut gate = RiskGate::with_config(
         "robin_risk_match.shm",
@@ -155,6 +165,10 @@ fn handle_client(mut client_stream: TcpStream, gate: Arc<Mutex<RiskGate>>, order
                     Err(robin_risk::gate::RiskError::KillSwitchActive)
                 }
             };
+
+            let gate_start = std::time::Instant::now();
+            let latency_ns = gate_start.elapsed().as_nanos() as u64;
+            metrics::record_order(latency_ns, approved.is_ok());
 
             if let Err(e) = approved {
                 let resp = format!(

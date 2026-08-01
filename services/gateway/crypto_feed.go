@@ -94,14 +94,6 @@ func (c *CoinbaseFeed) connectAndListen() {
 			Bids map[float64]float64
 			Asks map[float64]float64
 		})
-		
-		// Volume Analytics State
-		type VolumeStats struct {
-			TotalVolume   float64
-			TotalValue    float64 // price * size
-			CVD           float64
-		}
-		volStats := make(map[string]*VolumeStats)
 
 		for {
 			_, message, err := conn.ReadMessage()
@@ -172,56 +164,28 @@ func (c *CoinbaseFeed) connectAndListen() {
 			} else if msgType == "match" {
 				priceStr, _ := msg["price"].(string)
 				sizeStr, _ := msg["size"].(string)
-				side, _ := msg["side"].(string) // maker side
+				makerSide, _ := msg["side"].(string)
 				
 				price, _ := strconv.ParseFloat(priceStr, 64)
 				size, _ := strconv.ParseFloat(sizeStr, 64)
-				
-				vs, ok := volStats[normalizedID]
-				if !ok {
-					vs = &VolumeStats{}
-					volStats[normalizedID] = vs
+
+				// Maker side is the resting side; the taker (aggressor) is the opposite.
+				takerSide := "sell"
+				if makerSide == "sell" {
+					takerSide = "buy"
 				}
-				
-				vs.TotalVolume += size
-				vs.TotalValue += (price * size)
-				
-				// Maker side is sell -> Taker was BUY -> Positive CVD
-				if side == "sell" {
-					vs.CVD += size
-				} else if side == "buy" {
-					vs.CVD -= size
-				}
-				
-				vwap := vs.TotalValue / vs.TotalVolume
-				
-				// Feed real tick into candle aggregator
-				globalCandleAgg.AddTick(normalizedID, price, size, time.Now())
-				
-				// Log trade to persistence layer
-				if globalTickLogger != nil {
-					tradeID, _ := msg["trade_id"].(float64)
-					tradeIDStr := strconv.FormatFloat(tradeID, 'f', 0, 64)
-					globalTickLogger.LogTrade(normalizedID, tradeIDStr, side, price, size, time.Now())
-				}
-				
-				// Compute full institutional indicators from real candle history
-				if fullInds := ComputeFullIndicators(normalizedID, vwap); fullInds != nil {
-					c.wsHub.BroadcastJSON(map[string]interface{}{
-						"type": "indicators",
-						"data": fullInds,
-					})
-				}
-				
-				// Broadcast volume stats (VWAP + CVD)
-				c.wsHub.BroadcastJSON(map[string]interface{}{
-					"type": "volume_stats",
-					"data": map[string]interface{}{
-						"symbol": normalizedID,
-						"volume": vs.TotalVolume,
-						"vwap":   vwap,
-						"cvd":    vs.CVD,
-					},
+
+				tradeID, _ := msg["trade_id"].(float64)
+				tradeIDStr := strconv.FormatFloat(tradeID, 'f', 0, 64)
+
+				ingestTrade(c.wsHub, NormalizedTick{
+					Symbol:    normalizedID,
+					Price:     price,
+					Size:      size,
+					Side:      takerSide,
+					TradeID:   tradeIDStr,
+					Venue:     "coinbase",
+					Timestamp: time.Now(),
 				})
 			} else if msgType == "l2update" {
 				changes, _ := msg["changes"].([]interface{})
@@ -285,20 +249,6 @@ func (c *CoinbaseFeed) connectAndListen() {
 				}
 				
 				c.wsHub.BroadcastOrderBook(normalizedID, flatBids, flatAsks)
-
-				// Broadcast VWAP and volume stats periodically
-				if vs, ok := volStats[normalizedID]; ok && vs.TotalVolume > 0 {
-					vwap := vs.TotalValue / vs.TotalVolume
-					c.wsHub.BroadcastJSON(map[string]interface{}{
-						"type": "volume_stats",
-						"data": map[string]interface{}{
-							"symbol": normalizedID,
-							"volume": vs.TotalVolume,
-							"vwap":   vwap,
-							"cvd":    vs.CVD,
-						},
-					})
-				}
 			}
 		}
 	}
@@ -369,6 +319,31 @@ func (b *BinanceFeed) connectAndListen() {
 				}
 			}
 
+			// Ingest trade events (taker side derived from isBuyerMaker)
+			if data["e"] == "trade" {
+				price, _ := strconv.ParseFloat(data["p"].(string), 64)
+				size, _ := strconv.ParseFloat(data["q"].(string), 64)
+				takerSide := "buy"
+				if isBuyerMaker, _ := data["m"].(bool); isBuyerMaker {
+					// Buyer is maker -> taker (aggressor) is the seller
+					takerSide = "sell"
+				}
+				tradeID := ""
+				if t, ok := data["t"].(float64); ok {
+					tradeID = strconv.FormatFloat(t, 'f', 0, 64)
+				}
+				tsMillis, _ := data["T"].(float64)
+				ingestTrade(b.wsHub, NormalizedTick{
+					Symbol:    normalizedID,
+					Price:     price,
+					Size:      size,
+					Side:      takerSide,
+					TradeID:   tradeID,
+					Venue:     "binance",
+					Timestamp: time.UnixMilli(int64(tsMillis)),
+				})
+			}
+
 			// Broadcast depth snapshot
 			if bidsRaw, ok := data["bids"].([]interface{}); ok {
 				var flatBids [][2]float64
@@ -421,11 +396,23 @@ func (k *KrakenFeed) connectAndListen() {
 			"event": "subscribe",
 			"pair":  []string{"XBT/USD", "ETH/USD"},
 			"subscription": map[string]interface{}{
-				"name": "book",
+				"name":  "book",
 				"depth": 10,
 			},
 		}
 		if err := conn.WriteJSON(sub); err != nil {
+			conn.Close()
+			continue
+		}
+
+		tradeSub := map[string]interface{}{
+			"event": "subscribe",
+			"pair":  []string{"XBT/USD", "ETH/USD"},
+			"subscription": map[string]interface{}{
+				"name": "trade",
+			},
+		}
+		if err := conn.WriteJSON(tradeSub); err != nil {
 			conn.Close()
 			continue
 		}
@@ -451,7 +438,7 @@ func (k *KrakenFeed) connectAndListen() {
 			}
 
 			channelName, _ := arr[2].(string)
-			if channelName != "book-10" {
+			if channelName != "book-10" && channelName != "trade" {
 				continue
 			}
 
@@ -467,6 +454,36 @@ func (k *KrakenFeed) connectAndListen() {
 			}
 
 			data, _ := arr[1].(map[string]interface{})
+
+			// Kraken trade channel: arr[1] is a list of [price, volume, time, side, orderType, misc]
+			if channelName == "trade" {
+				trades, _ := arr[1].([]interface{})
+				for _, t := range trades {
+					if trade, ok := t.([]interface{}); ok && len(trade) >= 4 {
+						price, _ := strconv.ParseFloat(trade[0].(string), 64)
+						size, _ := strconv.ParseFloat(trade[1].(string), 64)
+						tsNanos, _ := strconv.ParseFloat(trade[2].(string), 64)
+						side, _ := trade[3].(string) // maker side in Kraken
+
+						// Maker side is the resting side; the taker (aggressor) is the opposite.
+						takerSide := "sell"
+						if side == "sell" {
+							takerSide = "buy"
+						}
+
+						ingestTrade(k.wsHub, NormalizedTick{
+							Symbol:    normalizedID,
+							Price:     price,
+							Size:      size,
+							Side:      takerSide,
+							Venue:     "kraken",
+							Timestamp: time.UnixMilli(int64(tsNanos * 1000.0)),
+						})
+					}
+				}
+				continue
+			}
+
 			if data == nil {
 				continue
 			}

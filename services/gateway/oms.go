@@ -23,6 +23,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -35,6 +36,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 const numOrderWorkers = 10
@@ -119,39 +122,43 @@ type CppSignal struct {
 // ─── Audit log (immutable append) ─────────────────────────────────────────────
 
 type AuditLogger struct {
-	f  *os.File
-	mu sync.Mutex
+	db *sql.DB
 }
 
 func NewAuditLogger(path string) (*AuditLogger, error) {
 	if err := os.MkdirAll("logs", 0755); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+	dbPath := "logs/audit.db"
+	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return nil, err
 	}
-	return &AuditLogger{f: f}, nil
+	
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS audit_log (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts DATETIME DEFAULT CURRENT_TIMESTAMP,
+			event TEXT NOT NULL,
+			data TEXT NOT NULL
+		);
+	`)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AuditLogger{db: db}, nil
 }
 
 func (a *AuditLogger) Log(event string, data any) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	entry := map[string]any{
-		"ts":    time.Now().UTC().Format(time.RFC3339Nano),
-		"event": event,
-		"data":  data,
-	}
-	b, _ := json.Marshal(entry)
-	if _, err := a.f.Write(b); err != nil {
-		log.Printf("[AUDIT] Write error: %v", err)
-	}
-	if _, err := a.f.Write([]byte("\n")); err != nil {
-		log.Printf("[AUDIT] Write newline error: %v", err)
+	b, _ := json.Marshal(data)
+	_, err := a.db.Exec("INSERT INTO audit_log (event, data) VALUES (?, ?)", event, string(b))
+	if err != nil {
+		log.Printf("[AUDIT] SQLite write error: %v", err)
 	}
 }
 
-func (a *AuditLogger) Close() { a.f.Close() }
+func (a *AuditLogger) Close() { a.db.Close() }
 
 // ─── OMS ──────────────────────────────────────────────────────────────────────
 
@@ -205,6 +212,32 @@ func (o *OMS) GenerateClientOrderID(symbol, side string) string {
 	return fmt.Sprintf("ROBIN-%s-%s-%d-%d", symbol, side, ts, seq)
 }
 
+// ─── Pre-trade Compliance (SEC Rule 15c3-5) ─────────────────────────
+func checkRule15c35(symbol string, side string, qty, price, notional, portfolioValue float64) error {
+	// 1. Fat Finger (Erroneous Order) Limits
+	if notional > 5000000.0 {
+		return fmt.Errorf("Rule 15c3-5(c)(1)(ii): Notional value $%.2f exceeds fat-finger hard limit of $5,000,000", notional)
+	}
+	if qty > 1000000.0 {
+		return fmt.Errorf("Rule 15c3-5(c)(1)(ii): Quantity %.2f exceeds maximum share limit", qty)
+	}
+
+	// 2. Margin & Capital Limits
+	if notional > portfolioValue*1.5 { // Max 1.5x leverage
+		return fmt.Errorf("Rule 15c3-5(c)(1)(i): Order notional $%.2f exceeds available margin threshold", notional)
+	}
+
+	// 3. Naked Short Sale Prevention
+	if side == "SELL" {
+		// In a real system, query the Position Manager to verify locate or long inventory.
+		// For our prototype, block massive shorting without locate.
+		if notional > portfolioValue*0.5 {
+			return fmt.Errorf("Rule 15c3-5(c)(1)(ii): Short sale volume exceeds overnight naked short threshold without explicit locate")
+		}
+	}
+	return nil
+}
+
 // OnSignal processes a trading signal from the C++ engine
 func (o *OMS) OnSignal(ctx context.Context, sig CppSignal, portfolioValue float64) error {
 	if o.IsKilled() {
@@ -232,6 +265,15 @@ func (o *OMS) OnSignal(ctx context.Context, sig CppSignal, portfolioValue float6
 		return nil
 	}
 	qty := notional / sig.Price
+
+	// SEC Rule 15c3-5 Pre-Trade Compliance Check
+	if err := checkRule15c35(sig.Symbol, sig.Side, qty, sig.Price, notional, portfolioValue); err != nil {
+		log.Printf("[OMS] PRE-TRADE REJECT (15c3-5): %v", err)
+		o.audit.Log("PRE_TRADE_REJECT", map[string]any{
+			"symbol": sig.Symbol, "side": sig.Side, "error": err.Error(),
+		})
+		return err
+	}
 
 	clID := o.GenerateClientOrderID(sig.Symbol, sig.Side)
 	order := &Order{

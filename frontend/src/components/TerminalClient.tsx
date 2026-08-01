@@ -9,6 +9,7 @@ import Header from './Header';
 import Watchlist from './Watchlist';
 import TradingViewChart from './TradingViewChart';
 import OrderBook from './OrderBook';
+import DOMLadder from './DOMLadder';
 import OrderEntry from './OrderEntry';
 import PositionsTable from './PositionsTable';
 import OrdersTable from './OrdersTable';
@@ -28,13 +29,11 @@ import StrategyRoller from './StrategyRoller';
 import GoalsPlanner from './GoalsPlanner';
 import {
   Download,
-  AlertTriangle,
   Activity,
   Award,
   BookOpen,
   PieChart,
   LayoutGrid,
-  Heart,
   Search,
   ShieldAlert,
   Layers
@@ -42,10 +41,9 @@ import {
 
 export default function Dashboard() {
   const router = useRouter();
-  const { isAuthenticated, username, logout } = useAuthStore();
+  const { isAuthenticated } = useAuthStore();
   const init = useTerminalStore((state) => state.init);
   const assets = useTerminalStore((state) => state.assets);
-  const selectedSymbol = useTerminalStore((state) => state.selectedSymbol);
   const notification = useTerminalStore((state) => state.notification);
   const dismissNotification = useTerminalStore((state) => state.dismissNotification);
   const exportToCSV = useTerminalStore((state) => state.exportToCSV);
@@ -300,7 +298,14 @@ export default function Dashboard() {
                   </div>
                   <div className="flex-1 min-h-0">
                     <ErrorBoundary title={rightPanelTab === 'book' ? 'Order Book' : 'Smart Router'}>
-                      {rightPanelTab === 'book' ? <OrderBook /> : <BestPriceComparison />}
+                      {rightPanelTab === 'book' ? (
+                        <div className="h-full flex flex-col gap-2 overflow-y-auto scrollbar p-1">
+                          <DOMLadder />
+                          <OrderBook />
+                        </div>
+                      ) : (
+                        <BestPriceComparison />
+                      )}
                     </ErrorBoundary>
                   </div>
                 </div>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Activity, Shield, User, Globe, Bird } from 'lucide-react';
+import { Activity, Shield, User, Bird } from 'lucide-react';
 import { useTerminalStore } from '../store/useTerminalStore';
 import SymbolSearch from './SymbolSearch';
 

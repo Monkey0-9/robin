@@ -55,7 +55,7 @@ export default function Heatmap() {
                     <div
                       key={node.name}
                       onClick={() => {
-                        let sym = node.name;
+                        const sym = node.name;
                         setSelectedSymbol(sym);
                       }}
                       className={`border rounded p-3 flex flex-col justify-between h-20 transition-all cursor-pointer select-none ${bgClass} ${borderClass}`}

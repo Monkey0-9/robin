@@ -318,6 +318,54 @@ func computeStochastic(bars []CandleBar, kPeriod int) (pctK, pctD float64) {
 	return
 }
 
+// --- OBV (On-Balance Volume) ---
+func computeOBV(bars []CandleBar) float64 {
+	obv := 0.0
+	for i := 1; i < len(bars); i++ {
+		if bars[i].Close > bars[i-1].Close {
+			obv += bars[i].Volume
+		} else if bars[i].Close < bars[i-1].Close {
+			obv -= bars[i].Volume
+		}
+	}
+	return obv
+}
+
+// --- ADX (Average Directional Index) ---
+func computeADX(bars []CandleBar, period int) float64 {
+	if len(bars) < period+1 {
+		return 25.0
+	}
+	plusDM := 0.0
+	minusDM := 0.0
+	trSum := 0.0
+	for i := len(bars) - period; i < len(bars); i++ {
+		upMove := bars[i].High - bars[i-1].High
+		downMove := bars[i-1].Low - bars[i].Low
+		if upMove > downMove && upMove > 0 {
+			plusDM += upMove
+		}
+		if downMove > upMove && downMove > 0 {
+			minusDM += downMove
+		}
+		hl := bars[i].High - bars[i].Low
+		hc := math.Abs(bars[i].High - bars[i-1].Close)
+		lc := math.Abs(bars[i].Low - bars[i-1].Close)
+		trSum += math.Max(hl, math.Max(hc, lc))
+	}
+	if trSum == 0 {
+		return 25.0
+	}
+	plusDI := 100.0 * (plusDM / trSum)
+	minusDI := 100.0 * (minusDM / trSum)
+	diDiff := math.Abs(plusDI - minusDI)
+	diSum := plusDI + minusDI
+	if diSum == 0 {
+		return 25.0
+	}
+	return 100.0 * (diDiff / diSum)
+}
+
 // FullIndicators is the complete institutional indicator set computed from real candles
 type FullIndicators struct {
 	Symbol    string  `json:"symbol"`
@@ -339,6 +387,8 @@ type FullIndicators struct {
 	StochK    float64 `json:"stochK"`
 	StochD    float64 `json:"stochD"`
 	VWAP      float64 `json:"vwap"`
+	OBV       float64 `json:"obv"`
+	ADX       float64 `json:"adx"`
 }
 
 // ComputeFullIndicators computes all indicators from real candle history
@@ -395,6 +445,8 @@ func ComputeFullIndicators(symbol string, vwap float64) *FullIndicators {
 
 	atr := computeATR(bars, 14)
 	stochK, stochD := computeStochastic(bars, 14)
+	obv := computeOBV(bars)
+	adx := computeADX(bars, 14)
 
 	return &FullIndicators{
 		Symbol:    symbol,
@@ -416,5 +468,7 @@ func ComputeFullIndicators(symbol string, vwap float64) *FullIndicators {
 		StochK:    stochK,
 		StochD:    stochD,
 		VWAP:      vwap,
+		OBV:       obv,
+		ADX:       adx,
 	}
 }

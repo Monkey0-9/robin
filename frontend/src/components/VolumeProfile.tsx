@@ -17,28 +17,13 @@ export default function VolumeProfile({ symbol }: VolumeProfileProps) {
   const { selectedSymbol, volumeStats } = useTerminalStore();
   const sym = symbol || selectedSymbol;
   const stats = volumeStats?.[sym];
-
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // We'll maintain a rolling price-volume map from the store
-  // In the real implementation this comes from the volume_profile WebSocket event
-  // For now we derive an approximate profile from available data
+  // Real per-price-level volume data arrives via the volume_profile
+  // WebSocket event. No synthetic profile is rendered when it is absent.
   const profileData = React.useMemo(() => {
-    if (!stats?.vwap || !stats.volume) return null;
-
-    // Build synthetic profile around VWAP from assets store
-    const vwap = stats.vwap;
-    const levels: { price: number; volume: number }[] = [];
-    const spread = vwap * 0.02; // ±2% range
-
-    for (let i = -20; i <= 20; i++) {
-      const price = vwap + (spread / 20) * i;
-      // Normal distribution centered at VWAP
-      const distFactor = Math.exp(-0.5 * Math.pow(i / 8, 2));
-      const vol = stats.volume * distFactor * 0.1;
-      levels.push({ price: parseFloat(price.toFixed(2)), volume: vol });
-    }
-    return levels;
+    if (!stats?.levels || stats.levels.length === 0) return null;
+    return stats.levels;
   }, [stats]);
 
   useEffect(() => {
@@ -134,20 +119,26 @@ export default function VolumeProfile({ symbol }: VolumeProfileProps) {
 
       {/* Profile Canvas */}
       <div className="flex-1 relative min-h-0 px-1 pb-1">
-        <div className="flex items-start gap-1 h-full">
-          {/* CVD bar on left */}
-          <div className="w-2 h-full flex flex-col justify-end">
-            <div
-              className={`w-full rounded-sm transition-all duration-500 ${cvd >= 0 ? 'bg-green-500/60' : 'bg-red-500/60'}`}
-              style={{
-                height: `${Math.min(100, Math.abs(cvd) / (stats.volume || 1) * 200)}%`,
-                marginTop: cvd >= 0 ? 'auto' : 0,
-                marginBottom: cvd < 0 ? 'auto' : 0,
-              }}
-            />
+        {profileData ? (
+          <div className="flex items-start gap-1 h-full">
+            {/* CVD bar on left */}
+            <div className="w-2 h-full flex flex-col justify-end">
+              <div
+                className={`w-full rounded-sm transition-all duration-500 ${cvd >= 0 ? 'bg-green-500/60' : 'bg-red-500/60'}`}
+                style={{
+                  height: `${Math.min(100, Math.abs(cvd) / (stats.volume || 1) * 200)}%`,
+                  marginTop: cvd >= 0 ? 'auto' : 0,
+                  marginBottom: cvd < 0 ? 'auto' : 0,
+                }}
+              />
+            </div>
+            <canvas ref={canvasRef} className="flex-1 h-full" />
           </div>
-          <canvas ref={canvasRef} className="flex-1 h-full" />
-        </div>
+        ) : (
+          <div className="h-full flex items-center justify-center text-text-dim text-[10px]">
+            Awaiting live per-price volume profile…
+          </div>
+        )}
 
         {/* POC + VAH / VAL labels */}
         <div className="absolute top-1 left-3 flex flex-col gap-0.5">

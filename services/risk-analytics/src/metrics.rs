@@ -2,12 +2,12 @@
 // Robin Risk Analytics — Prometheus Metrics Exporter
 // ============================================================================
 // Exposes key risk gate metrics in Prometheus text exposition format.
-// The metrics are served via a simple HTTP endpoint on PORT_RISK_HEALTH.
+// The metrics are served via a simple HTTP endpoint on PORT_RISK_METRICS.
 //
 // To scrape with Prometheus, add:
 //   - job_name: 'robin-risk'
 //     static_configs:
-//       - targets: ['<host>:9092']
+//       - targets: ['<host>:9096']
 // ============================================================================
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -140,19 +140,29 @@ pub fn render_text() -> String {
 
 /// Serve metrics over a simple HTTP/1.0 listener on the given port.
 /// This is a blocking call — run in a background thread.
+/// On Windows the same listener code applies; we keep the body generic.
 #[cfg(target_family = "unix")]
 pub fn serve_metrics(port: u16) {
+    serve_metrics_impl(port);
+}
+
+#[cfg(not(target_family = "unix"))]
+pub fn serve_metrics(port: u16) {
+    serve_metrics_impl(port);
+}
+
+fn serve_metrics_impl(port: u16) {
     use std::io::{Read, Write};
     use std::net::TcpListener;
 
     let listener = match TcpListener::bind(format!("0.0.0.0:{port}")) {
         Ok(l) => l,
         Err(e) => {
-            tracing::error!("[METRICS] Failed to bind port {port}: {e}");
+            eprintln!("[METRICS] Failed to bind port {port}: {e}");
             return;
         }
     };
-    tracing::info!("[METRICS] Serving Prometheus metrics on :{port}/metrics");
+    eprintln!("[METRICS] Serving Prometheus metrics on :{port}/metrics");
 
     for stream in listener.incoming() {
         match stream {

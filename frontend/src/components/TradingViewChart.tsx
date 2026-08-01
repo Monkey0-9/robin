@@ -89,7 +89,84 @@ export default function TradingViewChart() {
       }
       setLoading(false);
     });
-  }, [selectedSymbol, activeInterval]);
+  }, [selectedSymbol, activeInterval, cacheKey]);
+
+  const recreateOverlays = useCallback((chart: IChartApi) => {
+    if (smaSeriesRef.current) { chart.removeSeries(smaSeriesRef.current); smaSeriesRef.current = null; }
+    if (emaSeriesRef.current) { chart.removeSeries(emaSeriesRef.current); emaSeriesRef.current = null; }
+    if (bbUpperRef.current) { chart.removeSeries(bbUpperRef.current); bbUpperRef.current = null; }
+    if (bbLowerRef.current) { chart.removeSeries(bbLowerRef.current); bbLowerRef.current = null; }
+    if (vwapSeriesRef.current) { chart.removeSeries(vwapSeriesRef.current); vwapSeriesRef.current = null; }
+
+    const inds = indicators[selectedSymbol];
+    if (!inds || candleData.length === 0) return;
+
+    const closes = candleData.map(c => c.close);
+    const computeSMA = (period: number): { time: number; value: number }[] => {
+      const result: { time: number; value: number }[] = [];
+      for (let i = period - 1; i < closes.length; i++) {
+        let sum = 0;
+        for (let j = i - period + 1; j <= i; j++) sum += closes[j];
+        result.push({ time: candleData[i].time, value: sum / period });
+      }
+      return result;
+    };
+    const computeEMA = (period: number): { time: number; value: number }[] => {
+      const result: { time: number; value: number }[] = [];
+      const k = 2 / (period + 1);
+      let ema = closes[0];
+      for (let i = 0; i < closes.length; i++) {
+        if (i > 0) ema = closes[i] * k + ema * (1 - k);
+        if (i >= period - 1) result.push({ time: candleData[i].time, value: ema });
+      }
+      return result;
+    };
+
+    const smaData = computeSMA(20);
+    if (smaData.length > 0) {
+      smaSeriesRef.current = chart.addSeries(LineSeries, {
+        color: '#3b82f6',
+        lineWidth: 1,
+        lineStyle: LineStyle.Solid,
+        lastValueVisible: true,
+        priceLineVisible: false,
+      });
+      smaSeriesRef.current.setData(smaData as any);
+    }
+
+    const emaData = computeEMA(50);
+    if (emaData.length > 0) {
+      emaSeriesRef.current = chart.addSeries(LineSeries, {
+        color: '#8b5cf6',
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        lastValueVisible: true,
+        priceLineVisible: false,
+      });
+      emaSeriesRef.current.setData(emaData as any);
+    }
+
+    if (inds.upperBand && inds.lowerBand && smaData.length > 0) {
+      const bbUpperData = smaData.map(d => ({ ...d, value: inds.upperBand }));
+      const bbLowerData = smaData.map(d => ({ ...d, value: inds.lowerBand }));
+      bbUpperRef.current = chart.addSeries(LineSeries, {
+        color: '#ec4899',
+        lineWidth: 1,
+        lineStyle: LineStyle.Dotted,
+        lastValueVisible: true,
+        priceLineVisible: false,
+      });
+      bbUpperRef.current.setData(bbUpperData as any);
+      bbLowerRef.current = chart.addSeries(LineSeries, {
+        color: '#ec4899',
+        lineWidth: 1,
+        lineStyle: LineStyle.Dotted,
+        lastValueVisible: true,
+        priceLineVisible: false,
+      });
+      bbLowerRef.current.setData(bbLowerData as any);
+    }
+  }, [indicators, selectedSymbol, candleData]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -190,84 +267,7 @@ export default function TradingViewChart() {
     });
 
     recreateOverlays(chart);
-  }, [chartType]);
-
-  const recreateOverlays = useCallback((chart: IChartApi) => {
-    if (smaSeriesRef.current) { chart.removeSeries(smaSeriesRef.current); smaSeriesRef.current = null; }
-    if (emaSeriesRef.current) { chart.removeSeries(emaSeriesRef.current); emaSeriesRef.current = null; }
-    if (bbUpperRef.current) { chart.removeSeries(bbUpperRef.current); bbUpperRef.current = null; }
-    if (bbLowerRef.current) { chart.removeSeries(bbLowerRef.current); bbLowerRef.current = null; }
-    if (vwapSeriesRef.current) { chart.removeSeries(vwapSeriesRef.current); vwapSeriesRef.current = null; }
-
-    const inds = indicators[selectedSymbol];
-    if (!inds || candleData.length === 0) return;
-
-    const closes = candleData.map(c => c.close);
-    const computeSMA = (period: number): { time: number; value: number }[] => {
-      const result: { time: number; value: number }[] = [];
-      for (let i = period - 1; i < closes.length; i++) {
-        let sum = 0;
-        for (let j = i - period + 1; j <= i; j++) sum += closes[j];
-        result.push({ time: candleData[i].time, value: sum / period });
-      }
-      return result;
-    };
-    const computeEMA = (period: number): { time: number; value: number }[] => {
-      const result: { time: number; value: number }[] = [];
-      const k = 2 / (period + 1);
-      let ema = closes[0];
-      for (let i = 0; i < closes.length; i++) {
-        if (i > 0) ema = closes[i] * k + ema * (1 - k);
-        if (i >= period - 1) result.push({ time: candleData[i].time, value: ema });
-      }
-      return result;
-    };
-
-    const smaData = computeSMA(20);
-    if (smaData.length > 0) {
-      smaSeriesRef.current = chart.addSeries(LineSeries, {
-        color: '#3b82f6',
-        lineWidth: 1,
-        lineStyle: LineStyle.Solid,
-        lastValueVisible: true,
-        priceLineVisible: false,
-      });
-      smaSeriesRef.current.setData(smaData as any);
-    }
-
-    const emaData = computeEMA(50);
-    if (emaData.length > 0) {
-      emaSeriesRef.current = chart.addSeries(LineSeries, {
-        color: '#8b5cf6',
-        lineWidth: 1,
-        lineStyle: LineStyle.Dashed,
-        lastValueVisible: true,
-        priceLineVisible: false,
-      });
-      emaSeriesRef.current.setData(emaData as any);
-    }
-
-    if (inds.upperBand && inds.lowerBand && smaData.length > 0) {
-      const bbUpperData = smaData.map(d => ({ ...d, value: inds.upperBand }));
-      const bbLowerData = smaData.map(d => ({ ...d, value: inds.lowerBand }));
-      bbUpperRef.current = chart.addSeries(LineSeries, {
-        color: '#ec4899',
-        lineWidth: 1,
-        lineStyle: LineStyle.Dotted,
-        lastValueVisible: true,
-        priceLineVisible: false,
-      });
-      bbUpperRef.current.setData(bbUpperData as any);
-      bbLowerRef.current = chart.addSeries(LineSeries, {
-        color: '#ec4899',
-        lineWidth: 1,
-        lineStyle: LineStyle.Dotted,
-        lastValueVisible: true,
-        priceLineVisible: false,
-      });
-      bbLowerRef.current.setData(bbLowerData as any);
-    }
-  }, [indicators, selectedSymbol, candleData]);
+  }, [chartType, recreateOverlays]);
 
   const computeVWAP = (bars: OHLCVBar[]): { time: number; value: number }[] => {
     let cumPV = 0, cumVol = 0;
@@ -328,7 +328,7 @@ export default function TradingViewChart() {
     } catch {
       // swallow
     }
-  }, [candleData, currentPrice, selectedSymbol, chartType]);
+  }, [candleData, currentPrice, selectedSymbol, chartType, recreateOverlays]);
 
   const isUp = dailyChangePct >= 0;
 

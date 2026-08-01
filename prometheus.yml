@@ -2,9 +2,9 @@ global:
   scrape_interval: 5s
 
 scrape_configs:
-  - job_name: 'matching_engine'
-    static_configs:
-      - targets: ['matching_engine:8000']
   - job_name: 'gateway'
     static_configs:
       - targets: ['gateway:8080']
+  - job_name: 'risk-analytics'
+    static_configs:
+      - targets: ['risk-analytics:9096']

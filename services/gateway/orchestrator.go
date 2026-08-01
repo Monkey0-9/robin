@@ -327,7 +327,7 @@ func NewOrchestrator() *Orchestrator {
 	orch.loadConfig()
 	orch.initDB()
 
-	// Seed default users (admin/admin, trader/trader) for development
+	// Seed default users from SEED_ADMIN_PASSWORD / SEED_TRADER_PASSWORD env vars (no-op if unset)
 	ensureDefaultUsers(orch.db, logger)
 
 	// Initialize institutional compliance modules after DB is ready
@@ -759,18 +759,27 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 
 // Removed gatewayAPIToken plain-text fallback mechanism.
 
-// jwtAuthMiddleware validates incoming JWT tokens in the Authorization header.
+// jwtAuthMiddleware validates incoming JWT tokens in the Authorization header or httpOnly cookie.
 func jwtAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var tokenStr string
 		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+		if authHeader != "" && strings.HasPrefix(authHeader, "Bearer ") {
+			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
+		} else {
+			cookie, err := r.Cookie("robin_token")
+			if err == nil {
+				tokenStr = cookie.Value
+			}
+		}
+
+		if tokenStr == "" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized: missing token"})
 			return
 		}
 
-		tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 		claims, err := jwtAuth.verify(tokenStr)
 		if err != nil {
 			w.Header().Set("Content-Type", "application/json")
@@ -879,7 +888,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		json.NewEncoder(w).Encode(map[string]string{"status": "reloaded"})
 	}))))).Methods("POST")
 
-	r.HandleFunc("/api/historical", func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/api/historical", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		symbol := req.URL.Query().Get("symbol")
 		if symbol == "" {
 			http.Error(w, `{"error":"symbol required"}`, http.StatusBadRequest)
@@ -894,7 +903,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"status": "historical_data_available_in_kdb_storage",
 			"note": "Tick data is being asynchronously logged to c:\\Robin\\kdb_storage",
 		})
-	}).Methods("GET")
+	}))).Methods("GET")
 
 	// Initialize order state machine (if not done already)
 	if globalOrderSM == nil {
@@ -930,6 +939,52 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"message":   "Cancel submitted",
 		})
 	})))).Methods("DELETE")
+
+	// POST /api/order/cancel — cancel order via REST POST
+	r.Handle("/api/order/cancel", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var reqBody struct {
+			ClOrdID string `json:"cl_ord_id"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&reqBody); err != nil || reqBody.ClOrdID == "" {
+			http.Error(w, `{"error":"cl_ord_id required"}`, http.StatusBadRequest)
+			return
+		}
+		order, err := globalOrderSM.Cancel(reqBody.ClOrdID)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			globalOrderSM.ConfirmCancel(reqBody.ClOrdID)
+		}()
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":     string(order.State),
+			"cl_ord_id": reqBody.ClOrdID,
+			"message":   "Cancel submitted",
+		})
+	})))).Methods("POST")
+
+	// POST /api/order/modify — modify order price/quantity via REST POST
+	r.Handle("/api/order/modify", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var reqBody struct {
+			ClOrdID string  `json:"cl_ord_id"`
+			Price   float64 `json:"price"`
+			Qty     float64 `json:"qty"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&reqBody); err != nil || reqBody.ClOrdID == "" {
+			http.Error(w, `{"error":"cl_ord_id required"}`, http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":     "MODIFIED",
+			"cl_ord_id": reqBody.ClOrdID,
+			"new_price": reqBody.Price,
+			"new_qty":   reqBody.Qty,
+		})
+	})))).Methods("POST")
 
 	// GET /api/orders/blotter — full order blotter with state history
 	r.Handle("/api/orders/blotter", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -1186,8 +1241,19 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		json.NewEncoder(w).Encode(respPayload)
 	}))))).Methods("POST")
 
-	// Internal endpoint for Risk Engine to push state transitions
+	// Internal endpoint for Risk Engine to push state transitions.
+	// Authenticated with an internal service token (ROBIN_INTERNAL_TOKEN).
+	// This is a state-changing endpoint that mutates order status — it must
+	// never be reachable by unauthenticated callers.
 	r.HandleFunc("/internal/order_update", func(w http.ResponseWriter, req *http.Request) {
+		expected := os.Getenv("ROBIN_INTERNAL_TOKEN")
+		if expected == "" {
+			o.logger.Warn("/internal/order_update called with no ROBIN_INTERNAL_TOKEN set — endpoint is OPEN. Set ROBIN_INTERNAL_TOKEN in production.")
+		} else if req.Header.Get("X-Internal-Token") != expected {
+			http.Error(w, `{"error":"forbidden: invalid internal token"}`, http.StatusForbidden)
+			return
+		}
+
 		var update struct {
 			ClientOrdID string  `json:"cl_ord_id"`
 			Status      string  `json:"status"`
@@ -1244,9 +1310,9 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	r.Handle("/metrics", promhttp.Handler())
 
 	// ── Position & Portfolio endpoints ─────────────────────────────────────
-	r.HandleFunc("/api/positions", handleGetPositions).Methods("GET")
-	r.HandleFunc("/api/positions/{symbol}", handleGetPosition).Methods("GET")
-	r.HandleFunc("/api/portfolio", handleGetPortfolioSummary).Methods("GET")
+	r.Handle("/api/positions", jwtAuthMiddleware(http.HandlerFunc(handleGetPositions))).Methods("GET")
+	r.Handle("/api/positions/{symbol}", jwtAuthMiddleware(http.HandlerFunc(handleGetPosition))).Methods("GET")
+	r.Handle("/api/portfolio", jwtAuthMiddleware(http.HandlerFunc(handleGetPortfolioSummary))).Methods("GET")
 
 	r.Handle("/stats", jwtAuthMiddleware(rbacMiddleware("admin", "trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		orders := o.orderCount.Load()
@@ -1384,7 +1450,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	})))).Methods("GET")
 
 	// GET /api/ai/macro_feed — Fetch real-time macro news feed from python agent
-	r.HandleFunc("/api/ai/macro_feed", func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/api/ai/macro_feed", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		proxyReq, err := http.NewRequest("GET", "http://127.0.0.1:8000/macro_news", nil)
 		if err != nil {
 			http.Error(w, `{"error":"failed to create proxy request"}`, http.StatusInternalServerError)
@@ -1402,10 +1468,10 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(proxyResp.StatusCode)
 		io.Copy(w, proxyResp.Body)
-	}).Methods("GET")
+	}))).Methods("GET")
 
 	// GET /api/sor/prices — Fetch real-time simulated prices across major exchanges
-	r.HandleFunc("/api/sor/prices", func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/api/sor/prices", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		symbol := req.URL.Query().Get("symbol")
 		if symbol == "" {
 			symbol = "BTC/USD"
@@ -1433,10 +1499,10 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
-	}).Methods("GET")
+	}))).Methods("GET")
 
 	// GET /api/screener — Fetch assets list with screener metrics
-	r.HandleFunc("/api/screener", func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/api/screener", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		type ScreenerAsset struct {
 			Symbol        string  `json:"symbol"`
 			Name          string  `json:"name"`
@@ -1460,10 +1526,10 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		
 
 		json.NewEncoder(w).Encode(assets)
-	}).Methods("GET")
+	}))).Methods("GET")
 
 	// GET /api/heatmap — Fetch sector-wise daily change heatmap data
-	r.HandleFunc("/api/heatmap", func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/api/heatmap", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		type HeatmapNode struct {
 			Name   string  `json:"name"`
 			Value  float64 `json:"value"`
@@ -1510,7 +1576,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(heatmap)
-	}).Methods("GET")
+	}))).Methods("GET")
 
 	// GET /api/alpaca/account — Fetch Alpaca account details (JWT Trader required)
 	r.Handle("/api/alpaca/account", jwtAuthMiddleware(rbacMiddleware("admin", "trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -1752,7 +1818,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	r.Handle("/api/auth/refresh", jwtAuthMiddleware(handleRefreshToken())).Methods("POST")
 
 	// ── GET /api/assets — canonical tradable symbol list ────────────────────────
-	r.HandleFunc("/api/assets", func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/api/assets", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		type AssetInfo struct {
 			Symbol       string  `json:"symbol"`
 			Name         string  `json:"name"`
@@ -1789,10 +1855,10 @@ for symbol, price := range prices {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(assets)
-	}).Methods("GET", "OPTIONS")
+	}))).Methods("GET", "OPTIONS")
 
 	// ── GET /api/candles — OHLCV candle data with volume ────────────────────────
-	r.HandleFunc("/api/candles", func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/api/candles", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		symbol := req.URL.Query().Get("symbol")
 		resolution := req.URL.Query().Get("resolution")
 		countStr := req.URL.Query().Get("count")
@@ -1820,7 +1886,7 @@ for symbol, price := range prices {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Candle-Source", "live-aggregator")
 		json.NewEncoder(w).Encode(bars)
-	}).Methods("GET", "OPTIONS")
+	}))).Methods("GET", "OPTIONS")
 
 	// Apply middleware chain: requestID → rateLimit → router
 
@@ -1844,6 +1910,9 @@ for symbol, price := range prices {
 	})
 	handler = c.Handler(handler)
 
+	// Security hardening headers (OWASP ASVS): CSP, HSTS, frame/x-content-type protections.
+	handler = securityHeadersMiddleware(handler)
+
 	return &http.Server{
 		Addr:         fmt.Sprintf(":%d", port),
 		Handler:      handler,
@@ -1851,6 +1920,21 @@ for symbol, price := range prices {
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  120 * time.Second,
 	}
+}
+
+// securityHeadersMiddleware injects OWASP-recommended hardening headers on every response.
+func securityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), interest-cohort=()")
+		if r.TLS != nil {
+			w.Header().Set("Strict-Transport-Security", "max-age=63072000; includeSubDomains")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // SendOrderToAlpaca posts a new order to the Alpaca Paper Trading API

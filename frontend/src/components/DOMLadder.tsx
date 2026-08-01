@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useTerminalStore } from '../store/useTerminalStore';
 
 export interface DOMLevel {
   price: number;
@@ -16,48 +17,40 @@ interface DOMLadderProps {
 }
 
 export const DOMLadder: React.FC<DOMLadderProps> = ({
-  symbol = 'BTC/USD',
-  levels = [],
-  currentPrice = 64500.0,
+  symbol: symbolProp,
+  levels: levelsProp,
+  currentPrice: currentPriceProp,
   onOrderClick,
 }) => {
+  const selectedSymbol = useTerminalStore(s => s.selectedSymbol);
+  const orderBook = useTerminalStore(s => s.orderBook);
+  const assets = useTerminalStore(s => s.assets);
+
+  const symbol = symbolProp || selectedSymbol;
+  const asset = assets.find(a => a.symbol === symbol);
+  const currentPrice = currentPriceProp ?? asset?.currentPrice ?? 0;
+
   const [domData, setDomData] = useState<DOMLevel[]>([]);
 
+  // Merge the live order book (bids + asks) into ladder levels keyed by price.
   useEffect(() => {
-    if (levels && levels.length > 0) {
-      setDomData(levels);
+    if (levelsProp && levelsProp.length > 0) {
+      setDomData(levelsProp);
       return;
     }
-
-    // Generate fallback depth levels around current price if none provided
-    const generated: DOMLevel[] = [];
-    const step = 0.50;
-    const basePrice = currentPrice || 64500.0;
-
-    for (let i = 10; i >= 1; i--) {
-      const askPrice = basePrice + i * step;
-      const askSize = Math.floor(Math.random() * 40 + 5);
-      generated.push({
-        price: askPrice,
-        bidSize: 0,
-        askSize,
-        askOrders: Math.floor(Math.random() * 5 + 1),
-      });
+    const byPrice = new Map<number, DOMLevel>();
+    for (const b of orderBook.bids) {
+      const entry = byPrice.get(b.price) || { price: b.price, bidSize: 0, askSize: 0 };
+      entry.bidSize = b.size;
+      byPrice.set(b.price, entry);
     }
-
-    for (let i = 0; i <= 10; i++) {
-      const bidPrice = basePrice - i * step;
-      const bidSize = Math.floor(Math.random() * 40 + 5);
-      generated.push({
-        price: bidPrice,
-        bidSize,
-        askSize: 0,
-        bidOrders: Math.floor(Math.random() * 5 + 1),
-      });
+    for (const a of orderBook.asks) {
+      const entry = byPrice.get(a.price) || { price: a.price, bidSize: 0, askSize: 0 };
+      entry.askSize = a.size;
+      byPrice.set(a.price, entry);
     }
-
-    setDomData(generated);
-  }, [levels, currentPrice]);
+    setDomData(Array.from(byPrice.values()));
+  }, [levelsProp, orderBook]);
 
   const maxSize = Math.max(
     1,
@@ -69,7 +62,7 @@ export const DOMLadder: React.FC<DOMLadderProps> = ({
       <div className="flex justify-between items-center mb-2 pb-2 border-b border-slate-800">
         <span className="font-bold text-slate-200 uppercase tracking-wider">{symbol} DOM Ladder</span>
         <span className="text-emerald-400 bg-emerald-950/50 px-2 py-0.5 rounded border border-emerald-800/50">
-          Last: ${currentPrice.toFixed(2)}
+          Last: {currentPrice > 0 ? `$${currentPrice.toFixed(2)}` : '—'}
         </span>
       </div>
 
@@ -82,6 +75,11 @@ export const DOMLadder: React.FC<DOMLadderProps> = ({
       </div>
 
       <div className="max-h-80 overflow-y-auto space-y-0.5 mt-1">
+        {domData.length === 0 && (
+          <div className="py-8 text-center text-slate-500 text-[11px]">
+            Awaiting live order book data...
+          </div>
+        )}
         {domData.map((level) => {
           const isCurrentPrice = Math.abs(level.price - currentPrice) < 0.25;
           const bidWidth = (level.bidSize / maxSize) * 100;

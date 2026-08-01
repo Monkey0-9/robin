@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import FetchInterceptor from "../components/FetchInterceptor";
 
 export const metadata: Metadata = {
   title: "Robin Terminal",
@@ -13,7 +14,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className="bg-void text-primary">{children}</body>
+      <body className="bg-void text-primary">
+        <FetchInterceptor />
+        {children}
+      </body>
     </html>
   );
 }

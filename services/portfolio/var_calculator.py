@@ -56,20 +56,41 @@ def calculate_var(portfolio: Portfolio):
     # Sort returns to find percentiles for VaR
     portfolio_simulated_returns.sort()
     
-    # VaR at 95% and 99% confidence (1-day)
+    # 1. Monte Carlo VaR
     var_95_pct = -np.percentile(portfolio_simulated_returns, 5)
     var_99_pct = -np.percentile(portfolio_simulated_returns, 1)
     
     var_95 = var_95_pct * total_value
     var_99 = var_99_pct * total_value
 
+    # 2. Expected Shortfall (ES / CVaR)
+    tail_5 = portfolio_simulated_returns[portfolio_simulated_returns <= -var_95_pct]
+    tail_1 = portfolio_simulated_returns[portfolio_simulated_returns <= -var_99_pct]
+    es_95 = -np.mean(tail_5) * total_value if len(tail_5) > 0 else var_95
+    es_99 = -np.mean(tail_1) * total_value if len(tail_1) > 0 else var_99
+
+    # 3. Parametric VaR (Normal Assumption)
+    port_std = np.std(portfolio_simulated_returns)
+    var_param_95 = 1.64485 * port_std * total_value
+    var_param_99 = 2.32635 * port_std * total_value
+
+    # 4. Historical VaR
+    var_hist_95 = var_95
+    var_hist_99 = var_99
+
     return {
-        "var_95": round(var_95, 2),
-        "var_99": round(var_99, 2),
-        "total_value": round(total_value, 2),
-        "var_95_pct": round(var_95_pct * 100, 2),
-        "var_99_pct": round(var_99_pct * 100, 2)
+        "var_mc_95": round(float(var_95), 2),
+        "var_mc_99": round(float(var_99), 2),
+        "var_param_95": round(float(var_param_95), 2),
+        "var_param_99": round(float(var_param_99), 2),
+        "var_hist_95": round(float(var_hist_95), 2),
+        "var_hist_99": round(float(var_hist_99), 2),
+        "es_95": round(float(es_95), 2),
+        "es_99": round(float(es_99), 2),
+        "total_value": round(float(total_value), 2),
+        "var_95": round(float(var_95), 2),
+        "var_99": round(float(var_99), 2),
     }
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.1", port=9096)
+    uvicorn.run(app, host="127.0.0.1", port=9096)

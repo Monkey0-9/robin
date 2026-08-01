@@ -10,5 +10,5 @@ RUN cargo build --release
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y libstdc++6 && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/target/release/robin-risk-daemon /robin-risk-daemon
-EXPOSE 9092
+EXPOSE 9092 9096
 CMD ["/robin-risk-daemon"]

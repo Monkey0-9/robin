@@ -17,6 +17,7 @@ pub const SHM_VERSION: u32 = 1;
 pub const PORT_ORCHESTRATOR: u16 = 8080;
 pub const PORT_EXECUTION_HEALTH: u16 = 9091;
 pub const PORT_RISK_HEALTH: u16 = 9092;
+pub const PORT_RISK_METRICS: u16 = 9096;
 pub const PORT_MARKET_DATA: u16 = 9093;
 pub const PORT_PORTFOLIO: u16 = 9094;
 pub const PORT_COMPLIANCE: u16 = 9095;

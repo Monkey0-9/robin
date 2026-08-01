@@ -24,6 +24,16 @@ services:
       - LIVE_FEED_ENABLED=true
     depends_on:
       - matching_engine
+      - risk-analytics
+    restart: unless-stopped
+
+  risk-analytics:
+    build:
+      context: ./services/risk-analytics
+      dockerfile: Dockerfile
+    ports:
+      - "9092:9092"
+      - "9096:9096"
     restart: unless-stopped
 
   frontend:

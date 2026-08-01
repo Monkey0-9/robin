@@ -7,7 +7,8 @@ package main
 // POST /api/auth/refresh — (optional) re-issue token using valid unexpired token
 //
 // Users are stored in the SQLite users table with bcrypt password hashes.
-// A default admin/admin seed is created on first run if the table is empty.
+// A default admin/trader seed is created on first run ONLY if SEED_ADMIN_PASSWORD /
+// SEED_TRADER_PASSWORD env vars are set.
 // ============================================================================
 
 import (
@@ -15,6 +16,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -34,8 +36,7 @@ type LoginResponse struct {
 	Sub       string `json:"sub"`
 }
 
-// ensureDefaultUsers seeds admin/admin if the users table has no rows.
-// ONLY for local development. In production, use proper user management.
+// ensureDefaultUsers seeds users only if SEED_ADMIN_PASSWORD / SEED_TRADER_PASSWORD env vars are set.
 func ensureDefaultUsers(db *sql.DB, logger *slog.Logger) {
 	if db == nil {
 		return
@@ -56,27 +57,39 @@ func ensureDefaultUsers(db *sql.DB, logger *slog.Logger) {
 		return
 	}
 
-	// Seed admin user with password "admin"
-	hash, err := bcrypt.GenerateFromPassword([]byte("admin"), bcrypt.DefaultCost)
-	if err != nil {
-		logger.Error("failed to hash default admin password", "error", err)
+	adminPass := os.Getenv("SEED_ADMIN_PASSWORD")
+	traderPass := os.Getenv("SEED_TRADER_PASSWORD")
+
+	if adminPass == "" && traderPass == "" {
+		logger.Info("no seed password env vars set (SEED_ADMIN_PASSWORD / SEED_TRADER_PASSWORD) — skipping default user seeding")
 		return
 	}
-	db.Exec(
-		"INSERT INTO users (username, password_hash, role, created_at_ns) VALUES (?, ?, ?, ?)",
-		"admin", string(hash), "admin", time.Now().UnixNano(),
-	)
 
-	// Also seed a trader user
-	traderHash, err := bcrypt.GenerateFromPassword([]byte("trader"), bcrypt.DefaultCost)
-	if err == nil {
-		db.Exec(
-			"INSERT INTO users (username, password_hash, role, created_at_ns) VALUES (?, ?, ?, ?)",
-			"trader", string(traderHash), "trader", time.Now().UnixNano(),
-		)
+	if adminPass != "" {
+		hash, err := bcrypt.GenerateFromPassword([]byte(adminPass), bcrypt.DefaultCost)
+		if err != nil {
+			logger.Error("failed to hash admin password", "error", err)
+		} else {
+			db.Exec(
+				"INSERT INTO users (username, password_hash, role, created_at_ns) VALUES (?, ?, ?, ?)",
+				"admin", string(hash), "admin", time.Now().UnixNano(),
+			)
+			logger.Info("seeded initial admin user from SEED_ADMIN_PASSWORD env var")
+		}
 	}
 
-	logger.Info("seeded default users: admin/admin (role=admin), trader/trader (role=trader) — CHANGE IN PRODUCTION")
+	if traderPass != "" {
+		traderHash, err := bcrypt.GenerateFromPassword([]byte(traderPass), bcrypt.DefaultCost)
+		if err != nil {
+			logger.Error("failed to hash trader password", "error", err)
+		} else {
+			db.Exec(
+				"INSERT INTO users (username, password_hash, role, created_at_ns) VALUES (?, ?, ?, ?)",
+				"trader", string(traderHash), "trader", time.Now().UnixNano(),
+			)
+			logger.Info("seeded initial trader user from SEED_TRADER_PASSWORD env var")
+		}
+	}
 }
 
 // handleLogin handles POST /api/auth/login.
@@ -132,10 +145,21 @@ func handleLogin(db *sql.DB, logger *slog.Logger) http.HandlerFunc {
 
 		logger.Info("user logged in", "username", req.Username, "role", role)
 
+		// Set httpOnly cookie for secure session tracking
+		http.SetCookie(w, &http.Cookie{
+			Name:     "robin_token",
+			Value:    token,
+			Expires:  time.Now().Add(expiry),
+			HttpOnly: true,
+			Secure:   r.TLS != nil,
+			Path:     "/",
+			SameSite: http.SameSiteStrictMode,
+		})
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(LoginResponse{
-			Token:     token,
+			Token:     "SECURE_HTTP_ONLY_COOKIE",
 			ExpiresAt: time.Now().Add(expiry).Unix(),
 			Role:      role,
 			Sub:       req.Username,

@@ -14,6 +14,7 @@ export interface VolumeStats {
   volume: number;
   vwap: number;
   cvd: number;
+  levels?: { price: number; volume: number }[];
 }
 
 export interface TechnicalIndicators {
@@ -239,7 +240,6 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       .catch(e => console.warn('Failed to seed assets from /api/assets:', e));
 
     let ws: WebSocket | null = null;
-    let wsConnected = false;
     let reconnectAttempts = 0;
     const maxReconnectDelay = 30000;
 
@@ -255,7 +255,6 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
       ws = createWebSocket(
         (data) => {
-          wsConnected = true;
           reconnectAttempts = 0;
 
           if (data.type === 'orderbook') {
@@ -359,7 +358,6 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
           }
         },
         () => {
-          wsConnected = false;
           reconnectAttempts++;
           const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), maxReconnectDelay);
           console.log(`WebSocket reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
@@ -386,7 +384,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
             healthy: health.healthy,
             degraded: health.degraded,
             failed: health.failed,
-            latencyNs: stats.avg_lat_ns || 65000
+            latencyNs: stats.avg_lat_ns || 0
           }
         });
       } catch {
@@ -417,7 +415,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     }, 2000);
   },
 
-  submitOrder: async (symbol, side, price, size, isMarket = true, orderType = 'MARKET') => {
+  submitOrder: async (symbol, side, price, size, _isMarket = true, orderType = 'MARKET') => {
     const state = get();
     const clOrdId = `ORD-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
@@ -480,7 +478,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
           timestamp: Date.now(),
         },
       });
-    } catch (e) {
+    } catch {
       set((s) => ({
         workingOrders: s.workingOrders.filter(w => w.id !== clOrdId),
       }));
