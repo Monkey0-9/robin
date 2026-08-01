@@ -377,7 +377,7 @@ def train_all(symbols: list[str], days: int):
     with open(MODELS_DIR / "model_metadata.json", "w") as f:
         json.dump(metadata, f, indent=2, default=str)
 
-    logger.info("✅ All models trained and saved.")
+    logger.info("[OK] All models trained and saved.")
     logger.info("   Signal accuracy: %.1f%%", sig_metrics["accuracy"] * 100)
     return metadata
 

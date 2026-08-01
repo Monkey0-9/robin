@@ -106,6 +106,20 @@ export interface WorkingOrder {
   routedExchange: string;
 }
 
+export interface Execution {
+  clOrdId: string;
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  qty: number;
+  status: string;
+  latencyNs: number;
+  routedExchange: string;
+  priceImprovementBps: number;
+  exchangesSearched: number;
+  fillPrice: number;
+  timestamp: number;
+}
+
 interface TerminalState {
   assets: Asset[];
   selectedSymbol: string;
@@ -131,6 +145,8 @@ interface TerminalState {
   };
 
   systemHealth: SystemHealth;
+
+  lastExecution: Execution | null;
 
   init: () => void;
   dismissNotification: () => void;
@@ -199,6 +215,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   orderBook: { bids: [], asks: [] },
   systemHealth: { healthy: 0, degraded: 0, failed: 0, latencyNs: 0 },
+  lastExecution: null,
 
   init: () => {
     console.log('Terminal store initialized');
@@ -446,6 +463,23 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       if (!res.ok) {
         throw new Error("Order rejected by gateway");
       }
+
+      const data = await res.json();
+      set({
+        lastExecution: {
+          clOrdId: data.cl_ord_id || clOrdId,
+          symbol: data.symbol || symbol,
+          side,
+          qty: data.qty ?? size,
+          status: data.status || 'WORKING',
+          latencyNs: data.latency_ns || 0,
+          routedExchange: data.routed_exchange || state.routingMode,
+          priceImprovementBps: data.price_improvement_bps || 0,
+          exchangesSearched: data.exchanges_searched || 0,
+          fillPrice: data.fill_price || 0,
+          timestamp: Date.now(),
+        },
+      });
     } catch (e) {
       set((s) => ({
         workingOrders: s.workingOrders.filter(w => w.id !== clOrdId),

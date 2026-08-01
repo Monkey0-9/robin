@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -39,14 +40,19 @@ func InitTickLogger(storageDir string) error {
 
 func (t *TickLogger) getWriter(symbol, tickType string) (*csv.Writer, error) {
 	// Date-based filename, e.g., BTC-USD_trades_2026-07-29.csv
+	safeSymbol := strings.ReplaceAll(symbol, "/", "-")
 	dateStr := time.Now().UTC().Format("2006-01-02")
-	fileName := fmt.Sprintf("%s_%s_%s.csv", symbol, tickType, dateStr)
+	fileName := fmt.Sprintf("%s_%s_%s.csv", safeSymbol, tickType, dateStr)
 	
 	if w, exists := t.writers[fileName]; exists {
 		return w, nil
 	}
 	
 	filePath := filepath.Join(t.dir, fileName)
+	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
+		return nil, err
+	}
+
 	fileExists := false
 	if _, err := os.Stat(filePath); err == nil {
 		fileExists = true

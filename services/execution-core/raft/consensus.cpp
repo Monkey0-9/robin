@@ -374,7 +374,7 @@ private:
     }
 
     // Handle RequestVote RPC
-    void handle_request_vote(const RequestVoteRPC& rpc) -> RequestVoteResult {
+    auto handle_request_vote(const RequestVoteRPC& rpc) -> RequestVoteResult {
         std::lock_guard<std::mutex> lock(mutex_);
 
         RequestVoteResult result{rpc.term, false};

@@ -360,9 +360,9 @@ if __name__ == "__main__":
         sig = sig_gen.generate_signal(test_regime, test_sentiment, test_price)
         print(
             f"  {test_regime:10s} | sentiment={test_sentiment:+.2f} | "
-            f"→ {sig['action']:5s} | confidence={sig['confidence']:.2f} | "
+            f"-> {sig['action']:5s} | confidence={sig['confidence']:.2f} | "
             f"{sig['reason'][:60]}..."
         )
 
     sig_gen.unload()
-    print("\n✅ Agent 3 test passed.")
+    print("\n[OK] Agent 3 test passed.")

@@ -108,13 +108,13 @@ class AITrainer:
                 result = self._train_symbol(ticker)
                 summary[ticker] = result
                 logger.info(
-                    "  ✅ %s — OOS R²: %.4f ± %.4f | Train: %d rows",
+                    "  [OK] %s - OOS R2: %.4f +/- %.4f | Train: %d rows",
                     ticker, result["oos_r2_mean"], result["oos_r2_std"], result["n_train"]
                 )
             except FileNotFoundError:
-                logger.warning("  ⏭  %s — data not found, skipping. Run data_engine.py first.", ticker)
+                logger.warning("  [skip] %s - data not found, skipping. Run data_engine.py first.", ticker)
             except Exception as e:
-                logger.error("  ❌ %s — training failed: %s", ticker, e, exc_info=True)
+                logger.error("  [FAIL] %s - training failed: %s", ticker, e, exc_info=True)
 
         self._print_summary(summary)
         return summary
@@ -461,7 +461,7 @@ class AITrainer:
         
         model_path = MODEL_DIR / "lgbm_signal_classifier.txt"
         model.booster_.save_model(str(model_path))
-        logger.info("✅ LGBM Signal Classifier saved to %s", model_path)
+        logger.info("[OK] LGBM Signal Classifier saved to %s", model_path)
 
     # ─── Inference ─────────────────────────────────────────────────────────
 

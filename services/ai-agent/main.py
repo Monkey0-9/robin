@@ -267,12 +267,16 @@ async def trade_decision(req: TradeDecisionRequest):
         current_price,
     )
     return {
-        "reasoning": signal["reason"],
-        "action":    signal["action"],
-        "symbol":    symbol,
-        "qty":       round(1000.0 / current_price, 6),  # $1000 notional
-        "price":     current_price,
-        "data_source": "live",
+        "reasoning":  signal["reason"],
+        "action":     signal["action"],
+        "confidence": signal.get("confidence", 0.0),
+        "regime":     signal.get("regime", "Range"),
+        "sentiment":  signal.get("sentiment", 0.0),
+        "symbol":     symbol,
+        "qty":        round(1000.0 / current_price, 6),  # $1000 notional
+        "price":      current_price,
+        "entry_target": signal.get("entry_target", current_price),
+        "data_source":  "live",
     }
 
 

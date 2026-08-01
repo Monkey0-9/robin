@@ -28,8 +28,8 @@ def run_tests():
         sig_bear = sg.generate_signal("Bear", 0.65, 65000.0, "BTC-USD")
         sig_bull = sg.generate_signal("Bull", -0.60, 65000.0, "BTC-USD")
         sg.unload()
-        check("Signal Bear+positive → BUY",  sig_bear["action"] == "BUY",  repr(sig_bear))
-        check("Signal Bull+negative → SELL", sig_bull["action"] == "SELL", repr(sig_bull))
+        check("Signal Bear+positive -> BUY",  sig_bear["action"] == "BUY",  repr(sig_bear))
+        check("Signal Bull+negative -> SELL", sig_bull["action"] == "SELL", repr(sig_bull))
         check("Signal confidence in [0,1]",  0 <= sig_bear["confidence"] <= 1.0)
     except Exception as e:
         check("TradeSignalGenerator", False, str(e))
@@ -40,9 +40,9 @@ def run_tests():
         sizer = KellyPositionSizer(portfolio_value=100_000)
         r_pos = sizer.compute(0.55, 0.015, 0.010, 65000.0, 0.75, "BTC-USD")
         r_neg = sizer.compute(0.40, 0.010, 0.020, 65000.0, 0.75, "BTC-USD")
-        check("Kelly positive edge → nonzero fraction", r_pos.fraction > 0)
+        check("Kelly positive edge -> nonzero fraction", r_pos.fraction > 0)
         check("Kelly capped at 5%", r_pos.fraction <= 0.05)
-        check("Kelly negative edge → skip", r_neg.fraction == 0.0)
+        check("Kelly negative edge -> skip", r_neg.fraction == 0.0)
         check("Kelly notional reasonable", 0 < r_pos.notional <= 5000.0)
     except Exception as e:
         check("KellyPositionSizer", False, str(e))
@@ -82,7 +82,7 @@ def run_tests():
             s = mom.on_bar(bar)
             if s: mom_sigs.append(s)
         check("MomentumStrategy runs without error", True)
-        print(f"       → {len(mom_sigs)} momentum signals from 300 bars")
+        print(f"       -> {len(mom_sigs)} momentum signals from 300 bars")
     except Exception as e:
         check("MomentumStrategy", False, str(e))
 
@@ -90,7 +90,7 @@ def run_tests():
     print()
     print("=" * 40)
     if not errors:
-        print("ALL TESTS PASSED ✅")
+        print("ALL TESTS PASSED [OK]")
     else:
         print(f"FAILED: {errors}")
     print("=" * 40)

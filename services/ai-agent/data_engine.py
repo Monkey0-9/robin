@@ -154,7 +154,7 @@ class DataEngine:
 
                 # Cache to parquet for fast future loads
                 df.to_parquet(cache_file, compression="zstd", index=False)
-                logger.info("  → %d rows fetched for %s", len(df), ticker)
+                logger.info("  -> %d rows fetched for %s", len(df), ticker)
                 return df
 
             except Exception as exc:
@@ -185,7 +185,7 @@ class DataEngine:
             df.rename(columns={series_id: "value"}, inplace=True)
             df["series_id"] = series_id
             df.to_parquet(cache_file, compression="zstd", index=False)
-            logger.info("  → %d rows for FRED/%s", len(df), series_id)
+            logger.info("  -> %d rows for FRED/%s", len(df), series_id)
             return df
         except Exception as exc:
             logger.error("FRED fetch failed for %s: %s", series_id, exc)
@@ -230,9 +230,9 @@ class DataEngine:
         logger.info("Fetching FRED macro indicators ...")
         for series_id, (start_date, desc) in MACRO_SERIES.items():
             self.fetch_macro(series_id, start=start_date)
-            logger.info("  → %s (%s)", series_id, desc)
+            logger.info("  -> %s (%s)", series_id, desc)
 
-        logger.info("✅ Data generation complete. %d symbols saved.", len(results))
+        logger.info("[OK] Data generation complete. %d symbols saved.", len(results))
         return results
 
     def _add_features(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -460,5 +460,5 @@ if __name__ == "__main__":
     print("=" * 60)
     for ticker, path in results.items():
         size_mb = Path(path).stat().st_size / 1_048_576
-        print(f"  {ticker:<15} → {path}  ({size_mb:.1f} MB)")
-    print(f"\n✅ Total: {len(results)} symbols ready for training.")
+        print(f"  {ticker:<15} -> {path}  ({size_mb:.1f} MB)")
+    print(f"\n[OK] Total: {len(results)} symbols ready for training.")

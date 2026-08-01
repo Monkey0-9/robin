@@ -1248,7 +1248,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	r.HandleFunc("/api/positions/{symbol}", handleGetPosition).Methods("GET")
 	r.HandleFunc("/api/portfolio", handleGetPortfolioSummary).Methods("GET")
 
-	r.Handle("/stats", jwtAuthMiddleware(rbacMiddleware("admin")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/stats", jwtAuthMiddleware(rbacMiddleware("admin", "trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		orders := o.orderCount.Load()
 		rejects := o.rejectCount.Load()
 		trades := o.tradeCount.Load()
@@ -1270,7 +1270,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	// to prevent blocking the high-throughput Go hot path.
 
 	// POST /api/ai/chat — Quantitative Multi-Agent Chat Assistant
-	r.Handle("/api/ai/chat", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/api/ai/chat", jwtAuthMiddleware(rbacMiddleware("admin", "trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		proxyReq, err := http.NewRequest("POST", "http://127.0.0.1:8000/chat", req.Body)
 		if err != nil {
 			http.Error(w, `{"error":"failed to create proxy request"}`, http.StatusInternalServerError)
@@ -1292,7 +1292,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	})))).Methods("POST")
 
 	// POST /api/ai/trade_decision — Autonomous AI Agent Trade Evaluation
-	r.Handle("/api/ai/trade_decision", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/api/ai/trade_decision", jwtAuthMiddleware(rbacMiddleware("admin", "trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		proxyReq, err := http.NewRequest("POST", "http://127.0.0.1:8000/trade_decision", req.Body)
 		if err != nil {
 			http.Error(w, `{"error":"failed to create proxy request"}`, http.StatusInternalServerError)
@@ -1312,6 +1312,76 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.WriteHeader(proxyResp.StatusCode)
 		io.Copy(w, proxyResp.Body)
 	})))).Methods("POST")
+
+	// GET /api/ai/signal — Real AI signal (action/confidence/regime/sentiment)
+	// for the selected symbol, proxied from the Python AI-agent microservice.
+	r.Handle("/api/ai/signal", jwtAuthMiddleware(rbacMiddleware("admin", "trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		symbol := req.URL.Query().Get("symbol")
+		if symbol == "" {
+			symbol = "BTC-USD"
+		}
+		symbol = strings.ReplaceAll(symbol, "/", "-")
+
+		payload := fmt.Sprintf(`{"symbol":"%s","market_context":"Signal request for %s"}`, symbol, symbol)
+		proxyReq, err := http.NewRequest("POST", "http://127.0.0.1:8000/trade_decision", strings.NewReader(payload))
+		if err != nil {
+			http.Error(w, `{"error":"failed to create proxy request"}`, http.StatusInternalServerError)
+			return
+		}
+		proxyReq.Header.Set("Content-Type", "application/json")
+
+		client := &http.Client{Timeout: 15 * time.Second}
+		proxyResp, err := client.Do(proxyReq)
+		if err != nil {
+			http.Error(w, `{"error":"failed to reach python ai-agent"}`, http.StatusBadGateway)
+			return
+		}
+		defer proxyResp.Body.Close()
+
+		// Decode the Python signal and flatten to a deterministic frontend contract
+		var sig struct {
+			Action      string  `json:"action"`
+			Confidence  float64 `json:"confidence"`
+			Regime      string  `json:"regime"`
+			Sentiment   float64 `json:"sentiment"`
+			Reasoning   string  `json:"reasoning"`
+			Symbol      string  `json:"symbol"`
+			Price       float64 `json:"price"`
+			EntryTarget float64 `json:"entry_target"`
+			Error       string  `json:"error"`
+		}
+		if err := json.NewDecoder(proxyResp.Body).Decode(&sig); err != nil {
+			http.Error(w, `{"error":"invalid signal from ai-agent"}`, http.StatusBadGateway)
+			return
+		}
+		if sig.Error != "" {
+			// Python reported no live market data — signal unavailable.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadGateway)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":  sig.Error,
+				"symbol": sig.Symbol,
+			})
+			return
+		}
+		if sig.Symbol == "" {
+			sig.Symbol = symbol
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"symbol":      sig.Symbol,
+			"action":      sig.Action,
+			"confidence":  sig.Confidence,
+			"regime":      sig.Regime,
+			"sentiment":   sig.Sentiment,
+			"reason":      sig.Reasoning,
+			"price":       sig.Price,
+			"entry_target": sig.EntryTarget,
+			"timestamp":   time.Now().UnixMilli(),
+		})
+	})))).Methods("GET")
 
 	// GET /api/ai/macro_feed — Fetch real-time macro news feed from python agent
 	r.HandleFunc("/api/ai/macro_feed", func(w http.ResponseWriter, req *http.Request) {
@@ -1443,7 +1513,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	}).Methods("GET")
 
 	// GET /api/alpaca/account — Fetch Alpaca account details (JWT Trader required)
-	r.Handle("/api/alpaca/account", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/api/alpaca/account", jwtAuthMiddleware(rbacMiddleware("admin", "trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		alpacaEndpoint := os.Getenv("ALPACA_API_ENDPOINT")
 		if alpacaEndpoint == "" {
 			alpacaEndpoint = "https://paper-api.alpaca.markets/v2"
@@ -1481,7 +1551,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	})))).Methods("GET")
 
 	// GET /api/alpaca/positions — Fetch Alpaca positions (JWT Trader required)
-	r.Handle("/api/alpaca/positions", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/api/alpaca/positions", jwtAuthMiddleware(rbacMiddleware("admin", "trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		alpacaEndpoint := os.Getenv("ALPACA_API_ENDPOINT")
 		if alpacaEndpoint == "" {
 			alpacaEndpoint = "https://paper-api.alpaca.markets/v2"
@@ -1518,7 +1588,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	})))).Methods("GET")
 
 	// GET /api/alpaca/orders — Fetch Alpaca orders (trade history) (JWT Trader required)
-	r.Handle("/api/alpaca/orders", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/api/alpaca/orders", jwtAuthMiddleware(rbacMiddleware("admin", "trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		alpacaEndpoint := os.Getenv("ALPACA_API_ENDPOINT")
 		if alpacaEndpoint == "" {
 			alpacaEndpoint = "https://paper-api.alpaca.markets/v2"
@@ -1555,7 +1625,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	})))).Methods("GET")
 
 	// GET /api/alpaca/assets — Fetch Alpaca assets (JWT Trader required)
-	r.Handle("/api/alpaca/assets", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/api/alpaca/assets", jwtAuthMiddleware(rbacMiddleware("admin", "trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		alpacaEndpoint := os.Getenv("ALPACA_API_ENDPOINT")
 		if alpacaEndpoint == "" {
 			alpacaEndpoint = "https://paper-api.alpaca.markets/v2"

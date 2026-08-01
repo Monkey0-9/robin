@@ -14,6 +14,8 @@ import PositionsTable from './PositionsTable';
 import OrdersTable from './OrdersTable';
 import RiskMetrics from './RiskMetrics';
 import AIPanel from './AIPanel';
+import AISignalPanel from './AISignalPanel';
+import ExecutionCard from './ExecutionCard';
 import AIAutonomousPanel from './AIAutonomousPanel';
 import NewsFeed from './NewsFeed';
 import Disclaimers from './Disclaimers';
@@ -307,6 +309,11 @@ export default function Dashboard() {
                     <OrderEntry />
                   </ErrorBoundary>
                 </div>
+                <div className="flex-[1] min-h-0">
+                  <ErrorBoundary title="Execution Latency">
+                    <ExecutionCard />
+                  </ErrorBoundary>
+                </div>
               </div>
             </div>
           )}
@@ -524,10 +531,17 @@ export default function Dashboard() {
           {/* TAB 4: AI SIGNAL & NEWS FEED */}
           {activeTab === 'ai' && (
             <div className="h-full p-2.5 flex flex-col gap-2.5 overflow-hidden">
-              <div className="flex-[2] min-h-0">
-                <ErrorBoundary title="AI Autonomous Engine">
-                  <AIAutonomousPanel />
-                </ErrorBoundary>
+              <div className="flex-[2] grid grid-cols-12 gap-2.5 min-h-0">
+                <div className="col-span-12 lg:col-span-4 h-full min-h-0">
+                  <ErrorBoundary title="AI Signal Engine">
+                    <AISignalPanel />
+                  </ErrorBoundary>
+                </div>
+                <div className="col-span-12 lg:col-span-8 h-full min-h-0">
+                  <ErrorBoundary title="AI Autonomous Engine">
+                    <AIAutonomousPanel />
+                  </ErrorBoundary>
+                </div>
               </div>
               <div className="flex-[3] grid grid-cols-12 gap-2.5 min-h-0">
                 <div className="col-span-12 md:col-span-6 h-full min-h-0">
