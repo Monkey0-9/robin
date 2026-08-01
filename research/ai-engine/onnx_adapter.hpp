@@ -194,9 +194,17 @@ public:
                 output_names, 1
             );
 
-            // Copy output
+            // Copy output — bounded to the actual tensor size (prevents over-read)
             float* output_data = output_tensors.front().GetTensorMutableData<float>();
-            std::memcpy(&output, output_data, sizeof(ModelPrediction));
+            auto out_shape = output_tensors.front().GetTensorTypeAndShapeInfo().GetShape();
+            size_t out_count = 1;
+            for (auto d : out_shape) {
+                if (d <= 0) break;
+                out_count *= static_cast<size_t>(d);
+            }
+            size_t copy_bytes = std::min(out_count * sizeof(float), sizeof(ModelPrediction));
+            std::memset(&output, 0, sizeof(ModelPrediction));
+            std::memcpy(&output, output_data, copy_bytes);
 
         } catch (const std::exception& e) {
             printf("[ONNX] Inference failed: %s\n", e.what());
@@ -236,9 +244,17 @@ public:
                 output_names, 1
             );
 
-            // Copy batch outputs
+            // Copy batch outputs — bounded to the actual tensor size
             float* output_data = output_tensors.front().GetTensorMutableData<float>();
-            std::memcpy(outputs, output_data, count * sizeof(ModelPrediction));
+            auto out_shape = output_tensors.front().GetTensorTypeAndShapeInfo().GetShape();
+            size_t out_count = 1;
+            for (auto d : out_shape) {
+                if (d <= 0) break;
+                out_count *= static_cast<size_t>(d);
+            }
+            size_t copy_bytes = std::min(out_count * sizeof(float),
+                                         count * sizeof(ModelPrediction));
+            std::memcpy(outputs, output_data, copy_bytes);
 
         } catch (const std::exception& e) {
             return false;

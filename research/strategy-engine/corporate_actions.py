@@ -48,7 +48,19 @@ class CorporateActionsEngine:
     def __init__(self):
         self.dividend_income: Dict[str, float] = {}
 
-    def process_dividend(self, position: Position, dividend: CorporateAction) -> Position:
+    def process_dividend(
+        self,
+        position: Position,
+        dividend: CorporateAction,
+        current_date: str = "",
+    ) -> Position:
+        # Entitlement is determined on the ex-date. A position bought after the
+        # ex-date is NOT entitled to the dividend.
+        if current_date and dividend.ex_date and current_date >= dividend.ex_date:
+            raise ValueError(
+                f"[CA] Position in {position.symbol} bought on {current_date} is after "
+                f"ex-date {dividend.ex_date} — not entitled to dividend."
+            )
         amount = position.qty * dividend.amount
         position.cash_balance += amount
         position.dividend_income += amount
@@ -63,7 +75,9 @@ class CorporateActionsEngine:
             raise ValueError(f"Invalid split ratio: {ratio}")
         old_qty = position.qty
         position.qty *= ratio
+        # Avg cost basis is invariant under a split; only per-share basis changes.
         position.avg_price /= ratio
+        position.cash_balance = position.cash_balance  # unaffected
         print(f"[CA] Stock split {ratio:.2f}:1 on {position.symbol}: "
               f"{old_qty:.0f} -> {position.qty:.0f} shares")
         return position
@@ -75,6 +89,12 @@ class CorporateActionsEngine:
         acquiring_symbol: str,
         exchange_ratio: float,
     ) -> Position:
+        # Guard: only convert the position if it matches the acquisition target.
+        if position.symbol != target_symbol:
+            print(f"[CA] Position {position.symbol} not affected by merger of {target_symbol}")
+            return position
+        if exchange_ratio <= 0:
+            raise ValueError(f"Invalid exchange ratio: {exchange_ratio}")
         new_qty = position.qty * exchange_ratio
         new_avg_price = position.avg_price / exchange_ratio
         print(f"[CA] Merger: {position.symbol} acquired by {acquiring_symbol}. "
@@ -91,6 +111,7 @@ class CorporateActionsEngine:
     def tracking_error_vs_benchmark(
         portfolio_returns: List[float],
         benchmark_returns: List[float],
+        annualize_factor: float = 252.0,
     ) -> float:
         if len(portfolio_returns) != len(benchmark_returns):
             raise ValueError("Return series must have equal length")
@@ -100,24 +121,42 @@ class CorporateActionsEngine:
         diffs = [p - b for p, b in zip(portfolio_returns, benchmark_returns)]
         mean_diff = sum(diffs) / n
         variance = sum((d - mean_diff) ** 2 for d in diffs) / (n - 1)
-        return math.sqrt(variance)
+        return math.sqrt(variance) * math.sqrt(annualize_factor)
 
     @staticmethod
     def dividend_reinvestment(
         position: Position,
         dividend: CorporateAction,
         current_price: float,
+        precision: int = 4
     ) -> Position:
         cash_dividend = position.qty * dividend.amount
         if current_price <= 0:
             print(f"[CA] Cannot reinvest: invalid price {current_price}")
             return position
-        additional_shares = cash_dividend / current_price
+        raw_additional_shares = cash_dividend / current_price
+        
+        # Apply fractional share precision limit
+        multiplier = 10 ** precision
+        additional_shares = math.floor(raw_additional_shares * multiplier) / multiplier
+        
+        # We only consider the *actually reinvested* cash for the cost basis
+        actual_reinvested_cash = additional_shares * current_price
+        residual_cash = cash_dividend - actual_reinvested_cash
+        
+        # Blended cost basis: (old qty * avg_price + new cash) / (old qty + new qty)
+        old_cost = position.qty * position.avg_price
         position.qty += additional_shares
-        position.cash_balance += cash_dividend
+        
+        if position.qty > 0:
+            position.avg_price = (old_cost + actual_reinvested_cash) / position.qty
+            
+        position.cash_balance += (cash_dividend - actual_reinvested_cash)  # Keep the un-invested cash
         position.dividend_income += cash_dividend
-        print(f"[CA] DRIP: ${cash_dividend:.2f} reinvested into "
-              f"{additional_shares:.4f} shares of {position.symbol} at ${current_price:.2f}")
+        
+        print(f"[CA] DRIP: ${actual_reinvested_cash:.2f} reinvested into "
+              f"{additional_shares:.{precision}f} shares of {position.symbol} at ${current_price:.2f}. "
+              f"Residual cash added: ${residual_cash:.2f}")
         return position
 
     def get_total_dividend_income(self) -> float:

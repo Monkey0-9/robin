@@ -1,10 +1,13 @@
 """Robin Signal Model — Python port of the C++ LinearSignalModel
 
-Mirrors the exact logic from research/ai-engine/signal_model.cpp:
-  - Price momentum (40% weight)
-  - Volume pressure (20% weight)
-  - Order book imbalance (30% weight)
-  - Intraday time-of-day component (10% weight)
+Institutional-grade feature engineering:
+  - Price momentum: MACD-style EMA12/EMA26 crossover on log prices (normalized)
+  - Volume pressure: z-score of volume vs rolling average, bounded by tanh
+  - Order book imbalance: depth-weighted (price-level decay)
+  - Intraday time-of-day component
+  - Features standardized online (running mean/std) to comparable scales
+  - Confidence derived from |alpha| relative to recent realized volatility
+    (non-circular: volatility measured on returns, not on alpha)
 
 Used by the yfinance fetcher and backtester to generate alpha signals.
 """
@@ -30,56 +33,132 @@ class ModelOutput:
     confidence: float           # Signal confidence [0, 1]
 
 
+def _ema(values: np.ndarray, span: int) -> float:
+    if len(values) == 0:
+        return 0.0
+    alpha = 2.0 / (span + 1.0)
+    ema = float(values[0])
+    for v in values[1:]:
+        ema = alpha * float(v) + (1.0 - alpha) * ema
+    return ema
+
+
 class RobinSignalModel:
-    def __init__(self):
+    def __init__(self, lookback: int = 64, vol_window: int = 20):
+        self.lookback = lookback
+        self.vol_window = vol_window
         self.price_momentum_w = 0.40
         self.ob_imbalance_w = 0.30
         self.volume_pressure_w = 0.20
         self.intraday_w = 0.10
 
+        # Online feature standardization (running mean/std)
+        self._n_obs = 0
+        self._feature_means = np.zeros(4, dtype=np.float64)
+        self._feature_m2 = np.zeros(4, dtype=np.float64)
+
+        # Running realized volatility (for confidence + lookback adaptation)
+        self._realized_vol = 0.0
+
+    def _standardize(self, features: np.ndarray) -> np.ndarray:
+        """Update running statistics and z-score the feature vector."""
+        n = self._n_obs
+        f = np.asarray(features, dtype=np.float64)
+        if n == 0:
+            self._feature_means = f.copy()
+            self._feature_m2 = np.zeros_like(f)
+            self._n_obs = 1
+            return np.zeros_like(f)
+
+        delta = f - self._feature_means
+        self._feature_means += delta / (n + 1)
+        delta2 = f - self._feature_means
+        self._feature_m2 += delta * delta2
+        self._n_obs += 1
+
+        if self._n_obs < 2:
+            return np.zeros_like(f)
+        var = self._feature_m2 / (self._n_obs - 1)
+        std = np.sqrt(np.maximum(var, 1e-10))
+        return (f - self._feature_means) / std
+
     def compute(self, inp: ModelInput) -> ModelOutput:
-        P = min(len(inp.price_features), 64)
-        price_sum = float(np.sum(inp.price_features[:P]))
-        price_max = float(np.max(inp.price_features[:P]))
-        price_mean = price_sum / P
+        P = min(len(inp.price_features), self.lookback)
+        V = min(len(inp.volume_features), self.lookback)
+        prices = np.asarray(inp.price_features[:P], dtype=np.float64)
+        volumes = np.asarray(inp.volume_features[:V], dtype=np.float64)
 
-        price_momentum = (
-            (price_mean - inp.price_features[0]) / (inp.price_features[0] + 1e-6)
-            if price_mean > 0.0 and inp.price_features[0] > 0.0
-            else 0.0
-        )
+        # --- Price momentum: log-return based, MACD-style ---
+        if P >= 2:
+            log_prices = np.log(np.maximum(prices, 1e-9))
+            ema12 = _ema(log_prices, 12)
+            ema26 = _ema(log_prices, min(26, P))
+            momentum = (ema12 - ema26) / max(abs(ema26), 1e-9)
+        else:
+            momentum = 0.0
 
-        V = min(len(inp.volume_features), 64)
-        vol_sum = float(np.sum(inp.volume_features[:V]))
-        vol_mean = vol_sum / V
-        volume_pressure = float(np.tanh(vol_mean / (vol_mean + 1000.0 + 1e-6)))
+        # --- Volume pressure: z-score vs rolling average ---
+        w = min(self.vol_window, V)
+        if w >= 2:
+            recent = volumes[-w:]
+            vol_ma = float(np.mean(recent))
+            vol_std = float(np.std(recent))
+            current = float(volumes[-1])
+            volume_z = (current - vol_ma) / max(vol_std, 1e-10)
+            volume_pressure = float(np.tanh(volume_z))
+        else:
+            volume_pressure = 0.0
 
+        # --- Order book imbalance: depth-weighted ---
         OB = min(len(inp.order_book_features), 32)
-        bid_vol = float(np.sum(inp.order_book_features[0:OB:2]))
-        ask_vol = float(np.sum(inp.order_book_features[1:OB:2]))
+        bid_w, ask_w = 0.0, 0.0
+        levels = OB // 2
+        for i in range(levels):
+            weight = 1.0 / (1.0 + i)
+            bid_w += float(inp.order_book_features[i * 2]) * weight
+            ask_w += float(inp.order_book_features[i * 2 + 1]) * weight
         ob_imbalance = (
-            (bid_vol - ask_vol) / (bid_vol + ask_vol)
-            if bid_vol + ask_vol > 1e-6
+            (bid_w - ask_w) / (bid_w + ask_w)
+            if bid_w + ask_w > 1e-6
             else 0.0
         )
 
-        intraday = inp.timestamp_features[0] * 2.0 - 1.0
+        # --- Intraday time-of-day ---
+        intraday = float(inp.timestamp_features[0]) * 2.0 - 1.0
 
-        raw_alpha = (
-            self.price_momentum_w * price_momentum
-            + self.ob_imbalance_w * ob_imbalance
-            + self.volume_pressure_w * volume_pressure
-            + self.intraday_w * intraday
+        # --- Standardize all features (zero mean, unit variance) ---
+        raw_features = np.array([momentum, volume_pressure, ob_imbalance, intraday])
+        features = self._standardize(raw_features)
+
+        alpha = (
+            self.price_momentum_w * features[0]
+            + self.ob_imbalance_w * features[2]
+            + self.volume_pressure_w * features[1]
+            + self.intraday_w * features[3]
         )
-        alpha = max(-1.0, min(1.0, raw_alpha))
+        alpha = float(max(-1.0, min(1.0, alpha)))
 
-        volatility = abs(price_max - inp.price_features[0]) / (inp.price_features[0] + 1e-6)
+        # --- Volatility estimate: log-return realized vol (non-circular) ---
+        if P >= 2:
+            log_rets = np.diff(np.log(np.maximum(prices, 1e-9)))
+            realized_vol = float(np.std(log_rets))
+        else:
+            realized_vol = 0.0
+
+        # --- Spread estimate in bps (1/price proxy) ---
+        price_mean = float(np.mean(prices))
         spread_bps = (1.0 / price_mean) * 10000.0 if price_mean > 0.0 else 0.0
-        confidence = min(1.0, abs(alpha) / (volatility + 0.01))
+
+        # --- Confidence: signal strength vs realized vol, not alpha circularity ---
+        if realized_vol > 1e-9:
+            confidence = float(min(1.0, abs(alpha) * 0.5 / (realized_vol + 1e-4)))
+        else:
+            confidence = abs(alpha)
+        confidence = float(max(0.0, min(1.0, confidence)))
 
         return ModelOutput(
             alpha_signal=alpha,
-            volatility_estimate=volatility,
+            volatility_estimate=realized_vol,
             spread_estimate=spread_bps,
             confidence=confidence,
         )
@@ -126,4 +205,3 @@ if __name__ == "__main__":
     out = model.compute(inp)
 
     print(f"Alpha={out.alpha_signal:.4f} Volatility={out.volatility_estimate:.4f} SpreadBps={out.spread_estimate:.4f} Confidence={out.confidence:.4f}")
-    print("Expected:  Alpha~0.0049  Volatility~0.0002  SpreadBps~0.1853  Confidence~0.4860")

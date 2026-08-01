@@ -11,26 +11,21 @@
 // ============================================================================
 // LinearSignalModel — Feature-based trading signal generator
 // ============================================================================
-// NOTE: This is a handcrafted linear model, NOT a neural network / ONNX model.
-// It computes a weighted linear combination of market microstructure features:
-//   - Price momentum (rolling mean of price feature window)
-//   - Volume pressure (rolling mean of volume feature window)
-//   - Order book imbalance (bid volume vs ask volume ratio)
-//   - Time-of-day component (intraday seasonality proxy)
+// Institutional-grade feature engineering (mirrors robin_signal_model.py):
+//   - Price momentum: MACD-style EMA12/EMA26 crossover on log prices
+//   - Volume pressure: z-score of volume vs rolling average, bounded by tanh
+//   - Order book imbalance: depth-weighted (price-level decay)
+//   - Intraday time-of-day component
+//   - Features standardized online (running mean/std) to comparable scales
+//   - Confidence derived from |alpha| relative to recent realized volatility
 //
-// To integrate a real ML model:
-//   1. Add onnxruntime-c or onnxruntime-cxx as a dependency
-//   2. Replace compute() with Ort::Session::Run() calls
-//   3. Keep ModelInput/ModelOutput structs as the interface contract
-//
-// Previously mislabeled as OnnxInferenceEngine (misleading — no ONNX runtime
-// was ever loaded or used).
+// Model weights are loadable from a key=value config file (defaults shown).
 
 namespace quantum { namespace ai {
 
 struct ModelInput {
-    float price_features[64];    // Rolling price window (normalized)
-    float volume_features[64];   // Rolling volume window (normalized)
+    float price_features[64];    // Rolling price window
+    float volume_features[64];   // Rolling volume window
     float order_book_features[32]; // [bid_vol0, ask_vol0, bid_vol1, ask_vol1, ...]
     float timestamp_features[8]; // Time-of-day encoding (sin/cos)
 };
@@ -42,7 +37,7 @@ struct ModelOutput {
     float confidence;          // Signal confidence [0, 1]
 };
 
-// Model weights (hardcoded; in production load from a config/binary file)
+// Model weights (hardcoded defaults; loadable from config file)
 struct LinearWeights {
     float price_momentum_w  = 0.40f;
     float ob_imbalance_w    = 0.30f;
@@ -54,11 +49,10 @@ class LinearSignalModel {
 public:
     LinearSignalModel() noexcept : weights_(), model_name_("LinearSignalModel_v1") {}
 
-    // Load model config from a weights file (future: JSON or binary format)
-    // Returns true always for the linear model since no file is needed.
+    // Load model config from a weights file (key=value lines).
     bool load(const char* config_path) noexcept {
         std::snprintf(config_path_, sizeof(config_path_), "%s", config_path);
-        
+
         std::ifstream infile(config_path_);
         if (infile.is_open()) {
             std::string line;
@@ -84,64 +78,109 @@ public:
     }
 
     ModelOutput compute(const ModelInput& input) noexcept {
-        // --- Price momentum: rolling mean of price feature window ---
-        float price_sum = 0.0f;
-        float price_max = 0.0f;
         constexpr size_t P = 64;
-        for (size_t i = 0; i < P; i++) {
-            price_sum += input.price_features[i];
-            if (input.price_features[i] > price_max)
-                price_max = input.price_features[i];
-        }
-        float price_mean = price_sum / static_cast<float>(P);
-        float price_momentum = (price_mean > 0.0f && input.price_features[0] > 0.0f)
-            ? (price_mean - input.price_features[0]) / (input.price_features[0] + 1e-6f)
-            : 0.0f;
-
-        // --- Volume pressure: rolling mean of volume window ---
-        float vol_sum = 0.0f;
         constexpr size_t V = 64;
-        for (size_t i = 0; i < V; i++) vol_sum += input.volume_features[i];
-        float vol_mean = vol_sum / static_cast<float>(V);
-        // Normalize volume pressure to [-1, 1] range
-        float volume_pressure = std::tanh(vol_mean / (vol_mean + 1000.0f + 1e-6f));
 
-        // --- Order book imbalance: (bid_vol - ask_vol) / (bid_vol + ask_vol) ---
-        float bid_vol = 0.0f, ask_vol = 0.0f;
+        // --- Price momentum: log-return based, MACD-style EMA crossover ---
+        double log_prices[P];
+        double pmin = 1e-9;
+        for (size_t i = 0; i < P; i++) {
+            double p = input.price_features[i];
+            log_prices[i] = std::log(p > pmin ? p : pmin);
+        }
+        double ema12 = log_prices[0];
+        double ema26 = log_prices[0];
+        {
+            const double k12 = 2.0 / (12.0 + 1.0);
+            const double k26 = 2.0 / (26.0 + 1.0);
+            for (size_t i = 1; i < P; i++) {
+                ema12 = k12 * log_prices[i] + (1.0 - k12) * ema12;
+                ema26 = k26 * log_prices[i] + (1.0 - k26) * ema26;
+            }
+        }
+        double momentum = (std::fabs(ema26) > 1e-9) ? (ema12 - ema26) / ema26 : 0.0;
+
+        // --- Volume pressure: z-score vs rolling average, tanh bounded ---
+        constexpr size_t vol_window = 20;
+        double vol_ma = 0.0;
+        for (size_t i = P - vol_window; i < V; i++) vol_ma += input.volume_features[i];
+        vol_ma /= static_cast<double>(vol_window);
+        double vol_var = 0.0;
+        for (size_t i = P - vol_window; i < V; i++) {
+            double d = input.volume_features[i] - vol_ma;
+            vol_var += d * d;
+        }
+        vol_var /= static_cast<double>(vol_window);
+        double vol_std = std::sqrt(vol_var);
+        double volume_z = (vol_std > 1e-10) ? (input.volume_features[V - 1] - vol_ma) / vol_std : 0.0;
+        double volume_pressure = std::tanh(volume_z);
+
+        // --- Order book imbalance: depth-weighted ---
+        double bid_w = 0.0, ask_w = 0.0;
         constexpr size_t OB = 32;
         for (size_t i = 0; i < OB / 2; i++) {
-            bid_vol += input.order_book_features[i * 2];
-            ask_vol += input.order_book_features[i * 2 + 1];
+            double weight = 1.0 / (1.0 + static_cast<double>(i));
+            bid_w += input.order_book_features[i * 2] * weight;
+            ask_w += input.order_book_features[i * 2 + 1] * weight;
         }
-        float ob_imbalance = (bid_vol + ask_vol > 1e-6f)
-            ? (bid_vol - ask_vol) / (bid_vol + ask_vol)
-            : 0.0f;
+        double ob_imbalance = (bid_w + ask_w > 1e-6f)
+            ? (bid_w - ask_w) / (bid_w + ask_w)
+            : 0.0;
 
         // --- Intraday time-of-day component ---
-        float intraday = (input.timestamp_features[0] * 2.0f - 1.0f); // map [0,1] -> [-1,1]
+        double intraday = (input.timestamp_features[0] * 2.0f - 1.0f);
 
-        // --- Composite alpha signal (weighted linear combination) ---
-        float raw_alpha = weights_.price_momentum_w  * price_momentum
-                        + weights_.ob_imbalance_w    * ob_imbalance
-                        + weights_.volume_pressure_w * volume_pressure
-                        + weights_.intraday_w        * intraday;
+        // --- Online feature standardization (running mean/std) ---
+        const double raw[4] = {momentum, volume_pressure, ob_imbalance, intraday};
+        double standardized[4];
+        for (int f = 0; f < 4; f++) {
+            double delta = raw[f] - feature_means_[f];
+            feature_means_[f] += delta / static_cast<double>(n_obs_ + 1);
+            double delta2 = raw[f] - feature_means_[f];
+            feature_m2_[f] += delta * delta2;
+            double var = (n_obs_ > 1) ? feature_m2_[f] / static_cast<double>(n_obs_) : 0.0;
+            double sd = std::sqrt(var > 0.0 ? var : 1e-10);
+            standardized[f] = (sd > 1e-10) ? (raw[f] - feature_means_[f]) / sd : 0.0;
+        }
+        n_obs_++;
 
-        // Clip alpha to [-1, 1]
-        float alpha = std::fmax(-1.0f, std::fmin(1.0f, raw_alpha));
+        // --- Composite alpha (weighted linear combination) ---
+        double raw_alpha = weights_.price_momentum_w  * standardized[0]
+                         + weights_.volume_pressure_w * standardized[1]
+                         + weights_.ob_imbalance_w    * standardized[2]
+                         + weights_.intraday_w        * standardized[3];
 
-        // --- Volatility estimate (price range / mean proxy) ---
-        float volatility = std::fabs(price_max - input.price_features[0])
-                         / (input.price_features[0] + 1e-6f);
+        double alpha = std::fmax(-1.0, std::fmin(1.0, raw_alpha));
 
-        // --- Spread estimate in basis points (1/price * 10000 proxy) ---
-        float spread_bps = (price_mean > 0.0f)
-            ? (1.0f / price_mean) * 10000.0f
-            : 0.0f;
+        // --- Volatility estimate: log-return realized vol ---
+        double sum_sq = 0.0;
+        for (size_t i = 1; i < P; i++) {
+            double r = log_prices[i] - log_prices[i - 1];
+            sum_sq += r * r;
+        }
+        double realized_vol = std::sqrt(sum_sq / static_cast<double>(P - 1));
 
-        // --- Confidence: based on signal strength and volatility context ---
-        float confidence = std::fmin(1.0f, std::fabs(alpha) / (volatility + 0.01f));
+        // --- Spread estimate in basis points (1/price proxy) ---
+        double price_sum = 0.0;
+        for (size_t i = 0; i < P; i++) price_sum += input.price_features[i];
+        double price_mean = price_sum / static_cast<double>(P);
+        double spread_bps = (price_mean > 0.0f)
+            ? (1.0 / price_mean) * 10000.0
+            : 0.0;
 
-        return ModelOutput{alpha, volatility, spread_bps, confidence};
+        // --- Confidence: |alpha| vs realized vol (non-circular) ---
+        double confidence;
+        if (realized_vol > 1e-9) {
+            confidence = std::fabs(alpha) * 0.5 / (realized_vol + 1e-4);
+        } else {
+            confidence = std::fabs(alpha);
+        }
+        confidence = std::fmax(0.0, std::fmin(1.0, confidence));
+
+        return ModelOutput{static_cast<float>(alpha),
+                           static_cast<float>(realized_vol),
+                           static_cast<float>(spread_bps),
+                           static_cast<float>(confidence)};
     }
 
     const char* name() const noexcept { return model_name_; }
@@ -150,6 +189,11 @@ private:
     LinearWeights weights_;
     char config_path_[256] = {};
     const char* model_name_;
+
+    // Online standardization state
+    size_t n_obs_ = 0;
+    double feature_means_[4] = {0.0, 0.0, 0.0, 0.0};
+    double feature_m2_[4] = {0.0, 0.0, 0.0, 0.0};
 };
 
 }} // namespace quantum::ai

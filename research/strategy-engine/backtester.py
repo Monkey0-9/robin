@@ -83,12 +83,14 @@ class StrategyBacktester:
         slippage_model: Optional[SlippageModel] = None,
         mean_latency_ms: float = 5.0,
         jitter_ms: float = 2.0,
+        position_sizer: Optional["KellyPositionSizer"] = None,
     ):
         self.initial_capital = initial_capital
         self.commission_bps = commission_bps
         self.slippage_model = slippage_model or SlippageModel()
         self.mean_latency_ms = mean_latency_ms
         self.jitter_ms = jitter_ms
+        self.position_sizer = position_sizer
 
     def _calc_transaction_costs(self, notional: float) -> tuple[float, float, float]:
         commission = notional * (self.commission_bps / 10_000.0)
@@ -111,8 +113,10 @@ class StrategyBacktester:
         n = len(prices)
         capital = float(self.initial_capital)
         position = 0.0
+        position_entry_price = 0.0
         equity = np.empty(n)
         trades: List[Trade] = []
+        self._closed_returns: List[float] = []
         total_commission = 0.0
         total_slippage = 0.0
         total_latency_cost = 0.0
@@ -122,7 +126,19 @@ class StrategyBacktester:
             sig = int(signals[i])
 
             if sig == 1 and capital > price:
-                qty = (capital * 0.95) / price
+                if self.position_sizer is not None:
+                    # Kelly-sized position: apply capital limit to avoid leverage
+                    sizing = self.position_sizer.compute_from_trade_history(
+                        self._closed_returns,
+                        price=price,
+                        confidence=1.0,
+                        symbol='SYM',
+                    )
+                    fraction = max(sizing.fraction, 0.0)
+                    notional_target = min(capital * fraction, capital * 0.95)
+                else:
+                    notional_target = capital * 0.95
+                qty = notional_target / price
                 notional = qty * price
                 commission, slippage, latency_cost = self._calc_transaction_costs(notional)
                 total_cost = notional + commission + slippage + latency_cost
@@ -135,6 +151,7 @@ class StrategyBacktester:
 
                 capital -= total_cost
                 position += qty
+                position_entry_price = price
                 total_commission += commission
                 total_slippage += slippage
                 total_latency_cost += latency_cost
@@ -146,12 +163,18 @@ class StrategyBacktester:
                 commission, slippage, latency_cost = self._calc_transaction_costs(notional)
                 proceeds = notional - commission - slippage - latency_cost
                 capital += proceeds
+                # Realized per-trade return (net of ALL costs) for Kelly measurement
+                total_entry_cost = position_entry_price * position
+                realized_pnl = proceeds - total_entry_cost
+                self._closed_returns.append(realized_pnl / total_entry_cost if total_entry_cost > 0 else 0.0)
+                
                 total_commission += commission
                 total_slippage += slippage
                 total_latency_cost += latency_cost
                 trades.append(Trade(i, 'SYM', OrderSide.SELL, price, position, notional,
                                     commission, slippage, latency_cost))
                 position = 0.0
+                position_entry_price = 0.0
 
             equity[i] = capital + position * price
 
@@ -325,13 +348,13 @@ def run_backtest_with_100yr_parquet(
                     market_summary, headlines, curr_price
                 )
             )
+
+            if sig and sig.get("action") != "HOLD":
+                action = sig.get("action")
+                val = 1 if action == "BUY" else (-1 if action == "SELL" else 0)
+                signals[i : min(i + 10, len(prices))] = val
     finally:
         loop.close()
-
-        if sig and sig.get("action") != "HOLD":
-            action = sig.get("action")
-            val = 1 if action == "BUY" else (-1 if action == "SELL" else 0)
-            signals[i : min(i + 10, len(prices))] = val
 
     bt = StrategyBacktester(
         initial_capital=initial_capital,

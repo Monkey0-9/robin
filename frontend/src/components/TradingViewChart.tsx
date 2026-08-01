@@ -38,7 +38,7 @@ async function fetchCandles(symbol: string, resolution: string, count = 200): Pr
     const data = await res.json();
     if (!Array.isArray(data) || data.length === 0) return [];
     return data.map((c: any) => ({
-      time: Math.floor(c.time / 1000) || c.time,
+      time: (c.time > 1e10 ? Math.floor(c.time / 1000) : c.time) as number,
       open: c.open,
       high: c.high,
       low: c.low,

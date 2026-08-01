@@ -105,7 +105,8 @@ class MeanReversionStrategy(Strategy):
     """
     Buy when price drops >z_threshold standard deviations below rolling mean.
     Sell when price rises >z_threshold standard deviations above rolling mean.
-    Uses Bollinger Band z-score on closing price.
+    Uses Bollinger Band z-score on the typical price (H+L+C)/3, which is more
+    robust to single-print spikes than close alone.
     """
 
     def __init__(
@@ -117,22 +118,23 @@ class MeanReversionStrategy(Strategy):
         super().__init__("MeanReversion", symbol)
         self.lookback    = lookback
         self.z_threshold = z_threshold
-        self._prices: deque[float] = deque(maxlen=lookback)
+        self._typical: deque[float] = deque(maxlen=lookback)
 
     def on_bar(self, bar: Bar) -> Optional[Signal]:
-        self._prices.append(bar.close)
+        typical = (bar.high + bar.low + bar.close) / 3.0
+        self._typical.append(typical)
 
-        if len(self._prices) < self.lookback:
+        if len(self._typical) < self.lookback:
             return None
 
-        arr = np.array(self._prices)
+        arr = np.array(self._typical)
         ma  = arr.mean()
         std = arr.std()
 
         if std < 1e-10:
             return None
 
-        z = (bar.close - ma) / std
+        z = (typical - ma) / std
 
         if z < -self.z_threshold:
             return Signal(
@@ -155,7 +157,7 @@ class MeanReversionStrategy(Strategy):
         return None
 
     def reset(self):
-        self._prices.clear()
+        self._typical.clear()
 
 
 # ─── Strategy 2: Momentum ─────────────────────────────────────────────────────
@@ -217,24 +219,30 @@ class MomentumStrategy(Strategy):
         if bar.close > 0 and (atr / bar.close) < self.min_atr_pct:
             return None
 
-        strength = abs(sma_fast - sma_slow) / (sma_slow + 1e-10)
+        # ATR-normalized momentum: |SMA_fast - SMA_slow| in units of ATR.
+        # This makes strength comparable across symbols and regimes, unlike a
+        # raw % gap which is meaningless when vol is flat.
+        atr_units = abs(sma_fast - sma_slow) / (atr + 1e-10)
+        strength  = min(atr_units / 3.0, 1.0)  # 3 ATR gap -> full strength
 
-        if sma_fast > sma_slow * 1.001:
+        if sma_fast > sma_slow:
             return Signal(
                 side=Side.BUY,
-                strength=min(strength * 20, 1.0),
+                strength=strength,
                 symbol=self.symbol,
                 strategy=self.name,
-                reason=f"SMA{self.fast}={sma_fast:.4f} > SMA{self.slow}={sma_slow:.4f} — uptrend",
+                reason=f"SMA{self.fast}={sma_fast:.4f} > SMA{self.slow}={sma_slow:.4f} "
+                       f"(gap={atr_units:.2f} ATR) — uptrend",
                 bar=bar,
             )
-        elif sma_fast < sma_slow * 0.999:
+        elif sma_fast < sma_slow:
             return Signal(
                 side=Side.SELL,
-                strength=min(strength * 20, 1.0),
+                strength=strength,
                 symbol=self.symbol,
                 strategy=self.name,
-                reason=f"SMA{self.fast}={sma_fast:.4f} < SMA{self.slow}={sma_slow:.4f} — downtrend",
+                reason=f"SMA{self.fast}={sma_fast:.4f} < SMA{self.slow}={sma_slow:.4f} "
+                       f"(gap={atr_units:.2f} ATR) — downtrend",
                 bar=bar,
             )
         return None
@@ -274,6 +282,8 @@ class AIEnhancedStrategy(Strategy):
         self._last_sentiment = 0.0
         self._last_ai_action = "HOLD"
         self._pending_headlines: list[str] = []
+        self._price_history: deque[float] = deque(maxlen=500)
+        self._volume_history: deque[float] = deque(maxlen=500)
 
     def add_headlines(self, headlines: list[str]):
         """Feed news headlines to the strategy for next AI update."""
@@ -282,6 +292,8 @@ class AIEnhancedStrategy(Strategy):
     def on_bar(self, bar: Bar) -> Optional[Signal]:
         """Synchronous path — used in backtester."""
         self._bar_count += 1
+        self._price_history.append(bar.close)
+        self._volume_history.append(bar.volume)
         tech_signal = self._technical.on_bar(bar)
 
         # Between AI updates: use last known AI action as filter
@@ -315,9 +327,11 @@ class AIEnhancedStrategy(Strategy):
             try:
                 ai_result = await asyncio.wait_for(
                     self._orchestrator.execute_sequential_pipeline(
-                        mock_market_summary=bar.to_summary(),
-                        mock_headlines=self._pending_headlines or ["No news"],
+                        market_summary=bar.to_summary(),
+                        headlines=self._pending_headlines or ["No news"],
                         current_price=bar.close,
+                        price_history=list(self._price_history)[:-1],
+                        volume_history=list(self._volume_history)[:-1],
                     ),
                     timeout=30.0,  # 30s timeout — sequential LLM pipeline
                 )
@@ -337,6 +351,8 @@ class AIEnhancedStrategy(Strategy):
         self._technical.reset()
         self._bar_count      = 0
         self._last_ai_action = "HOLD"
+        self._price_history.clear()
+        self._volume_history.clear()
 
 
 # ─── Strategy Registry ────────────────────────────────────────────────────────
@@ -384,4 +400,4 @@ if __name__ == "__main__":
             print(f"  Bar {i:3d}: {signal.side.value:5s} @ {price:,.2f} | "
                   f"strength={signal.strength:.2f} | {signal.reason}")
 
-    print(f"\n✅ {len(signals)} signals generated from 200 bars.")
+    print(f"\n-> {len(signals)} signals generated from 200 bars.")

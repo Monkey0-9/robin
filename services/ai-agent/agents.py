@@ -60,112 +60,77 @@ class LLMBaseAgent:
 
 # ─── Agent 1: Market Regime Detector ─────────────────────────────────────────
 
-class MarketRegimeDetector(LLMBaseAgent):
+class MarketRegimeDetector:
     """
-    Uses Phi-3.5-mini-instruct (Q4_K_M) via llama-cpp-python.
-    Loads 28 layers on GPU, 2 on CPU to fit within 4GB VRAM.
-    Sequential execution: load → infer → unload.
+    Uses GaussianHMM for statistically rigorous, <1ms regime detection.
+    Replaces the LLM to save VRAM and eliminate prompt latency/hallucinations.
     """
 
     VALID_REGIMES = {"Bull", "Bear", "Range", "Volatile"}
 
-    def __init__(self):
-        super().__init__(
-            "Phi-3.5-mini-instruct-Q4_K_M.gguf",
-            vram_usage_mb=2200
-        )
-        self._llm = None
+    def __init__(self, n_regimes=4):
+        self.n_regimes = n_regimes
+        self.model = None
+        self.regime_map = {0: "Bull", 1: "Bear", 2: "Range", 3: "Volatile"}
+        self.is_loaded = False
+        self.model_path = MODEL_DIR / "hmm_regime_model.pkl"
+        self.model_name = "GaussianHMM"
 
     def load(self):
-        if not PHI_MODEL_PATH.exists():
-            logger.error(
-                "Model not found: %s\n"
-                "Run: bash scripts/download_models.sh",
-                PHI_MODEL_PATH
-            )
-            raise FileNotFoundError(f"Model not found: {PHI_MODEL_PATH}")
-
         try:
-            from llama_cpp import Llama
-        except ImportError as err:
-            raise ImportError(
-                "llama-cpp-python not installed.\n"
-                "Install with CUDA: pip install llama-cpp-python "
-                "--extra-index-url "
-                "https://abetlen.github.io/llama-cpp-python/whl/cu122"
-            ) from err
+            import joblib
+            if self.model_path.exists():
+                self.model = joblib.load(self.model_path)
+                self.is_loaded = True
+                logger.info("[HMM] Regime model loaded from disk.")
+            else:
+                logger.warning("[HMM] Model not found. Call fit() first. Will default to Range.")
+        except ImportError:
+            logger.warning("[HMM] joblib not installed.")
 
-        logger.info(
-            "[VRAM] Loading %s (~%dMB VRAM) ...",
-            self.model_name,
-            self.vram_usage_mb
-        )
-        t0 = time.perf_counter()
-        self._llm = Llama(
-            model_path=str(PHI_MODEL_PATH),
-            n_gpu_layers=28,      # Offload 28/30 layers to RTX 2050
-            n_ctx=2048,           # Context window (2K sufficient)
-            n_threads=4,          # Use 4 of i5's cores (leave 2–4 for OS)
-            n_batch=256,
-            verbose=False,
-            logits_all=False,
-        )
-        elapsed = (time.perf_counter() - t0) * 1000
-        logger.info("[VRAM] %s loaded in %.0fms", self.model_name, elapsed)
-        self.is_loaded = True
-        self._load_time_ns = time.time_ns()
+    def fit(self, returns: np.ndarray, volumes: np.ndarray):
+        try:
+            from hmmlearn.hmm import GaussianHMM
+            import pandas as pd
+            import joblib
+            
+            self.model = GaussianHMM(n_components=self.n_regimes, covariance_type="full", n_iter=100)
+            
+            # Features: [return, volatility, volume_zscore]
+            vol = pd.Series(returns).rolling(20).std().bfill().values
+            vol_z = (volumes - np.mean(volumes)) / (np.std(volumes) + 1e-10)
+            X = np.column_stack([returns, vol, vol_z])
+            self.model.fit(X)
+            
+            joblib.dump(self.model, self.model_path)
+            self.is_loaded = True
+            logger.info("[HMM] Model fitted and saved.")
+        except ImportError as e:
+            logger.error("[HMM] Missing dependencies for fit: %s", e)
 
-    def detect_regime(self, ohlcv_summary: str) -> str:
+    def detect_regime(self, returns: list[float], volumes: list[float]) -> str:
         """
         Returns one of: Bull, Bear, Range, Volatile.
-        Falls back to 'Range' if model output is invalid.
         """
-        if not self.is_loaded:
-            raise RuntimeError("Call load() before detect_regime()")
-
-        prompt = (
-            "<|system|>\n"
-            "You are a quantitative market analyst. "
-            "Classify market regime precisely.\n"
-            "<|end|>\n"
-            "<|user|>\n"
-            f"Market data summary:\n{ohlcv_summary}\n\n"
-            "Classify the current market regime as EXACTLY one word: "
-            "Bull, Bear, Range, or Volatile.\n"
-            "Reply with ONLY that word, nothing else.\n"
-            "<|end|>\n"
-            "<|assistant|>\n"
-        )
-
-        t0 = time.perf_counter()
-        result = self._llm(
-            prompt,
-            max_tokens=5,
-            temperature=0.0,       # Deterministic
-            stop=["<|end|>", "\n"],
-        )
-        elapsed_ms = (time.perf_counter() - t0) * 1000
-        logger.debug("[Phi-3.5] Regime inference: %.1fms", elapsed_ms)
-
-        raw = result["choices"][0]["text"].strip().capitalize()
-
-        # Validate output — LLMs can hallucinate
-        if raw in self.VALID_REGIMES:
-            return raw
-
-        logger.warning(
-            "[Phi-3.5] Unexpected regime output: %r — defaulting to Range",
-            raw
-        )
-        return "Range"
+        if not self.is_loaded or self.model is None or not returns:
+            return "Range"
+            
+        try:
+            returns_arr = np.array(returns)
+            volumes_arr = np.array(volumes)
+            
+            vol = np.std(returns_arr[-20:]) if len(returns_arr) >= 20 else np.std(returns_arr)
+            vol_z = (np.mean(volumes_arr[-5:]) - np.mean(volumes_arr)) / (np.std(volumes_arr) + 1e-10)
+            
+            X = np.array([[returns_arr[-1], vol, vol_z]])
+            regime = self.model.predict(X)[0]
+            return self.regime_map.get(regime, "Range")
+        except Exception as e:
+            logger.error(f"[HMM] Predict failed: {e}")
+            return "Range"
 
     def unload(self):
-        logger.info("[VRAM] Unloading %s ...", self.model_name)
-        del self._llm
-        self._llm = None
-        self._force_vram_release()
         self.is_loaded = False
-        logger.info("[VRAM] %s unloaded.", self.model_name)
 
 
 # ─── Agent 2: News Sentiment Analyst ─────────────────────────────────────────
@@ -302,43 +267,29 @@ class NewsSentimentAnalyst(LLMBaseAgent):
 
 # ─── Agent 3: Trade Signal Generator ─────────────────────────────────────────
 
-class TradeSignalGenerator(LLMBaseAgent):
+class TradeSignalGenerator:
     """
-    Deterministic regime × sentiment signal matrix — no LLM required.
-    Produces BUY / SELL / HOLD with a confidence score and suggested
-    Kelly fraction for position sizing.
-
-    Design rationale: A third LLM would push VRAM over 4GB and add
-    unnecessary latency. The signal logic is well-specified enough
-    to be a lookup table. Keeps inference deterministic and auditable.
+    Uses trained LGBMClassifier to predict trade signals (BUY/SELL/HOLD).
+    Replaces the deterministic SIGNAL_MATRIX with learned weights.
     """
-
-    # Regime × Sentiment → (action, confidence_base)
-    # confidence_base scaled by sentiment magnitude
-    SIGNAL_MATRIX = {
-        #  (regime,     sentiment_direction) → (action, conf)
-        ("Bull",     "positive"): ("HOLD",  0.4),   # overbought, wait
-        ("Bull",     "neutral"):  ("HOLD",  0.3),
-        ("Bull",     "negative"): ("SELL",  0.75),  # divergence — sell high
-        ("Bear",     "positive"): ("BUY",   0.75),  # divergence — buy low
-        ("Bear",     "neutral"):  ("HOLD",  0.3),
-        ("Bear",     "negative"): ("HOLD",  0.4),   # oversold, wait
-        ("Range",    "positive"): ("SELL",  0.6),   # upper band
-        ("Range",    "neutral"):  ("HOLD",  0.2),
-        ("Range",    "negative"): ("BUY",   0.6),   # lower band
-        ("Volatile", "positive"): ("HOLD",  0.1),   # too risky
-        ("Volatile", "neutral"):  ("HOLD",  0.1),
-        ("Volatile", "negative"): ("HOLD",  0.1),
-    }
-
-    SENTIMENT_THRESHOLD_STRONG = 0.5
-    SENTIMENT_THRESHOLD_WEAK = 0.2
 
     def __init__(self):
-        super().__init__("SignalMatrix-v1.0-deterministic", vram_usage_mb=0)
+        self.model = None
+        self.is_loaded = False
+        self.model_path = MODEL_DIR / "lgbm_signal_classifier.txt"
+        self.model_name = "LGBMSignalClassifier"
 
     def load(self):
-        self.is_loaded = True  # No model to load
+        if self.model_path.exists():
+            try:
+                import lightgbm as lgb
+                self.model = lgb.Booster(model_file=str(self.model_path))
+                self.is_loaded = True
+                logger.info("[LGBM] Signal classifier loaded.")
+            except ImportError:
+                logger.warning("[LGBM] lightgbm not installed.")
+        else:
+            logger.warning("[LGBM] Model not found. Call model_trainer to train. Using fallback logic.")
 
     def generate_signal(
         self,
@@ -347,34 +298,32 @@ class TradeSignalGenerator(LLMBaseAgent):
         price: float,
         symbol: str = "BTC-USD",
     ) -> dict:
-        """
-        Generate a trade signal from regime and sentiment.
-        Returns dict with action, reason, confidence, entry_target, etc.
-        """
-        if not self.is_loaded:
-            raise RuntimeError("Call load() before generate_signal()")
-
-        # Map sentiment float → direction
-        if sentiment > self.SENTIMENT_THRESHOLD_WEAK:
-            sent_dir = "positive"
-        elif sentiment < -self.SENTIMENT_THRESHOLD_WEAK:
-            sent_dir = "negative"
+        action, confidence = "HOLD", 0.1
+        
+        if not self.is_loaded or self.model is None:
+            # Fallback to simple rule if not trained
+            if sentiment > 0.5:
+                action, confidence = "BUY", 0.6
+            elif sentiment < -0.5:
+                action, confidence = "SELL", 0.6
         else:
-            sent_dir = "neutral"
-
-        action, base_conf = self.SIGNAL_MATRIX.get(
-            (regime, sent_dir), ("HOLD", 0.1)
-        )
-
-        # Scale confidence by magnitude of sentiment signal
-        confidence = float(np.clip(base_conf * (1 + abs(sentiment)), 0.0, 1.0))
-
-        # Strong sentiment boosts signal strength
-        if abs(sentiment) > self.SENTIMENT_THRESHOLD_STRONG:
-            confidence = min(confidence * 1.2, 0.95)
-
-        reason = self._build_reason(regime, sentiment, sent_dir, action)
-
+            try:
+                # 0=Bull, 1=Bear, 2=Range, 3=Volatile
+                reg_map = {"Bull": 0, "Bear": 1, "Range": 2, "Volatile": 3}
+                reg_val = reg_map.get(regime, 2)
+                
+                # Features: regime, sentiment
+                X = np.array([[reg_val, sentiment]])
+                probs = self.model.predict(X)[0] # Multiclass probs: [BUY, SELL, HOLD]
+                
+                classes = ["BUY", "SELL", "HOLD"]
+                pred_idx = int(np.argmax(probs))
+                action = classes[pred_idx]
+                confidence = float(probs[pred_idx])
+            except Exception as e:
+                logger.error(f"[LGBM] Predict failed: {e}")
+                
+        reason = f"{regime} regime, sentiment {sentiment:+.2f} -> {action} ({confidence:.1%} conf)"
         return {
             "action":        action,
             "reason":        reason,
@@ -385,31 +334,6 @@ class TradeSignalGenerator(LLMBaseAgent):
             "symbol":        symbol,
             "generated_at_ns": time.time_ns(),
         }
-
-    def _build_reason(
-        self,
-        regime: str,
-        sentiment: float,
-        sent_dir: str,
-        action: str
-    ) -> str:
-        sentiment_pct = f"{sentiment:+.1%}"
-        if action == "BUY":
-            return (
-                f"{regime} regime with {sent_dir} sentiment divergence "
-                f"({sentiment_pct}) — "
-                "mean-reversion BUY signal: price below fair value."
-            )
-        elif action == "SELL":
-            return (
-                f"{regime} regime with {sent_dir} sentiment divergence "
-                f"({sentiment_pct}) — "
-                "mean-reversion SELL signal: price above fair value."
-            )
-        return (
-            f"{regime} regime, {sent_dir} sentiment ({sentiment_pct}) — "
-            "insufficient confluence for a trade. HOLD."
-        )
 
     def unload(self):
         self.is_loaded = False  # Nothing to unload

@@ -241,10 +241,11 @@ class DataEngine:
 
         close = df["close"]
 
-        # Returns
-        df["ret_1d"]  = close.pct_change(1)
-        df["ret_5d"]  = close.pct_change(5)
-        df["ret_20d"] = close.pct_change(20)
+        # Log-returns (stationary, scale-invariant) — not simple pct_change
+        log_close = np.log(close)
+        df["ret_1d"]  = log_close.diff(1)
+        df["ret_5d"]  = log_close.diff(5)
+        df["ret_20d"] = log_close.diff(20)
 
         # Volatility
         df["vol_10d"] = df["ret_1d"].rolling(10).std()
@@ -258,8 +259,10 @@ class DataEngine:
         df["ema_12"]  = close.ewm(span=12, adjust=False).mean()
         df["ema_26"]  = close.ewm(span=26, adjust=False).mean()
 
-        # MACD
-        df["macd"]        = df["ema_12"] - df["ema_26"]
+        # MACD (stationary in log space: EMA of log-close)
+        log_ema_12 = pd.Series(log_close).ewm(span=12, adjust=False).mean()
+        log_ema_26 = pd.Series(log_close).ewm(span=26, adjust=False).mean()
+        df["macd"]        = log_ema_12 - log_ema_26
         df["macd_signal"] = df["macd"].ewm(span=9, adjust=False).mean()
         df["macd_hist"]   = df["macd"] - df["macd_signal"]
 
@@ -277,25 +280,132 @@ class DataEngine:
         df["bb_lower"] = bb_mid - 2 * bb_std
         df["bb_pos"]   = (close - df["bb_lower"]) / (df["bb_upper"] - df["bb_lower"] + 1e-10)
 
-        # ATR (14-period)
+        # ATR (14-period) — normalize by price to keep stationary
         hl  = df["high"] - df["low"]
         hpc = (df["high"] - close.shift(1)).abs()
         lpc = (df["low"]  - close.shift(1)).abs()
-        df["atr_14"] = pd.concat([hl, hpc, lpc], axis=1).max(axis=1).rolling(14).mean()
+        atr = pd.concat([hl, hpc, lpc], axis=1).max(axis=1).rolling(14).mean()
+        df["atr_14"] = atr / close.replace(0, np.nan)  # ATR% — scale-invariant
 
         # Volume z-score
         vol_ma = df["volume"].rolling(20).mean()
         vol_sd = df["volume"].rolling(20).std()
         df["volume_zscore"] = (df["volume"] - vol_ma) / vol_sd.replace(0, 1e-10)
 
-        # Price relative to MAs
+        # Price relative to MAs (stationary ratio features)
         df["price_vs_sma50"]  = (close / df["sma_50"])  - 1
         df["price_vs_sma200"] = (close / df["sma_200"]) - 1
 
-        # Target (Future 5-day return)
-        df["target_5d"] = df["close"].shift(-5) / df["close"] - 1
+        # Target (Future 5-day log-return)
+        df["target_5d"] = log_close.shift(-5) - log_close
 
         return df
+
+    # ─── Stationarity & feature selection ─────────────────────────────────────
+
+    FEATURE_COLS = [
+        "ret_1d", "ret_5d", "ret_20d",
+        "vol_10d", "vol_20d", "vol_60d",
+        "macd", "macd_signal", "macd_hist",
+        "rsi_14", "bb_pos", "atr_14", "volume_zscore",
+        "price_vs_sma50", "price_vs_sma200",
+    ]
+
+    def adf_stat(self, series: pd.Series) -> dict:
+        """
+        Augmented Dickey-Fuller test for stationarity.
+
+        Returns dict with test statistic, p-value, and a boolean `stationary`
+        at the 5% level. Non-stationary features (raw price levels) should be
+        excluded from ML training.
+        """
+        try:
+            from statsmodels.tsa.stattools import adfuller
+        except ImportError:
+            logger.warning("statsmodels not installed — skipping ADF test")
+            return {"stat": np.nan, "pvalue": np.nan, "stationary": True, "skipped": True}
+        s = series.dropna()
+        if len(s) < 30:
+            return {"stat": np.nan, "pvalue": np.nan, "stationary": False, "skipped": True}
+        stat, pvalue, *_ = adfuller(s.values, autolag="AIC")
+        return {"stat": float(stat), "pvalue": float(pvalue),
+                "stationary": bool(pvalue < 0.05), "skipped": False}
+
+    def check_feature_stationarity(self, df: pd.DataFrame, max_diffs: int = 1) -> pd.DataFrame:
+        """
+        Run ADF on candidate features. If non-stationary, apply differencing.
+        Modifies df in-place and returns a DataFrame of results.
+        """
+        rows = []
+        for col in self.FEATURE_COLS:
+            if col not in df.columns:
+                continue
+                
+            series = df[col]
+            res = self.adf_stat(series)
+            diffs = 0
+            
+            while not res.get("stationary", True) and diffs < max_diffs:
+                df[col] = df[col].diff()
+                series = df[col]
+                res = self.adf_stat(series)
+                diffs += 1
+                
+            rows.append({"feature": col, "diffs": diffs, **res})
+            
+        return pd.DataFrame(rows)
+
+    def select_features(self, df: pd.DataFrame, target_col: str = "target_5d") -> list[str]:
+        """
+        Feature selection using ADF stationarity checks and L1 Lasso regularization.
+        """
+        try:
+            from sklearn.linear_model import LassoCV
+            from sklearn.preprocessing import StandardScaler
+        except ImportError:
+            logger.warning("scikit-learn not installed, falling back to all features")
+            return [c for c in self.FEATURE_COLS if c in df.columns]
+
+        # 1. Enforce stationarity (modifies df in-place)
+        self.check_feature_stationarity(df)
+
+        available = [c for c in self.FEATURE_COLS if c in df.columns]
+        if not available or target_col not in df.columns:
+            return available
+
+        # Drop NaNs created by differencing/shifting
+        temp_df = df[available + [target_col]].dropna()
+        if temp_df.empty or len(temp_df) < 50:
+            return available
+            
+        X = temp_df[available]
+        y = temp_df[target_col]
+        
+        # 2. Winsorize at 1/99 percentiles to handle outliers
+        for col in X.columns:
+            lo, hi = X[col].quantile([0.01, 0.99])
+            X.loc[:, col] = X[col].clip(lo, hi)
+            
+        # 3. Scale features
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        # 4. L1 Lasso Feature Selection
+        # Use TimeSeriesSplit or standard CV; standard 5-fold is fine for initial pass
+        lasso = LassoCV(cv=5, random_state=42, max_iter=10000, n_jobs=-1)
+        lasso.fit(X_scaled, y)
+        
+        # Keep features with non-zero coefficients
+        selected = [available[i] for i, coef in enumerate(lasso.coef_) if abs(coef) > 1e-5]
+        
+        # Fallback if Lasso zeroes out everything (can happen with high penalty)
+        if not selected:
+            logger.warning("Lasso dropped all features. Falling back to correlation.")
+            corr = X.corrwith(y).abs().sort_values(ascending=False)
+            selected = corr.head(5).index.tolist()
+            
+        logger.info("Lasso selected %d features out of %d", len(selected), len(available))
+        return selected
 
     # ─── Dataset loading ─────────────────────────────────────────────────────
 

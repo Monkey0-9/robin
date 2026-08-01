@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from strategy_engine import Bar, Signal, Side, Strategy
+from position_sizer import KellyPositionSizer
 
 logger = logging.getLogger("backtester")
 
@@ -89,7 +90,7 @@ class BacktestResult:
     def print_summary(self):
         print("\n" + "=" * 65)
         print(f"BACKTEST RESULTS: {self.strategy} on {self.symbol}")
-        print(f"Period: {self.start_date} → {self.end_date} ({self.n_bars} bars)")
+        print(f"Period: {self.start_date} -> {self.end_date} ({self.n_bars} bars)")
         print("=" * 65)
         print(f"  Total Return:          {self.total_return_pct:>+8.2f}%")
         print(f"  Annualized Return:     {self.annualized_return_pct:>+8.2f}%")
@@ -136,6 +137,10 @@ class Backtester:
         self.base_latency_ms  = base_latency_ms
         self.jitter_ms        = jitter_ms
         self.enable_jitter    = enable_jitter
+        self.sizer            = KellyPositionSizer(
+            portfolio_value=initial_capital,
+            max_fraction=max_position_pct
+        )
 
     def _simulate_execution_delay(self, bar, qty: float, side: Side) -> tuple[float, int]:
         """
@@ -238,16 +243,32 @@ class Backtester:
 
             # Enter new position
             if position == 0 and signal is not None:
-                notional  = capital * self.max_position_pct * signal.strength
+                # Get historical trade performance for dynamic Kelly
+                trade_returns = [t.pnl_pct for t in trades[-40:]]
                 
-                # Simulate execution delay and get fill price
+                # Simulate execution delay and get fill price (approximate qty for queue delay)
+                approx_qty = (capital * self.max_position_pct) / bar.close
                 fill_price, latency_ns = self._simulate_execution_delay(
-                    bar, notional / bar.close, Side.BUY if signal.side == Side.BUY else Side.SELL
+                    bar, approx_qty, Side.BUY if signal.side == Side.BUY else Side.SELL
                 )
+
+                # Compute institutional sizing
+                self.sizer.update_portfolio_value(capital)
+                sizing = self.sizer.compute_from_trade_history(
+                    trade_returns=trade_returns,
+                    price=fill_price,
+                    confidence=signal.strength,
+                    symbol=symbol
+                )
+
+                if sizing.fraction <= 0.0:
+                    continue  # Skip trade if Kelly says edge is negative
+                
+                notional = sizing.notional
+                qty = sizing.qty
                 
                 slip_cost = notional * self.slippage_bps / 10000
                 fee_cost  = notional * self.fee_schedule["taker"]
-                qty = notional / fill_price
                 position_cost = qty * fill_price + fee_cost
 
                 if position_cost <= capital:
