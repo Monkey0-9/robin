@@ -40,6 +40,7 @@ class CorrelationEngine:
             raise ValueError("lambda_factor must be between 0 and 1 exclusive")
         self.lambda_ = lambda_factor
         self.lookback = lookback
+        self.regime_volatility_scalar = 1.0
 
         self._instruments: list[str] = []
         self._last_prices: dict[str, float] = {}
@@ -75,7 +76,7 @@ class CorrelationEngine:
             self._ensure_instrument(sym)
             
         # Adjust lambda based on regime volatility (higher vol -> faster decay / lower lambda)
-        eff_lambda = max(0.5, min(0.99, self.lambda_ ** regime_volatility_scalar))
+        eff_lambda = max(0.5, min(0.99, self.lambda_ ** (regime_volatility_scalar * self.regime_volatility_scalar)))
 
         # Phase 1: compute log-return innovations using prior prices
         innovations: dict[str, float] = {}
@@ -247,23 +248,16 @@ class CorrelationEngine:
                 "adf_stat": float(stat), "pvalue": float(pvalue),
                 "skipped": False, "n": m}
 
-    def get_partial_correlation_matrix(self, instruments: Optional[list[str]] = None) -> np.ndarray:
-        """Compute the partial correlation matrix (removing market beta effects)."""
-        cov = self.get_covariance_matrix(instruments, regularize=True)
-        try:
-            prec = np.linalg.inv(cov)
-        except np.linalg.LinAlgError:
-            # Fallback to pseudo-inverse if singular
-            prec = np.linalg.pinv(cov)
-            
-        n = prec.shape[0]
-        partial_corr = np.zeros_like(prec)
-        for i in range(n):
-            for j in range(n):
-                if i == j:
-                    partial_corr[i, j] = 1.0
-                else:
-                    denom = np.sqrt(prec[i, i] * prec[j, j])
-                    if denom > 0:
-                        partial_corr[i, j] = -prec[i, j] / denom
-        return partial_corr
+    def set_regime_volatility(self, regime_volatility_scalar: float):
+        """Set the current volatility-regime scalar explicitly.
+
+        In high-vol regimes correlations tend to spike toward 1 (systemic
+        stress) while low-vol regimes are more idiosyncratic. A scalar > 1
+        accelerates the EWMA decay so the matrix tracks regime transitions;
+        < 1 slows it for stable regimes. The scalar is applied on the next
+        `update()` call.
+        """
+        if regime_volatility_scalar <= 0:
+            raise ValueError("regime_volatility_scalar must be positive")
+        self.regime_volatility_scalar = regime_volatility_scalar
+        logger.debug("Regime volatility scalar set to %.3f", regime_volatility_scalar)

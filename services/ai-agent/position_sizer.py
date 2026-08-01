@@ -55,6 +55,8 @@ class KellyPositionSizer:
         risk_free_rate: float  = 0.043,  # Approx US 1yr T-Bill rate
         vol_target: Optional[float] = None,  # Annualized vol target for vol-tilter
         max_correlation: float = 0.7,         # Reject if |corr| with portfolio > this
+        drawdown_limit: float = 0.20,         # De-risk once strategy DD exceeds this
+        de_risk_floor: float = 0.25,          # Min fraction multiplier at full DD limit
     ):
         self.portfolio_value = portfolio_value
         self.max_fraction    = max_fraction
@@ -63,6 +65,8 @@ class KellyPositionSizer:
         self.risk_free_rate  = risk_free_rate
         self.vol_target      = vol_target
         self.max_correlation = max_correlation
+        self.drawdown_limit  = drawdown_limit
+        self.de_risk_floor   = de_risk_floor
 
     def compute(
         self,
@@ -333,6 +337,63 @@ class KellyPositionSizer:
             kelly_full=base_result.kelly_full,
             kelly_half=base_result.kelly_half,
             capped=new_fraction >= self.max_fraction,
+        )
+
+    def compute_with_drawdown(
+        self,
+        base_result: SizingResult,
+        current_drawdown: float,
+        symbol: str = "UNKNOWN",
+    ) -> SizingResult:
+        """
+        Apply a drawdown constraint: scale the position down as the strategy
+        drawdown deepens.
+
+        Institutional rule of thumb: if the book is down >20% from peak, cut
+        risk. This scales the base fraction linearly from full size at 0 DD to
+        `de_risk_floor` at `drawdown_limit`, and to zero at 1.5x the limit.
+        """
+        dd = float(max(0.0, current_drawdown))
+        if dd <= 1e-9 or self.drawdown_limit <= 0:
+            return base_result
+
+        limit = self.drawdown_limit
+        floor = max(0.0, min(1.0, self.de_risk_floor))
+        stop = limit * 1.5  # fully flat beyond this
+
+        if dd >= stop:
+            multiplier = 0.0
+        elif dd >= limit:
+            # linear from floor (at limit) down to 0 (at stop)
+            multiplier = floor * (1.0 - (dd - limit) / (stop - limit))
+        else:
+            # linear from 1.0 (at 0) down to floor (at limit)
+            multiplier = 1.0 - (1.0 - floor) * (dd / limit)
+
+        fraction = base_result.fraction * multiplier
+        capped = fraction >= self.max_fraction
+        notional = self.portfolio_value * fraction
+        # Recompute qty from notional using implied price (notional/qty) if possible
+        if base_result.notional > 0 and base_result.qty > 0:
+            implied_price = base_result.notional / base_result.qty
+            qty = notional / implied_price if implied_price > 0 else 0.0
+        else:
+            qty = 0.0
+
+        reason = (f"{base_result.reason} | DD={dd:.1%} vs limit={limit:.0%} "
+                  f"-> multiplier={multiplier:.2f}")
+        if multiplier <= 0:
+            reason = (f"Drawdown {dd:.1%} exceeds stop {stop:.0%} - "
+                      f"risk off, skip trade.")
+
+        return SizingResult(
+            fraction=round(fraction, 6),
+            notional=round(notional, 2),
+            qty=round(qty, 8),
+            reason=reason,
+            kelly_full=base_result.kelly_full,
+            kelly_half=base_result.kelly_half,
+            capped=capped,
         )
 
     def update_portfolio_value(self, new_value: float):

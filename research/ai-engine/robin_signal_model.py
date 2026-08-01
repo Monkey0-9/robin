@@ -44,9 +44,31 @@ def _ema(values: np.ndarray, span: int) -> float:
 
 
 class RobinSignalModel:
-    def __init__(self, lookback: int = 64, vol_window: int = 20):
+    def __init__(
+        self,
+        lookback: int = 64,
+        vol_window: int = 20,
+        adaptive_lookback: bool = True,
+        vol_quantile: float = 0.75,
+        max_lookback: int = 100,
+        min_lookback: int = 20,
+    ):
+        """
+        Args:
+            lookback: Base rolling price window.
+            adaptive_lookback: If True, shrink the effective window in high-vol
+                regimes and extend it in low-vol regimes. Markets are
+                non-stationary; a fixed window is wrong in both directions.
+            vol_quantile: Rolling vol above this quantile of the recent vol
+                history triggers the short (high-vol) window.
+            max_lookback / min_lookback: Bounds for the adaptive window.
+        """
         self.lookback = lookback
         self.vol_window = vol_window
+        self.adaptive_lookback = adaptive_lookback
+        self.vol_quantile = vol_quantile
+        self.max_lookback = max_lookback
+        self.min_lookback = min_lookback
         self.price_momentum_w = 0.40
         self.ob_imbalance_w = 0.30
         self.volume_pressure_w = 0.20
@@ -85,6 +107,23 @@ class RobinSignalModel:
     def compute(self, inp: ModelInput) -> ModelOutput:
         P = min(len(inp.price_features), self.lookback)
         V = min(len(inp.volume_features), self.lookback)
+
+        if self.adaptive_lookback and P >= 10:
+            # Regime-adaptive window: high recent vol -> shorter lookback
+            # (react faster), low vol -> longer lookback (smooth out noise).
+            log_all = np.log(np.maximum(np.asarray(inp.price_features, dtype=np.float64), 1e-9))
+            rets = np.diff(log_all)
+            short_vol = float(np.std(rets[-self.vol_window:]))
+            hist_vol = float(np.std(rets))
+            if hist_vol > 1e-9:
+                vol_ratio = short_vol / hist_vol
+                if vol_ratio > self.vol_quantile:
+                    P = max(self.min_lookback, int(P * 0.5))  # high vol: shorter
+                else:
+                    P = min(self.max_lookback, int(P * 1.5))  # low vol: longer
+                V = min(P, len(inp.volume_features))
+            P = min(P, len(inp.price_features))
+
         prices = np.asarray(inp.price_features[:P], dtype=np.float64)
         volumes = np.asarray(inp.volume_features[:V], dtype=np.float64)
 

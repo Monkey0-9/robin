@@ -81,6 +81,52 @@ public:
         constexpr size_t P = 64;
         constexpr size_t V = 64;
 
+        // --- Regime-adaptive effective window (vol-based) ---
+        // Fixed windows are wrong in both regimes: too slow in high vol, too
+        // noisy in low vol. Shorten when recent vol >> historical vol.
+        size_t Pe = P;
+        size_t Ve = V;
+        if (P >= 10) {
+            constexpr size_t vol_window = 20;
+            double log_all[P];
+            const double pmin = 1e-9;
+            for (size_t i = 0; i < P; i++)
+                log_all[i] = std::log(input.price_features[i] > pmin ? input.price_features[i] : pmin);
+            double short_vol = 0.0, short_mean = 0.0;
+            const size_t sw = (vol_window < P) ? vol_window : P;
+            const size_t start = P - sw;
+            for (size_t i = start; i + 1 < P; i++) {
+                double r = log_all[i + 1] - log_all[i];
+                short_mean += r;
+            }
+            short_mean /= static_cast<double>(sw - 1);
+            for (size_t i = start; i + 1 < P; i++) {
+                double r = log_all[i + 1] - log_all[i] - short_mean;
+                short_vol += r * r;
+            }
+            short_vol = std::sqrt(short_vol / static_cast<double>(sw - 1));
+            double hist_vol = 0.0, hist_mean = 0.0;
+            for (size_t i = 0; i + 1 < P; i++) hist_mean += log_all[i + 1] - log_all[i];
+            hist_mean /= static_cast<double>(P - 1);
+            for (size_t i = 0; i + 1 < P; i++) {
+                double r = log_all[i + 1] - log_all[i] - hist_mean;
+                hist_vol += r * r;
+            }
+            hist_vol = std::sqrt(hist_vol / static_cast<double>(P - 1));
+            if (hist_vol > 1e-9) {
+                double ratio = short_vol / hist_vol;
+                if (ratio > 0.75) {
+                    Ve = Ve / 2;                 // high vol: shorter window
+                    if (Ve < 20) Ve = 20;
+                    Pe = (Ve < Pe) ? Ve : Pe;
+                } else {
+                    Ve = (Ve * 3) / 2;           // low vol: longer window
+                    if (Ve > P) Ve = P;
+                    Pe = (Ve > Pe) ? Ve : Pe;
+                }
+            }
+        }
+
         // --- Price momentum: log-return based, MACD-style EMA crossover ---
         double log_prices[P];
         double pmin = 1e-9;
@@ -93,7 +139,7 @@ public:
         {
             const double k12 = 2.0 / (12.0 + 1.0);
             const double k26 = 2.0 / (26.0 + 1.0);
-            for (size_t i = 1; i < P; i++) {
+            for (size_t i = 1; i < Pe; i++) {
                 ema12 = k12 * log_prices[i] + (1.0 - k12) * ema12;
                 ema26 = k26 * log_prices[i] + (1.0 - k26) * ema26;
             }
@@ -102,17 +148,18 @@ public:
 
         // --- Volume pressure: z-score vs rolling average, tanh bounded ---
         constexpr size_t vol_window = 20;
+        size_t v_start = (Ve > vol_window) ? Ve - vol_window : 0;
         double vol_ma = 0.0;
-        for (size_t i = P - vol_window; i < V; i++) vol_ma += input.volume_features[i];
-        vol_ma /= static_cast<double>(vol_window);
+        for (size_t i = v_start; i < Ve; i++) vol_ma += input.volume_features[i];
+        vol_ma /= static_cast<double>(Ve - v_start);
         double vol_var = 0.0;
-        for (size_t i = P - vol_window; i < V; i++) {
+        for (size_t i = v_start; i < Ve; i++) {
             double d = input.volume_features[i] - vol_ma;
             vol_var += d * d;
         }
-        vol_var /= static_cast<double>(vol_window);
+        vol_var /= static_cast<double>(Ve - v_start);
         double vol_std = std::sqrt(vol_var);
-        double volume_z = (vol_std > 1e-10) ? (input.volume_features[V - 1] - vol_ma) / vol_std : 0.0;
+        double volume_z = (vol_std > 1e-10) ? (input.volume_features[Ve - 1] - vol_ma) / vol_std : 0.0;
         double volume_pressure = std::tanh(volume_z);
 
         // --- Order book imbalance: depth-weighted ---
@@ -152,18 +199,18 @@ public:
 
         double alpha = std::fmax(-1.0, std::fmin(1.0, raw_alpha));
 
-        // --- Volatility estimate: log-return realized vol ---
+        // --- Volatility estimate: log-return realized vol (adaptive window) ---
         double sum_sq = 0.0;
-        for (size_t i = 1; i < P; i++) {
+        for (size_t i = 1; i < Pe; i++) {
             double r = log_prices[i] - log_prices[i - 1];
             sum_sq += r * r;
         }
-        double realized_vol = std::sqrt(sum_sq / static_cast<double>(P - 1));
+        double realized_vol = (Pe > 1) ? std::sqrt(sum_sq / static_cast<double>(Pe - 1)) : 0.0;
 
         // --- Spread estimate in basis points (1/price proxy) ---
         double price_sum = 0.0;
-        for (size_t i = 0; i < P; i++) price_sum += input.price_features[i];
-        double price_mean = price_sum / static_cast<double>(P);
+        for (size_t i = 0; i < Pe; i++) price_sum += input.price_features[i];
+        double price_mean = price_sum / static_cast<double>(Pe);
         double spread_bps = (price_mean > 0.0f)
             ? (1.0 / price_mean) * 10000.0
             : 0.0;
