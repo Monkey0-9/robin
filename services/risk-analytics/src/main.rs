@@ -84,6 +84,7 @@ fn main() {
     while running.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, _)) => {
+                stream.set_nonblocking(false).expect("Cannot set blocking");
                 let gate = gate.clone();
                 let active = active_connections.clone();
                 let order_seq = order_seq.clone();
@@ -114,92 +115,102 @@ fn main() {
 
 fn handle_client(mut client_stream: TcpStream, gate: Arc<Mutex<RiskGate>>, order_seq: Arc<AtomicU64>) {
     let mut buffer = [0; 4096];
+    let mut stream_buffer = String::new();
 
     while let Ok(size) = client_stream.read(&mut buffer) {
         if size == 0 {
             break;
         }
-        let request = String::from_utf8_lossy(&buffer[..size]).into_owned();
-        let request = request.trim();
+        let chunk = String::from_utf8_lossy(&buffer[..size]);
+        stream_buffer.push_str(&chunk);
 
-        if request == "health" {
-            let _ = client_stream.write_all(b"{\"status\":\"ok\"}\n");
-            continue;
-        }
+        while let Some(pos) = stream_buffer.find('\n') {
+            let line = stream_buffer[..pos].trim().to_string();
+            stream_buffer.drain(..=pos);
 
-        // Parse JSON
-        let parsed: Result<Value, _> = serde_json::from_str(request);
-        if let Ok(v) = parsed {
-            let price = v["price"].as_u64().unwrap_or(0);
-            let qty = v["qty"].as_u64().unwrap_or(0);
-            let side_str = v["side"].as_str().unwrap_or("BUY");
-            let side = if side_str.eq_ignore_ascii_case("SELL") || side_str.eq_ignore_ascii_case("ASK") {
-                OrderSide::Ask
-            } else {
-                OrderSide::Bid
-            };
-
-            let instrument_id = v["instrument_id"].as_u64().unwrap_or(1) as u32;
-
-            let mut order = Order {
-                id: 1, // Dummy ID
-                cl_order_id: 1,
-                instrument_id,
-                symbol: *b"UNKNOWN ",
-                price,
-                qty,
-                side,
-                timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64,
-                account_id: 0,
-                client_id: 0,
-                strategy_id: 0,
-                entry_time_ns: 0,
-            };
-            
-            order.id = order_seq.fetch_add(1, Ordering::Relaxed);
-
-            let approved = {
-                if let Ok(mut g) = gate.lock() {
-                    g.check_order(&order)
-                } else {
-                    Err(robin_risk::gate::RiskError::KillSwitchActive)
-                }
-            };
-
-            let gate_start = std::time::Instant::now();
-            let latency_ns = gate_start.elapsed().as_nanos() as u64;
-            metrics::record_order(latency_ns, approved.is_ok());
-
-            if let Err(e) = approved {
-                let resp = format!(
-                    "{{\"order_id\":0,\"instrument_id\":1,\"fill_price\":0,\"fill_qty\":0,\"status\":\"REJECTED\",\"success\":false,\"error\":\"{:?}\"}}\n",
-                    e
-                );
-                let _ = client_stream.write_all(resp.as_bytes());
+            if line.is_empty() {
                 continue;
             }
 
-            // Forward to execution core
-            match TcpStream::connect("127.0.0.1:9091") {
-                Ok(mut engine_stream) => {
-                    let mut out_req = request.to_string();
-                    if !out_req.ends_with('\n') {
-                        out_req.push('\n');
-                    }
-                    let _ = engine_stream.write_all(out_req.as_bytes());
-                    let mut resp_buf = [0; 1024];
-                    if let Ok(resp_size) = engine_stream.read(&mut resp_buf) {
-                        let _ = client_stream.write_all(&resp_buf[..resp_size]);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("[RISK] Failed to connect to matching engine: {}", e);
-                    let resp = "{\"status\":\"REJECTED\",\"success\":false,\"error\":\"engine offline\"}\n";
-                    let _ = client_stream.write_all(resp.as_bytes());
-                }
+            if line == "health" {
+                let _ = client_stream.write_all(b"{\"status\":\"ok\"}\n");
+                continue;
             }
-        } else {
-            let _ = client_stream.write_all(b"{\"error\":\"invalid json\"}\n");
+
+            // Parse JSON
+            let parsed: Result<Value, _> = serde_json::from_str(&line);
+            if let Ok(v) = parsed {
+                let price = v["price"].as_u64().unwrap_or(0);
+                let qty = v["qty"].as_u64().unwrap_or(0);
+                let side_str = v["side"].as_str().unwrap_or("BUY");
+                let side = if side_str.eq_ignore_ascii_case("SELL") || side_str.eq_ignore_ascii_case("ASK") {
+                    OrderSide::Ask
+                } else {
+                    OrderSide::Bid
+                };
+
+                let instrument_id = v["instrument_id"].as_u64().unwrap_or(1) as u32;
+
+                let mut order = Order {
+                    id: 1, // Dummy ID
+                    cl_order_id: 1,
+                    instrument_id,
+                    symbol: *b"UNKNOWN ",
+                    price,
+                    qty,
+                    side,
+                    timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64,
+                    account_id: 0,
+                    client_id: 0,
+                    strategy_id: 0,
+                    entry_time_ns: 0,
+                };
+
+                order.id = order_seq.fetch_add(1, Ordering::Relaxed);
+
+                let approved = {
+                    if let Ok(mut g) = gate.lock() {
+                        g.check_order(&order)
+                    } else {
+                        Err(robin_risk::gate::RiskError::KillSwitchActive)
+                    }
+                };
+
+                let gate_start = std::time::Instant::now();
+                let latency_ns = gate_start.elapsed().as_nanos() as u64;
+                metrics::record_order(latency_ns, approved.is_ok());
+
+                if let Err(e) = approved {
+                    let resp = format!(
+                        "{{\"order_id\":0,\"instrument_id\":1,\"fill_price\":0,\"fill_qty\":0,\"status\":\"REJECTED\",\"success\":false,\"error\":\"{:?}\"}}\n",
+                        e
+                    );
+                    let _ = client_stream.write_all(resp.as_bytes());
+                    continue;
+                }
+
+                // Forward to execution core
+                match TcpStream::connect("127.0.0.1:9091") {
+                    Ok(mut engine_stream) => {
+                        let mut out_req = line.to_string();
+                        if !out_req.ends_with('\n') {
+                            out_req.push('\n');
+                        }
+                        let _ = engine_stream.write_all(out_req.as_bytes());
+                        let mut resp_buf = [0; 1024];
+                        if let Ok(resp_size) = engine_stream.read(&mut resp_buf) {
+                            let _ = client_stream.write_all(&resp_buf[..resp_size]);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("[RISK] Failed to connect to matching engine: {}", e);
+                        let resp = "{\"status\":\"REJECTED\",\"success\":false,\"error\":\"engine offline\"}\n";
+                        let _ = client_stream.write_all(resp.as_bytes());
+                    }
+                }
+            } else {
+                let _ = client_stream.write_all(b"{\"error\":\"invalid json\"}\n");
+            }
         }
     }
 }

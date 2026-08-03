@@ -543,7 +543,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   fetchScreenerData: async () => {
     try {
-      const res = await fetch(`${GATEWAY_URL}/api/screener`);
+      const token = getToken();
+      const res = await fetch(`${GATEWAY_URL}/api/screener`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
       if (res.ok) {
         const data = await res.json();
         set({ screenerAssets: data });
@@ -555,7 +558,10 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   fetchHeatmapData: async () => {
     try {
-      const res = await fetch(`${GATEWAY_URL}/api/heatmap`);
+      const token = getToken();
+      const res = await fetch(`${GATEWAY_URL}/api/heatmap`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      });
       if (res.ok) {
         const data = await res.json();
         set({ heatmapSectors: data });

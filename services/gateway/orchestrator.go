@@ -843,12 +843,12 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"failed":   o.failedCount.Load(),
 			"checks":   o.totalChecks.Load(),
 		})
-	}).Methods("GET")
+	}).Methods("GET", "OPTIONS")
 
 	r.HandleFunc("/live", func(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
-	}).Methods("GET")
+	}).Methods("GET", "OPTIONS")
 
 	r.HandleFunc("/ready", func(w http.ResponseWriter, req *http.Request) {
 		if o.failedCount.Load() > 0 {
@@ -858,17 +858,17 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ready"))
-	}).Methods("GET")
+	}).Methods("GET", "OPTIONS")
 
 	r.HandleFunc("/services", func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(o.GetServices())
-	}).Methods("GET")
+	}).Methods("GET", "OPTIONS")
 
 	r.Handle("/config", rateLimitMiddleware(float64(o.GetConfig().MaxOrderRate), jwtAuthMiddleware(rbacMiddleware("admin")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(o.GetConfig())
-	}))))).Methods("GET")
+	}))))).Methods("GET", "OPTIONS")
 
 	// POST /config — hot-reload risk parameters (JWT Admin required)
 	r.Handle("/config", rateLimitMiddleware(float64(o.GetConfig().MaxOrderRate), jwtAuthMiddleware(rbacMiddleware("admin")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -886,7 +886,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"status": "reloaded"})
-	}))))).Methods("POST")
+	}))))).Methods("POST", "OPTIONS")
 
 	r.Handle("/api/historical", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		symbol := req.URL.Query().Get("symbol")
@@ -903,7 +903,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"status": "historical_data_available_in_kdb_storage",
 			"note": "Tick data is being asynchronously logged to c:\\Robin\\kdb_storage",
 		})
-	}))).Methods("GET")
+	}))).Methods("GET", "OPTIONS")
 
 	// Initialize order state machine (if not done already)
 	if globalOrderSM == nil {
@@ -938,7 +938,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"cl_ord_id": clOrdID,
 			"message":   "Cancel submitted",
 		})
-	})))).Methods("DELETE")
+	})))).Methods("DELETE", "OPTIONS")
 
 	// POST /api/order/cancel — cancel order via REST POST
 	r.Handle("/api/order/cancel", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -964,7 +964,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"cl_ord_id": reqBody.ClOrdID,
 			"message":   "Cancel submitted",
 		})
-	})))).Methods("POST")
+	})))).Methods("POST", "OPTIONS")
 
 	// POST /api/order/modify — modify order price/quantity via REST POST
 	r.Handle("/api/order/modify", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -984,14 +984,14 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"new_price": reqBody.Price,
 			"new_qty":   reqBody.Qty,
 		})
-	})))).Methods("POST")
+	})))).Methods("POST", "OPTIONS")
 
 	// GET /api/orders/blotter — full order blotter with state history
 	r.Handle("/api/orders/blotter", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		orders := globalOrderSM.GetAllOrders()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(orders)
-	}))).Methods("GET")
+	}))).Methods("GET", "OPTIONS")
 
 	// POST /order — submit a new order (JWT Trader required)
 	// Forwards to the matching engine TCP server, or falls back to simulated fill.
@@ -1239,7 +1239,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			respPayload["alpaca_status"] = alpacaStatus
 		}
 		json.NewEncoder(w).Encode(respPayload)
-	}))))).Methods("POST")
+	}))))).Methods("POST", "OPTIONS")
 
 	// Internal endpoint for Risk Engine to push state transitions.
 	// Authenticated with an internal service token (ROBIN_INTERNAL_TOKEN).
@@ -1280,7 +1280,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		})
 
 		w.WriteHeader(http.StatusOK)
-	}).Methods("POST")
+	}).Methods("POST", "OPTIONS")
 
 	// WebSocket endpoint — real-time order book + trade notifications
 	r.HandleFunc("/ws", o.wsHub.handleWebSocket)
@@ -1310,9 +1310,9 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	r.Handle("/metrics", promhttp.Handler())
 
 	// ── Position & Portfolio endpoints ─────────────────────────────────────
-	r.Handle("/api/positions", jwtAuthMiddleware(http.HandlerFunc(handleGetPositions))).Methods("GET")
-	r.Handle("/api/positions/{symbol}", jwtAuthMiddleware(http.HandlerFunc(handleGetPosition))).Methods("GET")
-	r.Handle("/api/portfolio", jwtAuthMiddleware(http.HandlerFunc(handleGetPortfolioSummary))).Methods("GET")
+	r.Handle("/api/positions", jwtAuthMiddleware(http.HandlerFunc(handleGetPositions))).Methods("GET", "OPTIONS")
+	r.Handle("/api/positions/{symbol}", jwtAuthMiddleware(http.HandlerFunc(handleGetPosition))).Methods("GET", "OPTIONS")
+	r.Handle("/api/portfolio", jwtAuthMiddleware(http.HandlerFunc(handleGetPortfolioSummary))).Methods("GET", "OPTIONS")
 
 	r.Handle("/stats", jwtAuthMiddleware(rbacMiddleware("admin", "trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		orders := o.orderCount.Load()
@@ -1330,7 +1330,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"trades":     trades,
 			"avg_lat_ns": avgLat,
 		})
-	})))).Methods("GET")
+	})))).Methods("GET", "OPTIONS")
 
 	// Analytics and VaR calculations have been moved to a dedicated risk microservice
 	// to prevent blocking the high-throughput Go hot path.
@@ -1355,7 +1355,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(proxyResp.StatusCode)
 		io.Copy(w, proxyResp.Body)
-	})))).Methods("POST")
+	})))).Methods("POST", "OPTIONS")
 
 	// POST /api/ai/trade_decision — Autonomous AI Agent Trade Evaluation
 	r.Handle("/api/ai/trade_decision", jwtAuthMiddleware(rbacMiddleware("admin", "trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -1377,7 +1377,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(proxyResp.StatusCode)
 		io.Copy(w, proxyResp.Body)
-	})))).Methods("POST")
+	})))).Methods("POST", "OPTIONS")
 
 	// GET /api/ai/signal — Real AI signal (action/confidence/regime/sentiment)
 	// for the selected symbol, proxied from the Python AI-agent microservice.
@@ -1447,7 +1447,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"entry_target": sig.EntryTarget,
 			"timestamp":   time.Now().UnixMilli(),
 		})
-	})))).Methods("GET")
+	})))).Methods("GET", "OPTIONS")
 
 	// GET /api/ai/macro_feed — Fetch real-time macro news feed from python agent
 	r.Handle("/api/ai/macro_feed", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -1468,7 +1468,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.WriteHeader(proxyResp.StatusCode)
 		io.Copy(w, proxyResp.Body)
-	}))).Methods("GET")
+	}))).Methods("GET", "OPTIONS")
 
 	// GET /api/sor/prices — Fetch real-time simulated prices across major exchanges
 	r.Handle("/api/sor/prices", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -1499,7 +1499,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
-	}))).Methods("GET")
+	}))).Methods("GET", "OPTIONS")
 
 	// GET /api/screener — Fetch assets list with screener metrics
 	r.Handle("/api/screener", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -1526,7 +1526,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		
 
 		json.NewEncoder(w).Encode(assets)
-	}))).Methods("GET")
+	}))).Methods("GET", "OPTIONS")
 
 	// GET /api/heatmap — Fetch sector-wise daily change heatmap data
 	r.Handle("/api/heatmap", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -1576,7 +1576,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(heatmap)
-	}))).Methods("GET")
+	}))).Methods("GET", "OPTIONS")
 
 	// GET /api/alpaca/account — Fetch Alpaca account details (JWT Trader required)
 	r.Handle("/api/alpaca/account", jwtAuthMiddleware(rbacMiddleware("admin", "trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -1614,7 +1614,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)
-	})))).Methods("GET")
+	})))).Methods("GET", "OPTIONS")
 
 	// GET /api/alpaca/positions — Fetch Alpaca positions (JWT Trader required)
 	r.Handle("/api/alpaca/positions", jwtAuthMiddleware(rbacMiddleware("admin", "trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -1651,7 +1651,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)
-	})))).Methods("GET")
+	})))).Methods("GET", "OPTIONS")
 
 	// GET /api/alpaca/orders — Fetch Alpaca orders (trade history) (JWT Trader required)
 	r.Handle("/api/alpaca/orders", jwtAuthMiddleware(rbacMiddleware("admin", "trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -1688,7 +1688,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)
-	})))).Methods("GET")
+	})))).Methods("GET", "OPTIONS")
 
 	// GET /api/alpaca/assets — Fetch Alpaca assets (JWT Trader required)
 	r.Handle("/api/alpaca/assets", jwtAuthMiddleware(rbacMiddleware("admin", "trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -1725,7 +1725,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)
-	})))).Methods("GET")
+	})))).Methods("GET", "OPTIONS")
 	// ============================================================================
 	// Institutional Compliance API Routes (Wave 1-6 Gap Closure)
 	// ============================================================================
@@ -1735,63 +1735,63 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	}
 
 	// --- Kill Switch (SEC 15c3-5 direct control) ---
-	r.Handle("/api/killswitch/status", adminOnly(killSwitchStatusHandler(o.killSwitch))).Methods("GET")
-	r.Handle("/api/killswitch/system/trip", adminOnly(killSwitchTripSystemHandler(o.killSwitch))).Methods("POST")
-	r.Handle("/api/killswitch/system/reset/initiate", adminOnly(killSwitchInitResetHandler(o.killSwitch))).Methods("POST")
-	r.Handle("/api/killswitch/system/reset/confirm", adminOnly(killSwitchConfirmResetHandler(o.killSwitch))).Methods("POST")
-	r.Handle("/api/killswitch/algo/{id}/trip", adminOnly(killSwitchTripAlgoHandler(o.killSwitch))).Methods("POST")
-	r.Handle("/api/killswitch/algo/{id}/reset", adminOnly(killSwitchResetAlgoHandler(o.killSwitch))).Methods("POST")
-	r.Handle("/api/killswitch/trader/{id}/trip", adminOnly(killSwitchTripTraderHandler(o.killSwitch))).Methods("POST")
-	r.Handle("/api/killswitch/trader/{id}/reset", adminOnly(killSwitchResetTraderHandler(o.killSwitch))).Methods("POST")
-	r.Handle("/api/killswitch/log", adminOnly(killSwitchLogHandler(o.db))).Methods("GET")
+	r.Handle("/api/killswitch/status", adminOnly(killSwitchStatusHandler(o.killSwitch))).Methods("GET", "OPTIONS")
+	r.Handle("/api/killswitch/system/trip", adminOnly(killSwitchTripSystemHandler(o.killSwitch))).Methods("POST", "OPTIONS")
+	r.Handle("/api/killswitch/system/reset/initiate", adminOnly(killSwitchInitResetHandler(o.killSwitch))).Methods("POST", "OPTIONS")
+	r.Handle("/api/killswitch/system/reset/confirm", adminOnly(killSwitchConfirmResetHandler(o.killSwitch))).Methods("POST", "OPTIONS")
+	r.Handle("/api/killswitch/algo/{id}/trip", adminOnly(killSwitchTripAlgoHandler(o.killSwitch))).Methods("POST", "OPTIONS")
+	r.Handle("/api/killswitch/algo/{id}/reset", adminOnly(killSwitchResetAlgoHandler(o.killSwitch))).Methods("POST", "OPTIONS")
+	r.Handle("/api/killswitch/trader/{id}/trip", adminOnly(killSwitchTripTraderHandler(o.killSwitch))).Methods("POST", "OPTIONS")
+	r.Handle("/api/killswitch/trader/{id}/reset", adminOnly(killSwitchResetTraderHandler(o.killSwitch))).Methods("POST", "OPTIONS")
+	r.Handle("/api/killswitch/log", adminOnly(killSwitchLogHandler(o.db))).Methods("GET", "OPTIONS")
 
 	// --- CEO Certification (SEC 15c3-5 §(e)(2)) ---
-	r.Handle("/api/compliance/certify", adminOnly(handleCEOCertify(o.db, o.logger))).Methods("POST")
-	r.Handle("/api/compliance/certification/status", adminOnly(handleCertificationStatus(o.db))).Methods("GET")
-	r.Handle("/api/compliance/certification/history", adminOnly(handleCertificationHistory(o.db))).Methods("GET")
-	r.Handle("/api/compliance/review", adminOnly(handleComplianceReview(o.db, o.logger))).Methods("POST")
+	r.Handle("/api/compliance/certify", adminOnly(handleCEOCertify(o.db, o.logger))).Methods("POST", "OPTIONS")
+	r.Handle("/api/compliance/certification/status", adminOnly(handleCertificationStatus(o.db))).Methods("GET", "OPTIONS")
+	r.Handle("/api/compliance/certification/history", adminOnly(handleCertificationHistory(o.db))).Methods("GET", "OPTIONS")
+	r.Handle("/api/compliance/review", adminOnly(handleComplianceReview(o.db, o.logger))).Methods("POST", "OPTIONS")
 
 	// --- Supervisory Workflow (FINRA Rule 3110) ---
-	r.Handle("/api/supervisory/pending", adminOnly(handleSupervisoryPending(o.db))).Methods("GET")
-	r.Handle("/api/supervisory/approve/{id}", adminOnly(handleSupervisoryApprove(o.db, o.logger))).Methods("POST")
-	r.Handle("/api/supervisory/reject/{id}", adminOnly(handleSupervisoryReject(o.db, o.logger))).Methods("POST")
-	r.Handle("/api/supervisory/history", adminOnly(handleSupervisoryHistory(o.db))).Methods("GET")
+	r.Handle("/api/supervisory/pending", adminOnly(handleSupervisoryPending(o.db))).Methods("GET", "OPTIONS")
+	r.Handle("/api/supervisory/approve/{id}", adminOnly(handleSupervisoryApprove(o.db, o.logger))).Methods("POST", "OPTIONS")
+	r.Handle("/api/supervisory/reject/{id}", adminOnly(handleSupervisoryReject(o.db, o.logger))).Methods("POST", "OPTIONS")
+	r.Handle("/api/supervisory/history", adminOnly(handleSupervisoryHistory(o.db))).Methods("GET", "OPTIONS")
 
 	// --- CAT / MiFID II Transaction Reporting ---
-	r.Handle("/api/compliance/cat/status", adminOnly(handleCATStatus(o.db))).Methods("GET")
-	r.Handle("/api/compliance/cat/export", adminOnly(handleCATExport(o.db))).Methods("GET")
-	r.Handle("/api/compliance/cat/submit", adminOnly(handleCATSubmit(o.db, o.logger))).Methods("POST")
-	r.Handle("/api/compliance/mifid/export", adminOnly(handleMiFIDExport(o.db))).Methods("GET")
+	r.Handle("/api/compliance/cat/status", adminOnly(handleCATStatus(o.db))).Methods("GET", "OPTIONS")
+	r.Handle("/api/compliance/cat/export", adminOnly(handleCATExport(o.db))).Methods("GET", "OPTIONS")
+	r.Handle("/api/compliance/cat/submit", adminOnly(handleCATSubmit(o.db, o.logger))).Methods("POST", "OPTIONS")
+	r.Handle("/api/compliance/mifid/export", adminOnly(handleMiFIDExport(o.db))).Methods("GET", "OPTIONS")
 
 	// --- Post-Trade Surveillance ---
-	r.Handle("/api/surveillance/alerts", adminOnly(handleSurveillanceAlerts(o.db))).Methods("GET")
-	r.Handle("/api/surveillance/review/{id}", adminOnly(handleSurveillanceReview(o.db, o.logger))).Methods("POST")
-	r.Handle("/api/surveillance/status", adminOnly(handleSurveillanceStatus(o.db, o.surveillance))).Methods("GET")
+	r.Handle("/api/surveillance/alerts", adminOnly(handleSurveillanceAlerts(o.db))).Methods("GET", "OPTIONS")
+	r.Handle("/api/surveillance/review/{id}", adminOnly(handleSurveillanceReview(o.db, o.logger))).Methods("POST", "OPTIONS")
+	r.Handle("/api/surveillance/status", adminOnly(handleSurveillanceStatus(o.db, o.surveillance))).Methods("GET", "OPTIONS")
 
 	// --- Time Synchronization (MiFID II RTS 25) ---
-	r.Handle("/api/time/status", adminOnly(handleTimeSyncStatus(o.timeSync))).Methods("GET")
+	r.Handle("/api/time/status", adminOnly(handleTimeSyncStatus(o.timeSync))).Methods("GET", "OPTIONS")
 
 	// --- Best Execution (MiFID II Article 27) ---
-	r.Handle("/api/execution/quality", jwtAuthMiddleware(rbacMiddleware("admin", "trader")(handleExecutionQuality(o.bestExecution)))).Methods("GET")
-	r.Handle("/api/execution/quality/report", adminOnly(handleExecutionQualityReport(o.bestExecution, o.logger))).Methods("GET")
+	r.Handle("/api/execution/quality", jwtAuthMiddleware(rbacMiddleware("admin", "trader")(handleExecutionQuality(o.bestExecution)))).Methods("GET", "OPTIONS")
+	r.Handle("/api/execution/quality/report", adminOnly(handleExecutionQualityReport(o.bestExecution, o.logger))).Methods("GET", "OPTIONS")
 
 	// --- Failover Status ---
-	r.Handle("/api/failover/status", adminOnly(handleFailoverStatus(o.failover))).Methods("GET")
-	r.Handle("/api/failover/promote", adminOnly(handleFailoverPromote(o.failover, o.logger))).Methods("POST")
+	r.Handle("/api/failover/status", adminOnly(handleFailoverStatus(o.failover))).Methods("GET", "OPTIONS")
+	r.Handle("/api/failover/promote", adminOnly(handleFailoverPromote(o.failover, o.logger))).Methods("POST", "OPTIONS")
 
 	// --- MFA / User Management ---
-	r.Handle("/api/auth/mfa/setup", jwtAuthMiddleware(handleMFASetup(o.db, o.encryption, o.logger))).Methods("POST")
-	r.Handle("/api/auth/mfa/verify", jwtAuthMiddleware(handleMFAVerify(o.db, o.encryption, o.logger))).Methods("POST")
-	r.Handle("/api/auth/mfa/status", jwtAuthMiddleware(handleMFAStatus(o.db))).Methods("GET")
-	r.Handle("/api/auth/mfa/disable", adminOnly(handleMFADisable(o.db, o.logger))).Methods("POST")
-	r.Handle("/api/auth/users", adminOnly(handleCreateUser(o.db, o.logger))).Methods("POST")
-	r.Handle("/api/auth/users", adminOnly(handleListUsers(o.db))).Methods("GET")
+	r.Handle("/api/auth/mfa/setup", jwtAuthMiddleware(handleMFASetup(o.db, o.encryption, o.logger))).Methods("POST", "OPTIONS")
+	r.Handle("/api/auth/mfa/verify", jwtAuthMiddleware(handleMFAVerify(o.db, o.encryption, o.logger))).Methods("POST", "OPTIONS")
+	r.Handle("/api/auth/mfa/status", jwtAuthMiddleware(handleMFAStatus(o.db))).Methods("GET", "OPTIONS")
+	r.Handle("/api/auth/mfa/disable", adminOnly(handleMFADisable(o.db, o.logger))).Methods("POST", "OPTIONS")
+	r.Handle("/api/auth/users", adminOnly(handleCreateUser(o.db, o.logger))).Methods("POST", "OPTIONS")
+	r.Handle("/api/auth/users", adminOnly(handleListUsers(o.db))).Methods("GET", "OPTIONS")
 
 	// --- HSM Status ---
 	r.Handle("/api/hsm/status", adminOnly(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(o.hsmClient.Status())
-	}))).Methods("GET")
+	}))).Methods("GET", "OPTIONS")
 
 	// --- Portfolio Optimizer ---
 	r.Handle("/api/portfolio/status", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -1803,19 +1803,19 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			return
 		}
 		json.NewEncoder(w).Encode(stats)
-	}))).Methods("GET")
+	}))).Methods("GET", "OPTIONS")
 
 	r.Handle("/api/portfolio/weights", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		weights := CalculateOptimalWeights()
 		json.NewEncoder(w).Encode(weights)
-	}))).Methods("GET")
+	}))).Methods("GET", "OPTIONS")
 
 	// ── Auth: Login & Refresh ────────────────────────────────────────────────────
 	// POST /api/auth/login — username + password → JWT (no prior auth needed)
 	r.HandleFunc("/api/auth/login", handleLogin(o.db, o.logger)).Methods("POST", "OPTIONS")
 	// POST /api/auth/refresh — re-issue token (requires valid JWT)
-	r.Handle("/api/auth/refresh", jwtAuthMiddleware(handleRefreshToken())).Methods("POST")
+	r.Handle("/api/auth/refresh", jwtAuthMiddleware(handleRefreshToken())).Methods("POST", "OPTIONS")
 
 	// ── GET /api/assets — canonical tradable symbol list ────────────────────────
 	r.Handle("/api/assets", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {

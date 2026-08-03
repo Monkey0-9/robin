@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Rss, Loader2 } from 'lucide-react';
+import { useAuthStore } from '../store/useAuthStore';
 
 interface NewsItem {
   time: string;
@@ -14,8 +15,11 @@ export default function NewsFeed() {
   useEffect(() => {
     const fetchNews = async () => {
       try {
+        const token = useAuthStore.getState().getToken() || '';
         const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:8080';
-        const res = await fetch(`${GATEWAY_URL}/api/ai/macro_feed`);
+        const res = await fetch(`${GATEWAY_URL}/api/ai/macro_feed`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        });
         if (res.ok) {
           const data = await res.json();
           setNewsList(data);

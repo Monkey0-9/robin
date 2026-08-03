@@ -7,18 +7,7 @@ export default function FetchInterceptor() {
       const originalFetch = window.fetch;
       window.fetch = async function (...args) {
         const [resource, config] = args;
-        const newConfig: RequestInit = { ...config, credentials: 'include' };
-        
-        // Strip out the JWT Bearer header if it exists (forcing httpOnly cookie usage)
-        if (newConfig.headers) {
-          const headers = new Headers(newConfig.headers);
-          if (headers.has('Authorization')) {
-            headers.delete('Authorization');
-          }
-          newConfig.headers = headers;
-        }
-
-        return originalFetch(resource, newConfig);
+        return originalFetch(resource, config);
       };
       (window as any)._fetchIntercepted = true;
     }

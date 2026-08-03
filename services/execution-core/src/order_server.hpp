@@ -109,43 +109,52 @@ private:
 
     void handle_client(socket_t client_sock) {
         char buf[4096];
+        std::string stream_buffer;
+        while (running_) {
 #ifdef _WIN32
-        int n = ::recv(client_sock, buf, sizeof(buf) - 1, 0);
+            int n = ::recv(client_sock, buf, sizeof(buf) - 1, 0);
 #else
-        int n = (int)::recv(client_sock, buf, sizeof(buf) - 1, 0);
+            int n = (int)::recv(client_sock, buf, sizeof(buf) - 1, 0);
 #endif
-        if (n <= 0) {
-#ifdef _WIN32
-            ::closesocket(client_sock);
-#else
-            ::close(client_sock);
-#endif
-            return;
-        }
-        buf[n] = '\0';
-        std::string request(buf);
-        while (!request.empty() && (request.back() == '\n' || request.back() == '\r' || request.back() == ' '))
-            request.pop_back();
+            if (n <= 0) {
+                break;
+            }
+            buf[n] = '\0';
+            stream_buffer.append(buf, n);
 
-        if (request == "health") {
-            const char* resp = "{\"status\":\"ok\"}\n";
-            ::send(client_sock, resp, (int)std::strlen(resp), 0);
-        } else if (request.find("order") != std::string::npos || request.find("id") != std::string::npos) {
-            std::string err_msg;
-            FillResult fill = process_order_json(request, err_msg);
-            char resp[512];
-            int len = std::snprintf(resp, sizeof(resp),
-                "{\"order_id\":%llu,\"instrument_id\":%u,\"fill_price\":%lld,\"fill_qty\":%lld,\"status\":\"%s\",\"success\":%s,\"error\":\"%s\"}\n",
-                (unsigned long long)fill.order_id, fill.instrument_id, (long long)fill.fill_price, (long long)fill.fill_qty,
-                fill.state == OrderState::FILLED ? "FILLED" :
-                fill.state == OrderState::WORKING ? "WORKING" :
-                fill.state == OrderState::CANCELED ? "CANCELED" :
-                fill.state == OrderState::REJECTED ? "REJECTED" : "UNKNOWN",
-                fill.success ? "true" : "false", err_msg.c_str());
-            ::send(client_sock, resp, len, 0);
-        } else {
-            const char* resp = "{\"error\":\"unknown command\"}\n";
-            ::send(client_sock, resp, (int)std::strlen(resp), 0);
+            size_t pos;
+            while ((pos = stream_buffer.find('\n')) != std::string::npos) {
+                std::string request = stream_buffer.substr(0, pos);
+                stream_buffer.erase(0, pos + 1);
+
+                while (!request.empty() && (request.back() == '\r' || request.back() == ' '))
+                    request.pop_back();
+                while (!request.empty() && (request.front() == ' ' || request.front() == '\t'))
+                    request.erase(request.begin());
+
+                if (request.empty()) continue;
+
+                if (request == "health") {
+                    const char* resp = "{\"status\":\"ok\"}\n";
+                    ::send(client_sock, resp, (int)std::strlen(resp), 0);
+                } else if (request.find("order") != std::string::npos || request.find("id") != std::string::npos) {
+                    std::string err_msg;
+                    FillResult fill = process_order_json(request, err_msg);
+                    char resp[512];
+                    int len = std::snprintf(resp, sizeof(resp),
+                        "{\"order_id\":%llu,\"instrument_id\":%u,\"fill_price\":%lld,\"fill_qty\":%lld,\"status\":\"%s\",\"success\":%s,\"error\":\"%s\"}\n",
+                        (unsigned long long)fill.order_id, fill.instrument_id, (long long)fill.fill_price, (long long)fill.fill_qty,
+                        fill.state == OrderState::FILLED ? "FILLED" :
+                        fill.state == OrderState::WORKING ? "WORKING" :
+                        fill.state == OrderState::CANCELED ? "CANCELED" :
+                        fill.state == OrderState::REJECTED ? "REJECTED" : "UNKNOWN",
+                        fill.success ? "true" : "false", err_msg.c_str());
+                    ::send(client_sock, resp, len, 0);
+                } else {
+                    const char* resp = "{\"error\":\"unknown command\"}\n";
+                    ::send(client_sock, resp, (int)std::strlen(resp), 0);
+                }
+            }
         }
 
 #ifdef _WIN32
