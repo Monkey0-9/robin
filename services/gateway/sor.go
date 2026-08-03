@@ -1,22 +1,13 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/binary"
 	"math"
-	"math/rand"
 	"strings"
-	"time"
 )
 
-// Exchanges is the static list of 30 global exchanges supported by the SOR simulator
+// Exchanges is the static list of global exchanges supported by the SOR
 var Exchanges = []string{
-	"Tradegate", "Xetra", "NYSE", "NASDAQ", "LSE",
-	"Euronext Paris", "Euronext Amsterdam", "Euronext Brussels", "Euronext Dublin", "Euronext Lisbon",
-	"Borsa Italiana", "SIX Swiss Exchange", "BME Madrid", "DirectEdge", "BATS",
-	"Chi-X", "Tradeweb", "Instinet", "Liquidnet", "Turquoise",
-	"Aquis Exchange", "Nasdaq Stockholm", "Nasdaq Copenhagen", "Nasdaq Helsinki", "Börse Frankfurt",
-	"Börse Stuttgart", "Börse München", "Börse Düsseldorf", "Börse Hamburg", "Robin Pools",
+	"Coinbase", "Binance", "Kraken",
 }
 
 // ExchangeQuote represents a simulated quote from a specific exchange
@@ -37,39 +28,19 @@ type RoutingResult struct {
 	AverageMarketPrice  float64 `json:"average_market_price"`
 }
 
-// GenerateQuotes generates deterministic simulated quotes across 30 exchanges for a symbol
+// GenerateQuotes returns the current market price mapped across available exchanges
 func GenerateQuotes(symbol string, midPrice float64) []ExchangeQuote {
 	quotes := make([]ExchangeQuote, len(Exchanges))
-
-	// Create a stable seed using symbol name
-	h := sha256.New()
-	h.Write([]byte(symbol))
-	seedBase := binary.BigEndian.Uint64(h.Sum(nil)[:8])
-
-	// Tick bucket updates every 200ms to allow visual simulation without excessive speed
-	nowBucket := time.Now().UnixNano() / int64(200*time.Millisecond)
+	
+	// Default spread (1 bps) since we don't have L2 books cached per-exchange in Go yet
+	bps := midPrice / 10000.0
+	if bps < 0.0001 {
+		bps = 0.0001
+	}
 
 	for i, ex := range Exchanges {
-		// Unique seed per exchange per time bucket
-		exSeed := seedBase ^ uint64(i) ^ uint64(nowBucket)
-		r := rand.New(rand.NewSource(int64(exSeed)))
-
-		// 1bps of mid price
-		bps := midPrice / 10000.0
-		if bps < 0.0001 {
-			bps = 0.0001
-		}
-
-		// Shift base price slightly per exchange (up to ±10 bps)
-		shiftBps := (r.Float64() - 0.5) * 20.0
-		exMid := midPrice + shiftBps*bps
-
-		// Spread ranges from 1 bps to 5 bps
-		spreadBps := 1.0 + r.Float64()*4.0
-		spread := spreadBps * bps
-
-		bid := exMid - spread/2.0
-		ask := exMid + spread/2.0
+		bid := midPrice - bps/2.0
+		ask := midPrice + bps/2.0
 
 		// Format decimals based on asset pricing
 		if symbol != "EUR/USD" {
@@ -80,16 +51,12 @@ func GenerateQuotes(symbol string, midPrice float64) []ExchangeQuote {
 			ask = math.Round(ask*10000) / 10000
 		}
 
-		// Size ranges from 0.1 to 10.0
-		bidSize := math.Round((0.1+r.Float64()*9.9)*100) / 100
-		askSize := math.Round((0.1+r.Float64()*9.9)*100) / 100
-
 		quotes[i] = ExchangeQuote{
 			Exchange: ex,
 			Bid:      bid,
 			Ask:      ask,
-			BidSize:  bidSize,
-			AskSize:  askSize,
+			BidSize:  1.0,
+			AskSize:  1.0,
 		}
 	}
 	return quotes

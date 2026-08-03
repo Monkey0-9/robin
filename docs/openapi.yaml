@@ -1,0 +1,57 @@
+openapi: 3.0.3
+info:
+  title: Robin Institutional Trading API
+  version: 1.0.0
+  description: API specifications for the Robin Gateway, serving order entry, market data, and portfolio management.
+servers:
+  - url: https://api.robin.com/v1
+    description: Production Gateway
+  - url: http://localhost:8080/api/v1
+    description: Local Development
+paths:
+  /orders:
+    post:
+      summary: Submit a new order
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderRequest'
+      responses:
+        '201':
+          description: Order accepted
+    get:
+      summary: Get active orders
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of active orders
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    OrderRequest:
+      type: object
+      properties:
+        instrument:
+          type: string
+          example: "BTC-USD"
+        side:
+          type: string
+          enum: [buy, sell]
+        type:
+          type: string
+          enum: [limit, market]
+        price:
+          type: number
+        quantity:
+          type: number
+        client_order_id:
+          type: string

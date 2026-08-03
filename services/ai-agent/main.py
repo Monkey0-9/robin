@@ -18,7 +18,34 @@ import aiohttp
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import WebSocket, WebSocketDisconnect
+from typing import List
 from pydantic import BaseModel
+
+# SHM Bridge for low-latency OMS routing
+from shm_bridge import ShmBridge
+SHM_OMS = ShmBridge("robin_ai_oms.shm")
+
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+    async def broadcast(self, message: dict):
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                pass
+
+manager = ConnectionManager()
 
 # Hardware-Constrained Sequential Orchestrator
 from orchestrator import HardwareConstrainedOrchestrator
@@ -97,7 +124,7 @@ async def autonomous_trading_loop():
 
                 if signal["action"] != "HOLD":
                     snap = MARKET_DATA.get_snapshot(PRIMARY_SYMBOL)
-                    AUTONOMOUS_TRADES.append({
+                    trade_payload = {
                         "action":     signal["action"],
                         "symbol":     PRIMARY_SYMBOL,
                         "reason":     signal["reason"],
@@ -106,7 +133,22 @@ async def autonomous_trading_loop():
                         "vix":        live_vix,
                         "timestamp":  asyncio.get_event_loop().time(),
                         "source":     snap.source if snap else "unknown",
-                    })
+                    }
+                    AUTONOMOUS_TRADES.append(trade_payload)
+                    
+                    # Broadcast to frontend AI panel
+                    await manager.broadcast(trade_payload)
+                    
+                    # Send via SHM to Rust OMS for zero-copy routing
+                    side_code = 1 if signal["action"] == "BUY" else 2
+                    qty = int((1000.0 / current_price) * 1e8)
+                    price = int(current_price * 1e8)
+                    SHM_OMS.send_order(
+                        instrument_id=1,  # Assuming BTC-USD is 1
+                        price=price,
+                        qty=qty,
+                        side=side_code
+                    )
 
                 # Keep history bounded to last 100 trades
                 if len(AUTONOMOUS_TRADES) > 100:
@@ -279,6 +321,15 @@ async def trade_decision(req: TradeDecisionRequest):
         "data_source":  "live",
     }
 
+
+@app.websocket("/ws/signals")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
 
 # ─── Chat ─────────────────────────────────────────────────────────────────────
 

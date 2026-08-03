@@ -1,0 +1,57 @@
+global:
+  environment: "production"
+
+gateway:
+  replicaCount: 3
+  image:
+    repository: robin/gateway
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+  resources:
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+    requests:
+      cpu: "1"
+      memory: "1Gi"
+
+matching_engine:
+  replicaCount: 1  # Singleton for sequential matching
+  image:
+    repository: robin/matching-engine
+    tag: "latest"
+  resources:
+    limits:
+      cpu: "4"
+      memory: "8Gi"
+  nodeSelector:
+    disktype: nvme  # Require ultra-fast local storage for SHM
+
+risk_analytics:
+  replicaCount: 1
+  image:
+    repository: robin/risk-analytics
+    tag: "latest"
+
+ai_agent:
+  replicaCount: 1
+  image:
+    repository: robin/ai-agent
+    tag: "latest"
+
+# Subcharts
+grafana:
+  enabled: true
+  adminPassword: "admin"
+
+jaeger:
+  enabled: true
+  provisionDataStore:
+    cassandra: false
+    elasticsearch: false
+    kafka: false
+  storage:
+    type: memory

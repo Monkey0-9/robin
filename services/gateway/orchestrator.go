@@ -1517,13 +1517,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			{"BTC/USD", "Bitcoin", "Crypto", globalMarketData.GetPrice("BTC/USD"), 1260.5, 0.0, 0.0, "Global"},
 			{"ETH/USD", "Ethereum", "Crypto", globalMarketData.GetPrice("ETH/USD"), 412.3, 0.0, 0.0, "Global"},
 			{"SOL/USD", "Solana", "Crypto", globalMarketData.GetPrice("SOL/USD"), 62.8, 0.0, 0.0, "Global"},
-			{"AAPL", "Apple Inc.", "Equities", globalMarketData.GetPrice("AAPL"), 2890.0, 28.5, 0.52, "US"},
-			{"MSFT", "Microsoft Corp.", "Equities", globalMarketData.GetPrice("MSFT"), 3120.0, 35.2, 0.71, "US"},
-			{"TSLA", "Tesla Inc.", "Equities", globalMarketData.GetPrice("TSLA"), 560.0, 60.1, 0.0, "US"},
-			{"NVDA", "NVIDIA Corp.", "Equities", globalMarketData.GetPrice("NVDA"), 2980.0, 72.4, 0.03, "US"},
-			{"EUR/USD", "Euro / US Dollar", "FX", globalMarketData.GetPrice("EUR/USD"), 0.0, 0.0, 0.0, "EU"},
 		}
-		
 
 		json.NewEncoder(w).Encode(assets)
 	}))).Methods("GET", "OPTIONS")
@@ -1546,31 +1540,11 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		
 		heatmap := []HeatmapSector{
 			{
-				SectorName: "Technology",
-				Nodes: []HeatmapNode{
-					{"AAPL", globalMarketData.GetPrice("AAPL") * 15.6, getDynamicChange("AAPL", 0.52)},
-					{"MSFT", globalMarketData.GetPrice("MSFT") * 7.4, getDynamicChange("MSFT", -0.34)},
-					{"NVDA", globalMarketData.GetPrice("NVDA") * 24.8, getDynamicChange("NVDA", 4.12)},
-				},
-			},
-			{
-				SectorName: "Automotive",
-				Nodes: []HeatmapNode{
-					{"TSLA", globalMarketData.GetPrice("TSLA") * 3.2, getDynamicChange("TSLA", -1.85)},
-				},
-			},
-			{
 				SectorName: "Cryptocurrency",
 				Nodes: []HeatmapNode{
 					{"BTC/USD", globalMarketData.GetPrice("BTC/USD") * 0.019, getDynamicChange("BTC/USD", 2.45)},
 					{"ETH/USD", globalMarketData.GetPrice("ETH/USD") * 0.12, getDynamicChange("ETH/USD", -1.18)},
 					{"SOL/USD", globalMarketData.GetPrice("SOL/USD") * 0.43, getDynamicChange("SOL/USD", 5.76)},
-				},
-			},
-			{
-				SectorName: "Foreign Exchange",
-				Nodes: []HeatmapNode{
-					{"EUR/USD", globalMarketData.GetPrice("EUR/USD") * 138.0, getDynamicChange("EUR/USD", 0.08)},
 				},
 			},
 		}

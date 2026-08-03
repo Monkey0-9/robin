@@ -315,6 +315,7 @@ private:
                 t.price = price;
                 t.qty = fill_qty;
                 t.timestamp = rdtscp_local(); // Hardware timestamp!
+                t.aggressor_side = IsBid ? Side::BID : Side::ASK;
                 trades.push_back(t);
 
                 order.qty -= fill_qty;

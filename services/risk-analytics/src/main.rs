@@ -6,6 +6,7 @@ use robin_risk::gate::{RiskGate, Order, OrderSide};
 use robin_risk::metrics;
 use robin_risk::config::PORT_RISK_METRICS;
 use serde_json::Value;
+use robin_risk::shm_bridge::{ShmBridge, ShmMessage};
 
 fn main() {
     println!("[RISK] Starting Risk Analytics Daemon on port 9092...");
@@ -49,6 +50,45 @@ fn main() {
             std::thread::sleep(std::time::Duration::from_secs(5));
             if let Ok(g) = gate_bg.lock() {
                 let _ = g.save_snapshot(snapshot_path);
+            }
+        }
+    });
+
+    let gate_ai = gate.clone();
+    std::thread::spawn(move || {
+        println!("[RISK] AI Agent SHM consumer thread started on robin_ai_oms.shm");
+        let mut ai_shm = match ShmBridge::new("robin_ai_oms.shm", true) {
+            Ok(shm) => shm,
+            Err(e) => {
+                eprintln!("[RISK] Failed to create AI SHM bridge: {}", e);
+                return;
+            }
+        };
+        let mut msg = ShmMessage {
+            msg_type: 0, client_id: 0, instrument_id: 0, price: 0, qty: 0, side: 0, flags: 0, order_id: 0, cl_order_id: 0, timestamp_ns: 0, _pad: [0; 13],
+        };
+        loop {
+            if ai_shm.pop(&mut msg) {
+                if let Ok(mut g) = gate_ai.lock() {
+                    let side = if msg.side == 1 { OrderSide::Bid } else { OrderSide::Ask };
+                    let mut order = Order {
+                        id: msg.order_id,
+                        cl_order_id: msg.cl_order_id,
+                        instrument_id: msg.instrument_id,
+                        symbol: *b"BTC/USD ",
+                        price: msg.price,
+                        qty: msg.qty,
+                        side,
+                        timestamp: msg.timestamp_ns,
+                        account_id: 0,
+                        client_id: msg.client_id,
+                        strategy_id: 0,
+                        entry_time_ns: msg.timestamp_ns,
+                    };
+                    let _ = g.check_order(&mut order);
+                }
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(1));
             }
         }
     });

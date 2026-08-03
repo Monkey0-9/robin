@@ -174,12 +174,12 @@ impl ShmBridge {
     #[inline(always)]
     pub fn available(&self) -> u64 {
         let header = unsafe { &*self.header };
-        header.write_idx.load(Ordering::Relaxed) - header.read_idx.load(Ordering::Relaxed)
+        header.write_idx.load(Ordering::Acquire) - header.read_idx.load(Ordering::Acquire)
     }
 
     pub fn writer_alive(&self, timeout_ns: u64) -> bool {
         let header = unsafe { &*self.header };
-        let last_hb = header.last_heartbeat_ns.load(Ordering::Relaxed);
+        let last_hb = header.last_heartbeat_ns.load(Ordering::Acquire);
         if last_hb == 0 {
             return false;
         }

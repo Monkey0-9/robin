@@ -322,8 +322,8 @@ impl RiskGate {
             }
         }
 
-        // All checks passed — commit position optimistically (as there is no fill feedback loop yet)
-        self.positions[position_slot] = next_position;
+        // All checks passed — DO NOT commit position optimistically here.
+        // Positions should only be updated in update_pnl upon receiving actual fills.
         self.velocity_ring[self.velocity_head] = order.timestamp;
         self.velocity_head = (self.velocity_head + 1) % VELOCITY_RING_SIZE;
         self.recent_orders[self.recent_orders_head] = (order.id, order.timestamp);
@@ -354,6 +354,13 @@ impl RiskGate {
 
         let fill_price_i128 = fill_price as i128;
         let fill_qty_i128 = fill_qty as i128;
+
+        // Apply actual position update
+        let next_pos = match side {
+            OrderSide::Bid => current_pos.saturating_add(fill_qty as i64),
+            OrderSide::Ask => current_pos.saturating_sub(fill_qty as i64),
+        };
+        self.positions[inst_slot] = next_pos;
 
         // Cost-basis tracking for realized P&L
         match side {

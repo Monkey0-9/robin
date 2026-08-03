@@ -55,6 +55,7 @@ struct Trade {
     int64_t price;
     int64_t qty;
     uint64_t timestamp;
+    Side aggressor_side;
 };
 
 } // namespace execution
