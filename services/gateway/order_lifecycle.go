@@ -39,6 +39,7 @@ type StateTransitionEvent struct {
 
 type ManagedOrder struct {
 	ClOrdID       string              `json:"cl_ord_id"`
+	OrderID       uint64              `json:"order_id"`
 	ParentID      string              `json:"parent_id,omitempty"`
 	Symbol        string              `json:"symbol"`
 	Side          string              `json:"side"`

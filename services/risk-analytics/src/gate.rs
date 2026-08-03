@@ -283,7 +283,7 @@ impl RiskGate {
         }
 
         // SOFT BLOCK 1: Position limit (compute but don't write yet — must pass all checks first)
-        let (position_slot, next_position) = {
+        {
             let slot = (order.instrument_id & 4095) as usize;
             let current = self.positions[slot];
             let next = match order.side {
@@ -293,8 +293,7 @@ impl RiskGate {
             if next.abs() > self.position_limit {
                 return Err(RiskError::PositionLimit);
             }
-            (slot, next)
-        };
+        }
 
         // SOFT BLOCK 2: Velocity limit
         if self.check_velocity_limit(order.timestamp) {
@@ -455,30 +454,70 @@ impl RiskGate {
         confidence: f64,
         days: f64,
     ) -> VaRResult {
-        let z_95 = 1.645f64;
-        let z_99 = 2.326f64;
-
-        let z = if (confidence - 0.95).abs() < 0.01 {
-            z_95
-        } else if (confidence - 0.99).abs() < 0.01 {
-            z_99
-        } else {
-            1.645
-        };
+        struct Pcg32 {
+            state: u64,
+            inc: u64,
+        }
+        impl Pcg32 {
+            fn new(seed: u64, seq: u64) -> Self {
+                let mut pcg = Self { state: 0, inc: (seq << 1) | 1 };
+                pcg.next_u32();
+                pcg.state = pcg.state.wrapping_add(seed);
+                pcg.next_u32();
+                pcg
+            }
+            fn next_u32(&mut self) -> u32 {
+                let oldstate = self.state;
+                self.state = oldstate.wrapping_mul(6364136223846793005).wrapping_add(self.inc);
+                let xorshifted = (((oldstate >> 18) ^ oldstate) >> 27) as u32;
+                let rot = (oldstate >> 59) as u32;
+                (xorshifted >> rot) | (xorshifted << ((rot.wrapping_neg()) & 31))
+            }
+            fn next_f64(&mut self) -> f64 {
+                (self.next_u32() as f64) / ((1u64 << 32) as f64)
+            }
+            fn next_normal(&mut self) -> f64 {
+                let u1 = self.next_f64().max(1e-12);
+                let u2 = self.next_f64();
+                (-2.0 * u1.ln()).sqrt() * (2.0 * std::f64::consts::PI * u2).cos()
+            }
+        }
 
         let annual_vol = volatility * (252.0f64).sqrt();
-        let _var = portfolio_value * annual_vol * z * (days / 252.0).sqrt();
-        let cvar = portfolio_value * annual_vol * (days / 252.0).sqrt() * (-z * z / 2.0).exp()
-            / ((2.0 * std::f64::consts::PI).sqrt() * (1.0 - confidence));
+        let dt = days / 252.0;
+
+        const SIMULATIONS: usize = 10_000;
+        let mut sim_returns = vec![0.0; SIMULATIONS];
+        let mut rng = Pcg32::new(42, 54);
+
+        for ret in sim_returns.iter_mut() {
+            let z = rng.next_normal();
+            // simple geometric brownian motion step (mean=0 assumption)
+            *ret = portfolio_value * annual_vol * dt.sqrt() * z;
+        }
+
+        sim_returns.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+        let idx_95 = (SIMULATIONS as f64 * 0.05).floor() as usize;
+        let var_95 = -sim_returns[idx_95];
+        
+        let idx_99 = (SIMULATIONS as f64 * 0.01).floor() as usize;
+        let var_99 = -sim_returns[idx_99];
+
+        let mut cvar_sum = 0.0;
+        for i in 0..=idx_95 {
+            cvar_sum += sim_returns[i];
+        }
+        let cvar_95 = -(cvar_sum / (idx_95 as f64 + 1.0));
 
         VaRResult {
-            var_95: portfolio_value * annual_vol * z_95 * (days / 252.0).sqrt(),
-            var_99: portfolio_value * annual_vol * z_99 * (days / 252.0).sqrt(),
-            cvar_95: cvar,
+            var_95,
+            var_99,
+            cvar_95,
             portfolio_value,
             volatility_annual: annual_vol,
             confidence,
-            method: "parametric",
+            method: "monte_carlo",
         }
     }
 
@@ -822,6 +861,7 @@ mod tests {
         let mut gate = RiskGate::with_config("/tmp/test_shm_snap", 888_888_888, 555_555, 1_000_000);
         let order1 = make_order(1, 10000, 50, OrderSide::Bid, 2_000_000_000);
         assert!(gate.check_order(&order1).is_ok());
+        gate.update_pnl(1, 1, 10000, 50, OrderSide::Bid);
 
         gate.velocity_head = 42;
         gate.max_velocity = 80;

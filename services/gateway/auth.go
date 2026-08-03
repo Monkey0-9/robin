@@ -33,6 +33,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"log/slog"
@@ -191,6 +192,8 @@ type JWTConfig struct {
 	mu         sync.RWMutex
 	PublicKey  *rsa.PublicKey
 	PrivateKey *rsa.PrivateKey
+	HSMClient  HSMClient
+	HSMKeyID   string
 }
 
 var jwtAuth JWTConfig
@@ -202,6 +205,25 @@ func InitJWTAuth() error {
 
 	jwtAuth.mu.Lock()
 	defer jwtAuth.mu.Unlock()
+
+	// Hardware Security Module path
+	if os.Getenv("ROBIN_HSM_ENDPOINT") != "" {
+		enc, _ := NewEncryptionService()
+		hsm := NewCloudHSMClient(enc)
+		keyID, err := hsm.RotateKey("jwt-master")
+		if err != nil {
+			return fmt.Errorf("HSM JWT key init failed: %w", err)
+		}
+		pubDer, _ := hsm.GetPublicKey(keyID)
+		pub, err := x509.ParsePKIXPublicKey(pubDer)
+		if err == nil {
+			jwtAuth.PublicKey = pub.(*rsa.PublicKey)
+		}
+		jwtAuth.HSMClient = hsm
+		jwtAuth.HSMKeyID = keyID
+		slog.Info("JWT initialized via AWS CloudHSM stub")
+		return nil
+	}
 
 	if pubKeyFile != "" {
 		pubBytes, err := os.ReadFile(pubKeyFile)
@@ -276,7 +298,24 @@ func createJWT(subject, role string, expiry time.Duration) (string, error) {
 
 	jwtAuth.mu.RLock()
 	privateKey := jwtAuth.PrivateKey
+	hsmClient := jwtAuth.HSMClient
+	hsmKeyID := jwtAuth.HSMKeyID
 	jwtAuth.mu.RUnlock()
+
+	if hsmClient != nil {
+		// Use custom signing method for HSM
+		// We mock standard RS256 token creation by replacing the signature
+		token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+		signingString, err := token.SigningString()
+		if err != nil {
+			return "", err
+		}
+		sig, err := hsmClient.SignData(hsmKeyID, []byte(signingString))
+		if err != nil {
+			return "", err
+		}
+		return strings.Join([]string{signingString, base64.RawURLEncoding.EncodeToString(sig)}, "."), nil
+	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	return token.SignedString(privateKey)

@@ -295,7 +295,7 @@ func (se *SurveillanceEngine) raiseAlert(alertType string, clientID int64, order
 		_, err := se.db.Exec(`
 			INSERT INTO surveillance_alerts
 			  (alert_type, client_id, order_ids, detected_at_ns, evidence_json, status)
-			VALUES (?, ?, ?, ?, ?, 'UNREVIEWED')`,
+			VALUES ($1, $2, $3, $4, $5, 'UNREVIEWED')`,
 			alertType, clientID, string(orderIDsJSON), now, string(evidenceJSON),
 		)
 		if err != nil {
@@ -367,8 +367,8 @@ func handleSurveillanceAlerts(db *sql.DB) http.HandlerFunc {
 			SELECT id, alert_type, client_id, order_ids, detected_at_ns,
 			       evidence_json, status
 			FROM surveillance_alerts
-			WHERE status=?
-			ORDER BY detected_at_ns DESC LIMIT ?`,
+			WHERE status=$1
+			ORDER BY detected_at_ns DESC LIMIT $2`,
 			statusFilter, limit)
 		if err != nil {
 			http.Error(w, `{"error":"database error"}`, http.StatusInternalServerError)
@@ -427,8 +427,8 @@ func handleSurveillanceReview(db *sql.DB, logger *slog.Logger) http.HandlerFunc 
 		now := time.Now().UnixNano()
 		_, err := db.Exec(`
 			UPDATE surveillance_alerts
-			SET status=?, reviewer_id=0, reviewed_at_ns=?, review_notes=?
-			WHERE id=?`,
+			SET status=$1, reviewer_id=0, reviewed_at_ns=$2, review_notes=$3
+			WHERE id=$4`,
 			body.Status, now, body.Notes+"|reviewed_by:"+reviewer, alertID,
 		)
 		if err != nil {

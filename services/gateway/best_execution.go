@@ -110,7 +110,7 @@ func (bem *BestExecutionMonitor) Record(rec ExecutionRecord) {
 	// Update trade slippage in DB
 	if bem.db != nil && rec.OrderID > 0 {
 		_, _ = bem.db.Exec(`
-			UPDATE trades SET slippage_bps=? WHERE order_id=?`,
+			UPDATE trades SET slippage_bps=$1 WHERE order_id=$2`,
 			int64(rec.SlippageBps*100), rec.OrderID,
 		)
 	}

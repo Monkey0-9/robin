@@ -71,7 +71,7 @@ func ensureDefaultUsers(db *sql.DB, logger *slog.Logger) {
 			logger.Error("failed to hash admin password", "error", err)
 		} else {
 			db.Exec(
-				"INSERT INTO users (username, password_hash, role, created_at_ns) VALUES (?, ?, ?, ?)",
+				"INSERT INTO users (username, password_hash, role, created_at_ns) VALUES ($1, $2, $3, $4)",
 				"admin", string(hash), "admin", time.Now().UnixNano(),
 			)
 			logger.Info("seeded initial admin user from SEED_ADMIN_PASSWORD env var")
@@ -84,7 +84,7 @@ func ensureDefaultUsers(db *sql.DB, logger *slog.Logger) {
 			logger.Error("failed to hash trader password", "error", err)
 		} else {
 			db.Exec(
-				"INSERT INTO users (username, password_hash, role, created_at_ns) VALUES (?, ?, ?, ?)",
+				"INSERT INTO users (username, password_hash, role, created_at_ns) VALUES ($1, $2, $3, $4)",
 				"trader", string(traderHash), "trader", time.Now().UnixNano(),
 			)
 			logger.Info("seeded initial trader user from SEED_TRADER_PASSWORD env var")
@@ -106,7 +106,7 @@ func handleLogin(db *sql.DB, logger *slog.Logger) http.HandlerFunc {
 		// Look up user
 		var passwordHash, role string
 		err := db.QueryRow(
-			"SELECT password_hash, role FROM users WHERE username = ?",
+			"SELECT password_hash, role FROM users WHERE username = $1",
 			req.Username,
 		).Scan(&passwordHash, &role)
 

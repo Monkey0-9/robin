@@ -368,7 +368,7 @@ func (ks *KillSwitchManager) persistEvent(level KillSwitchLevel, targetID, actio
 		INSERT INTO kill_switch_log
 		  (level, target_id, action, reason, tripped_by, secondary_approver,
 		   tripped_at_ns, reset_at_ns, chain_hash)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		string(level), targetID, action, reason, trippedBy, secondaryApprover,
 		nowNs, 0, hash,
 	)
@@ -649,7 +649,7 @@ func killSwitchLogHandler(db *sql.DB) http.HandlerFunc {
 			SELECT id, level, target_id, action, reason, tripped_by, secondary_approver,
 			       tripped_at_ns, reset_at_ns, chain_hash
 			FROM kill_switch_log
-			ORDER BY id DESC LIMIT ?`, limit)
+			ORDER BY id DESC LIMIT $1`, limit)
 		if err != nil {
 			http.Error(w, `{"error":"database error"}`, http.StatusInternalServerError)
 			return

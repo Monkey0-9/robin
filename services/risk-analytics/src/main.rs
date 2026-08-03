@@ -7,9 +7,21 @@ use robin_risk::metrics;
 use robin_risk::config::PORT_RISK_METRICS;
 use serde_json::Value;
 use robin_risk::shm_bridge::{ShmBridge, ShmMessage};
+use opentelemetry::trace::TracerProvider as _;
+use tracing_subscriber::prelude::*;
 
 fn main() {
     println!("[RISK] Starting Risk Analytics Daemon on port 9092...");
+
+    // Initialize OpenTelemetry Tracing
+    let tracer = opentelemetry_otlp::new_pipeline()
+        .tracing()
+        .with_exporter(opentelemetry_otlp::new_exporter().tonic())
+        .install_batch(opentelemetry_sdk::runtime::Tokio)
+        .unwrap_or_else(|_| opentelemetry_sdk::trace::TracerProvider::builder().build().tracer("robin-risk-gate"));
+    let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
+    let subscriber = tracing_subscriber::Registry::default().with(telemetry);
+    tracing::subscriber::set_global_default(subscriber).ok();
 
     // Serve Prometheus metrics on a dedicated port in a background thread.
     {
@@ -219,6 +231,10 @@ fn handle_client(mut client_stream: TcpStream, gate: Arc<Mutex<RiskGate>>, order
                 let gate_start = std::time::Instant::now();
                 let latency_ns = gate_start.elapsed().as_nanos() as u64;
                 metrics::record_order(latency_ns, approved.is_ok());
+
+                // Emit OpenTelemetry span
+                let span = tracing::span!(tracing::Level::INFO, "risk_check", order_id = order.id, instrument = order.instrument_id);
+                let _enter = span.enter();
 
                 if let Err(e) = approved {
                     let resp = format!(

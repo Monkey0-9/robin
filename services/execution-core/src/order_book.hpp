@@ -126,7 +126,8 @@ public:
     }
 
     bool cancel_order(uint64_t order_id, int64_t price, Side side) noexcept {
-        size_t idx = price & (MAX_LEVELS - 1);
+        size_t idx = (side == Side::BID) ? find_bid_idx(price) : find_ask_idx(price);
+        if (idx == (size_t)-1) return false;
         auto* q = (side == Side::BID) ? bids_levels_[idx].q : asks_levels_[idx].q;
         if (!q) return false;
         for (size_t i = q->head; i < q->tail; ++i) {
@@ -138,6 +139,16 @@ public:
             }
         }
         return false;
+    }
+
+    OrderQueue<256>* get_bid_queue(int64_t price) const noexcept {
+        size_t idx = find_bid_idx(price);
+        return (idx != (size_t)-1) ? bids_levels_[idx].q : nullptr;
+    }
+    
+    OrderQueue<256>* get_ask_queue(int64_t price) const noexcept {
+        size_t idx = find_ask_idx(price);
+        return (idx != (size_t)-1) ? asks_levels_[idx].q : nullptr;
     }
 
     int64_t best_bid() const noexcept { return active_bids_.empty() ? 0 : active_bids_[0]; }
@@ -161,14 +172,16 @@ public:
 
     void set_instrument_id(uint32_t id) { instrument_id_ = id; }
     void add_bid_level(int64_t price, const OrderQueue<256>& q) {
-        size_t idx = price & (MAX_LEVELS - 1);
+        size_t idx = find_or_create_bid_idx(price);
+        if (idx == (size_t)-1) return;
         bids_levels_[idx].price = price;
         if (!bids_levels_[idx].q) bids_levels_[idx].q = new OrderQueue<256>();
         *bids_levels_[idx].q = q;
         insert_active_bid(price);
     }
     void add_ask_level(int64_t price, const OrderQueue<256>& q) {
-        size_t idx = price & (MAX_LEVELS - 1);
+        size_t idx = find_or_create_ask_idx(price);
+        if (idx == (size_t)-1) return;
         asks_levels_[idx].price = price;
         if (!asks_levels_[idx].q) asks_levels_[idx].q = new OrderQueue<256>();
         *asks_levels_[idx].q = q;
@@ -176,9 +189,57 @@ public:
     }
 
 private:
+    size_t find_or_create_bid_idx(int64_t price) noexcept {
+        size_t idx = price & (MAX_LEVELS - 1);
+        size_t start = idx;
+        size_t first_tombstone = (size_t)-1;
+        while (bids_levels_[idx].price != 0 && bids_levels_[idx].price != price) {
+            if (bids_levels_[idx].price == -1 && first_tombstone == (size_t)-1) first_tombstone = idx;
+            idx = (idx + 1) & (MAX_LEVELS - 1);
+            if (idx == start) return first_tombstone;
+        }
+        if (bids_levels_[idx].price == price) return idx;
+        return (first_tombstone != (size_t)-1) ? first_tombstone : idx;
+    }
+
+    size_t find_or_create_ask_idx(int64_t price) noexcept {
+        size_t idx = price & (MAX_LEVELS - 1);
+        size_t start = idx;
+        size_t first_tombstone = (size_t)-1;
+        while (asks_levels_[idx].price != 0 && asks_levels_[idx].price != price) {
+            if (asks_levels_[idx].price == -1 && first_tombstone == (size_t)-1) first_tombstone = idx;
+            idx = (idx + 1) & (MAX_LEVELS - 1);
+            if (idx == start) return first_tombstone;
+        }
+        if (asks_levels_[idx].price == price) return idx;
+        return (first_tombstone != (size_t)-1) ? first_tombstone : idx;
+    }
+
+    size_t find_bid_idx(int64_t price) const noexcept {
+        size_t idx = price & (MAX_LEVELS - 1);
+        size_t start = idx;
+        while (bids_levels_[idx].price != 0) {
+            if (bids_levels_[idx].price == price) return idx;
+            idx = (idx + 1) & (MAX_LEVELS - 1);
+            if (idx == start) return (size_t)-1;
+        }
+        return (size_t)-1;
+    }
+
+    size_t find_ask_idx(int64_t price) const noexcept {
+        size_t idx = price & (MAX_LEVELS - 1);
+        size_t start = idx;
+        while (asks_levels_[idx].price != 0) {
+            if (asks_levels_[idx].price == price) return idx;
+            idx = (idx + 1) & (MAX_LEVELS - 1);
+            if (idx == start) return (size_t)-1;
+        }
+        return (size_t)-1;
+    }
+
     bool push_bid(const Order& order) noexcept {
-        size_t idx = order.price & (MAX_LEVELS - 1);
-        if (bids_levels_[idx].price != 0 && bids_levels_[idx].price != order.price) return false; // Hash collision (very rare)
+        size_t idx = find_or_create_bid_idx(order.price);
+        if (idx == (size_t)-1) return false;
         bids_levels_[idx].price = order.price;
         if (!bids_levels_[idx].q) bids_levels_[idx].q = new OrderQueue<256>();
         if (!bids_levels_[idx].q->push(order)) return false;
@@ -186,8 +247,8 @@ private:
         return true;
     }
     bool push_ask(const Order& order) noexcept {
-        size_t idx = order.price & (MAX_LEVELS - 1);
-        if (asks_levels_[idx].price != 0 && asks_levels_[idx].price != order.price) return false;
+        size_t idx = find_or_create_ask_idx(order.price);
+        if (idx == (size_t)-1) return false;
         asks_levels_[idx].price = order.price;
         if (!asks_levels_[idx].q) asks_levels_[idx].q = new OrderQueue<256>();
         if (!asks_levels_[idx].q->push(order)) return false;
@@ -226,7 +287,8 @@ private:
             if (active_bids_[i] == price) {
                 std::memmove(&active_bids_[i], &active_bids_[i + 1], (active_bids_.size() - i - 1) * sizeof(int64_t));
                 active_bids_.sz--;
-                bids_levels_[price & (MAX_LEVELS - 1)].price = 0;
+                size_t idx = find_bid_idx(price);
+                if (idx != (size_t)-1) bids_levels_[idx].price = -1; // Tombstone
                 return;
             }
         }
@@ -236,7 +298,8 @@ private:
             if (active_asks_[i] == price) {
                 std::memmove(&active_asks_[i], &active_asks_[i + 1], (active_asks_.size() - i - 1) * sizeof(int64_t));
                 active_asks_.sz--;
-                asks_levels_[price & (MAX_LEVELS - 1)].price = 0;
+                size_t idx = find_ask_idx(price);
+                if (idx != (size_t)-1) asks_levels_[idx].price = -1; // Tombstone
                 return;
             }
         }
@@ -248,7 +311,8 @@ private:
             for (size_t i = 0; i < active_asks_.size(); ++i) {
                 int64_t price = active_asks_[i];
                 if (order.price < price) break;
-                auto* q = asks_levels_[price & (MAX_LEVELS - 1)].q;
+                size_t idx = find_ask_idx(price);
+                auto* q = (idx != (size_t)-1) ? asks_levels_[idx].q : nullptr;
                 if (!q) continue;
                 for (size_t j = q->head; j < q->tail && needed > 0; j++) {
                     const auto& e = q->entries[j & (256 - 1)];
@@ -263,7 +327,8 @@ private:
             for (size_t i = 0; i < active_bids_.size(); ++i) {
                 int64_t price = active_bids_[i];
                 if (order.price > price) break;
-                auto* q = bids_levels_[price & (MAX_LEVELS - 1)].q;
+                size_t idx = find_bid_idx(price);
+                auto* q = (idx != (size_t)-1) ? bids_levels_[idx].q : nullptr;
                 if (!q) continue;
                 for (size_t j = q->head; j < q->tail && needed > 0; j++) {
                     const auto& e = q->entries[j & (256 - 1)];
@@ -292,7 +357,8 @@ private:
                 if (!price_ok) break;
             }
 
-            auto* q = levels[price & (MAX_LEVELS - 1)].q;
+            size_t idx = IsBid ? find_ask_idx(price) : find_bid_idx(price);
+            auto* q = (idx != (size_t)-1) ? levels[idx].q : nullptr;
             if (!q) {
                 if (IsBid) remove_active_ask(price);
                 else remove_active_bid(price);
@@ -369,13 +435,13 @@ inline bool save_snapshot(const OrderBook& book, const char* path) noexcept {
     for (size_t i = 0; i < bids; ++i) {
         int64_t price = book.get_active_bids()[i];
         std::fwrite(&price, sizeof(price), 1, f);
-        auto* q = book.get_bids_levels()[price & (OrderBook::MAX_LEVELS - 1)].q;
+        auto* q = book.get_bid_queue(price);
         if (q) std::fwrite(q, sizeof(OrderQueue<256>), 1, f);
     }
     for (size_t i = 0; i < asks; ++i) {
         int64_t price = book.get_active_asks()[i];
         std::fwrite(&price, sizeof(price), 1, f);
-        auto* q = book.get_asks_levels()[price & (OrderBook::MAX_LEVELS - 1)].q;
+        auto* q = book.get_ask_queue(price);
         if (q) std::fwrite(q, sizeof(OrderQueue<256>), 1, f);
     }
 

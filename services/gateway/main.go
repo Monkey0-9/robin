@@ -24,6 +24,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	tp, err := InitTracer(context.Background(), "gateway-orchestrator")
+	if err != nil {
+		logger.Error("failed to init tracer", "error", err)
+	} else {
+		defer func() {
+			if err := tp.Shutdown(context.Background()); err != nil {
+				logger.Error("failed to shutdown tracer", "error", err)
+			}
+		}()
+	}
+
 	// Enforce JWT key check for production runtime
 	if jwtAuth.PublicKey == nil {
 		logger.Error("no JWT key configured (set ROBIN_JWT_PUBKEY_FILE or ROBIN_GATEWAY_API_TOKEN), refusing to start insecurely")

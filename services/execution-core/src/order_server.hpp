@@ -220,6 +220,8 @@ private:
             type = OrderType::IOC;
         else if (type_str == "FOK" || type_str == "fok")
             type = OrderType::FOK;
+        else if (type_str == "CANCEL" || type_str == "cancel")
+            type = OrderType::CANCEL;
 
         if (id == 0) id = static_cast<uint64_t>(std::time(nullptr)) * 1000000ULL;
         if (timestamp == 0) timestamp = static_cast<uint64_t>(
@@ -239,6 +241,19 @@ private:
         if (!risk_.check_order(order, timestamp, err_msg)) {
             result.order_id = id;
             result.instrument_id = order.instrument_id;
+            result.state = OrderState::REJECTED;
+            return result;
+        }
+
+        if (type == OrderType::CANCEL) {
+            if (engine_->submit_order(order)) {
+                result.order_id = id;
+                result.instrument_id = order.instrument_id;
+                result.state = OrderState::CANCELED;
+                result.success = true;
+                return result;
+            }
+            err_msg = "queue_full";
             result.state = OrderState::REJECTED;
             return result;
         }

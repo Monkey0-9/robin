@@ -37,6 +37,8 @@ import (
 	"sync/atomic"
 	"time"
 
+
+	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -130,7 +132,16 @@ func NewAuditLogger(path string) (*AuditLogger, error) {
 		return nil, err
 	}
 	dbPath := "logs/audit.db"
-	db, err := sql.Open("sqlite3", dbPath)
+	dbURL := os.Getenv("DATABASE_URL")
+	driverName := "sqlite3"
+	dataSource := dbPath
+
+	if dbURL != "" {
+		driverName = "postgres"
+		dataSource = dbURL
+	}
+
+	db, err := sql.Open(driverName, dataSource)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +163,7 @@ func NewAuditLogger(path string) (*AuditLogger, error) {
 
 func (a *AuditLogger) Log(event string, data any) {
 	b, _ := json.Marshal(data)
-	_, err := a.db.Exec("INSERT INTO audit_log (event, data) VALUES (?, ?)", event, string(b))
+	_, err := a.db.Exec("INSERT INTO audit_log (event, data) VALUES ($1, $2)", event, string(b))
 	if err != nil {
 		log.Printf("[AUDIT] SQLite write error: %v", err)
 	}

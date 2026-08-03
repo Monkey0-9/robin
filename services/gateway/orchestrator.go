@@ -86,31 +86,27 @@ func (c *MatchingEngineClient) ioLoop() {
 			cmd.resp <- engineResp{err: fmt.Errorf("not connected")}
 			continue
 		}
-		conn := c.conn
-		reader := c.reader
-		c.mu.Unlock()
 
-		if _, err := fmt.Fprint(conn, cmd.orderJSON+"\n"); err != nil {
-			c.mu.Lock()
+		if _, err := fmt.Fprint(c.conn, cmd.orderJSON+"\n"); err != nil {
 			c.enabled = false
 			c.lastErr = err.Error()
-			conn.Close()
+			c.conn.Close()
 			c.conn = nil
 			c.mu.Unlock()
 			cmd.resp <- engineResp{err: err}
 			continue
 		}
-		resp, err := reader.ReadString('\n')
+		resp, err := c.reader.ReadString('\n')
 		if err != nil {
-			c.mu.Lock()
 			c.enabled = false
 			c.lastErr = err.Error()
-			conn.Close()
+			c.conn.Close()
 			c.conn = nil
 			c.mu.Unlock()
 			cmd.resp <- engineResp{err: err}
 			continue
 		}
+		c.mu.Unlock()
 		cmd.resp <- engineResp{data: resp}
 	}
 }
@@ -226,7 +222,9 @@ func (o *OrderRequest) UnmarshalJSON(data []byte) error {
 	}{
 		Alias: (*Alias)(o),
 	}
-	if err := json.Unmarshal(data, &aux); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&aux); err != nil {
 		return err
 	}
 
@@ -235,20 +233,21 @@ func (o *OrderRequest) UnmarshalJSON(data []byte) error {
 			return 0
 		}
 		switch val := v.(type) {
-		case float64:
-			if math.Abs(val) < 1e7 && val != 0 {
-				return int64(math.Round(val * 1e8))
+		case json.Number:
+			str := val.String()
+			if strings.Contains(str, ".") || strings.Contains(str, "e") || strings.Contains(str, "E") {
+				f, _ := val.Float64()
+				return int64(math.Round(f * 1e8))
 			}
-			return int64(math.Round(val))
-		case int64:
-			return val
+			i, _ := val.Int64()
+			return i
 		case string:
-			if f, err := strconv.ParseFloat(val, 64); err == nil {
-				if math.Abs(f) < 1e7 && f != 0 {
-					return int64(math.Round(f * 1e8))
-				}
-				return int64(math.Round(f))
+			if strings.Contains(val, ".") || strings.Contains(val, "e") || strings.Contains(val, "E") {
+				f, _ := strconv.ParseFloat(val, 64)
+				return int64(math.Round(f * 1e8))
 			}
+			i, _ := strconv.ParseInt(val, 10, 64)
+			return i
 		}
 		return 0
 	}
@@ -256,6 +255,15 @@ func (o *OrderRequest) UnmarshalJSON(data []byte) error {
 	o.Price = parseVal(aux.Price)
 	o.Qty = parseVal(aux.Qty)
 	return nil
+}
+
+func getInstrumentID(symbol string) uint64 {
+	symbolMap := map[string]uint64{
+		"BTC/USD": 1, "ETH/USD": 2, "AAPL": 3, "EUR/USD": 4, "SOL/USD": 5,
+		"MSFT": 6, "TSLA": 7, "NVDA": 8, "GOOGL": 9, "AMZN": 10,
+		"SPY": 11, "QQQ": 12, "IWM": 13,
+	}
+	return symbolMap[symbol]
 }
 
 type Orchestrator struct {
@@ -358,28 +366,45 @@ func NewOrchestrator() *Orchestrator {
 }
 
 func (o *Orchestrator) initDB() {
-	db, err := sql.Open("sqlite3", "robin.db?_journal_mode=WAL&_synchronous=FULL&_busy_timeout=5000")
+	dbURL := os.Getenv("DATABASE_URL")
+	driverName := "sqlite3"
+	dataSource := "robin.db?_journal_mode=WAL&_synchronous=FULL&_busy_timeout=5000"
+
+	if dbURL != "" {
+		driverName = "postgres"
+		dataSource = dbURL
+		o.logger.Info("using postgres database via DATABASE_URL")
+	}
+
+	db, err := sql.Open(driverName, dataSource)
 	if err != nil {
-		o.logger.Error("failed to open sqlite database", "error", err)
+		o.logger.Error("failed to open database", "error", err)
 		return
 	}
 
-	// SQLite WAL mode for improved write durability (RTO/RPO gap closure)
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	db.SetConnMaxLifetime(1 * time.Hour)
-
-	// Enable WAL mode explicitly
-	for _, pragma := range []string{
-		"PRAGMA journal_mode=WAL;",
-		"PRAGMA synchronous=FULL;",
-		"PRAGMA foreign_keys=ON;",
-		"PRAGMA temp_store=MEMORY;",
-		"PRAGMA cache_size=-64000;", // 64MB page cache
-	} {
-		if _, err := db.Exec(pragma); err != nil {
-			o.logger.Warn("SQLite PRAGMA failed", "pragma", pragma, "error", err)
+	if driverName == "sqlite3" {
+		// SQLite WAL mode for improved write durability (RTO/RPO gap closure)
+		db.SetMaxOpenConns(1)
+		db.SetMaxIdleConns(1)
+		db.SetConnMaxLifetime(1 * time.Hour)
+	
+		// Enable WAL mode explicitly
+		for _, pragma := range []string{
+			"PRAGMA journal_mode=WAL;",
+			"PRAGMA synchronous=FULL;",
+			"PRAGMA foreign_keys=ON;",
+			"PRAGMA temp_store=MEMORY;",
+			"PRAGMA cache_size=-64000;", // 64MB page cache
+		} {
+			if _, err := db.Exec(pragma); err != nil {
+				o.logger.Warn("SQLite PRAGMA failed", "pragma", pragma, "error", err)
+			}
 		}
+	} else {
+		// PostgreSQL connection pooling
+		db.SetMaxOpenConns(25)
+		db.SetMaxIdleConns(5)
+		db.SetConnMaxLifetime(5 * time.Minute)
 	}
 
 	o.db = db
@@ -833,6 +858,7 @@ func rbacMiddleware(allowedRoles ...string) func(http.Handler) http.Handler {
 
 func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	r := mux.NewRouter()
+	r.Use(tracingMiddleware)
 
 	r.HandleFunc("/health", func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -925,10 +951,22 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		}
 		// Immediately confirm cancel (in production this would wait for exchange ack)
 		go func() {
+			if o.matchClient != nil && o.matchClient.IsEnabled() {
+				instID := getInstrumentID(order.Symbol)
+				sideStr := "BID"
+				if order.Side == "SELL" || order.Side == "ASK" {
+					sideStr = "ASK"
+				}
+				matchJSON := fmt.Sprintf(
+					`{"cl_ord_id":"%s","id":%d,"instrument_id":%d,"price":%d,"qty":%d,"side":"%s","type":"CANCEL"}`,
+					clOrdID, order.OrderID, instID, int64(order.Price*100000000), int64(order.LeavesQty*100000000), sideStr,
+				)
+				o.matchClient.SendOrderJSON(matchJSON)
+			}
 			time.Sleep(200 * time.Millisecond)
 			globalOrderSM.ConfirmCancel(clOrdID)
 			if o.db != nil {
-				o.db.Exec("UPDATE orders SET status = 'CANCELED', updated_at_ns = ? WHERE cl_order_id = ?",
+				o.db.Exec("UPDATE orders SET status = 'CANCELED', updated_at_ns = $1 WHERE cl_order_id = $2",
 					time.Now().UnixNano(), clOrdID)
 			}
 		}()
@@ -955,6 +993,18 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			return
 		}
 		go func() {
+			if o.matchClient != nil && o.matchClient.IsEnabled() {
+				instID := getInstrumentID(order.Symbol)
+				sideStr := "BID"
+				if order.Side == "SELL" || order.Side == "ASK" {
+					sideStr = "ASK"
+				}
+				matchJSON := fmt.Sprintf(
+					`{"cl_ord_id":"%s","id":%d,"instrument_id":%d,"price":%d,"qty":%d,"side":"%s","type":"CANCEL"}`,
+					reqBody.ClOrdID, order.OrderID, instID, int64(order.Price*100000000), int64(order.LeavesQty*100000000), sideStr,
+				)
+				o.matchClient.SendOrderJSON(matchJSON)
+			}
 			time.Sleep(200 * time.Millisecond)
 			globalOrderSM.ConfirmCancel(reqBody.ClOrdID)
 		}()
@@ -1020,27 +1070,8 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			orderReq.ClientOrdID = fmt.Sprintf("ORD-%d", orderID)
 		}
 
-		// Dynamic Symbol Mapping
-		// In production, this map should be loaded from a configuration or database at startup
-		// to allow adding new symbols without recompiling the orchestrator.
-		symbolMap := map[string]uint64{
-			"BTC/USD": 1,
-			"ETH/USD": 2,
-			"AAPL":    3,
-			"EUR/USD": 4,
-			"SOL/USD": 5,
-			"MSFT":    6,
-			"TSLA":    7,
-			"NVDA":    8,
-			"GOOGL":   9,
-			"AMZN":    10,
-			"SPY":     11,
-			"QQQ":     12,
-			"IWM":     13,
-		}
-		
-		instID, ok := symbolMap[orderReq.Symbol]
-		if !ok {
+		instID := getInstrumentID(orderReq.Symbol)
+		if instID == 0 {
 			http.Error(w, `{"error":"unknown symbol"}`, http.StatusBadRequest)
 			return
 		}
@@ -1076,6 +1107,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		if globalOrderSM != nil {
 			managed := &ManagedOrder{
 				ClOrdID:        orderReq.ClientOrdID,
+				OrderID:        orderID,
 				Symbol:         orderReq.Symbol,
 				Side:           orderReq.Side,
 				OrderType:      orderType,
@@ -1107,7 +1139,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			
 			res, err := tx.Exec(`
 				INSERT INTO orders (cl_order_id, instrument_id, price, qty, side, status, account_id, client_id, strategy_id, created_at_ns, updated_at_ns)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 				orderReq.ClientOrdID, instID, orderReq.Price, orderReq.Qty, sideInt, status, 1, 1, 1, now, now,
 			)
 			if err != nil {
@@ -1156,7 +1188,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 						// Update state
 						if o.db != nil {
 							now := time.Now().UnixNano()
-							o.db.Exec(`UPDATE orders SET status = ?, updated_at_ns = ? WHERE cl_order_id = ?`, finalStatus, now, orderReq.ClientOrdID)
+							o.db.Exec(`UPDATE orders SET status = $1, updated_at_ns = $2 WHERE cl_order_id = $3`, finalStatus, now, orderReq.ClientOrdID)
 						}
 						
 						// Broadcast update
@@ -1267,7 +1299,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 
 		if o.db != nil {
 			now := time.Now().UnixNano()
-			_, err := o.db.Exec(`UPDATE orders SET status = ?, updated_at_ns = ? WHERE cl_order_id = ?`, update.Status, now, update.ClientOrdID)
+			_, err := o.db.Exec(`UPDATE orders SET status = $1, updated_at_ns = $2 WHERE cl_order_id = $3`, update.Status, now, update.ClientOrdID)
 			if err != nil {
 				o.logger.Error("failed to update order status", "error", err)
 			}
@@ -1723,6 +1755,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	r.Handle("/api/compliance/certify", adminOnly(handleCEOCertify(o.db, o.logger))).Methods("POST", "OPTIONS")
 	r.Handle("/api/compliance/certification/status", adminOnly(handleCertificationStatus(o.db))).Methods("GET", "OPTIONS")
 	r.Handle("/api/compliance/certification/history", adminOnly(handleCertificationHistory(o.db))).Methods("GET", "OPTIONS")
+	r.Handle("/api/compliance/audit/report", adminOnly(handleSECAuditReport(o.db, o.logger))).Methods("GET", "OPTIONS")
 	r.Handle("/api/compliance/review", adminOnly(handleComplianceReview(o.db, o.logger))).Methods("POST", "OPTIONS")
 
 	// --- Supervisory Workflow (FINRA Rule 3110) ---

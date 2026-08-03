@@ -139,8 +139,8 @@ func mfaSetupForUser(db *sql.DB, enc *EncryptionService, username string) (uri, 
 
 	_, err = db.Exec(`
 		UPDATE user_credentials
-		SET totp_secret_enc=?, totp_enabled=0
-		WHERE username=?`,
+		SET totp_secret_enc=$1, totp_enabled=0
+		WHERE username=$2`,
 		encSecret, username,
 	)
 	if err != nil {
@@ -153,7 +153,7 @@ func mfaSetupForUser(db *sql.DB, enc *EncryptionService, username string) (uri, 
 
 // mfaEnableForUser marks TOTP as enabled after first successful verification.
 func mfaEnableForUser(db *sql.DB, username string) error {
-	_, err := db.Exec(`UPDATE user_credentials SET totp_enabled=1 WHERE username=?`, username)
+	_, err := db.Exec(`UPDATE user_credentials SET totp_enabled=1 WHERE username=$1`, username)
 	return err
 }
 
@@ -167,7 +167,7 @@ func mfaVerifyUser(db *sql.DB, enc *EncryptionService, username, code string) (b
 
 	err := db.QueryRow(`
 		SELECT totp_secret_enc, failed_attempts, locked_until_ns, totp_enabled
-		FROM user_credentials WHERE username=?`, username,
+		FROM user_credentials WHERE username=$1`, username,
 	).Scan(&encSecret, &failedAttempts, &lockedUntilNs, &totpEnabled)
 	if err == sql.ErrNoRows {
 		return false, fmt.Errorf("user not found")
@@ -198,7 +198,7 @@ func mfaVerifyUser(db *sql.DB, enc *EncryptionService, username, code string) (b
 		// Clear failure counter and enable if first verification
 		_, _ = db.Exec(`
 			UPDATE user_credentials SET failed_attempts=0, locked_until_ns=0, totp_enabled=1
-			WHERE username=?`, username)
+			WHERE username=$1`, username)
 		return true, nil
 	}
 
@@ -209,8 +209,8 @@ func mfaVerifyUser(db *sql.DB, enc *EncryptionService, username, code string) (b
 		lockedUntilUpdate = time.Now().Add(totpLockDur).UnixNano()
 	}
 	_, _ = db.Exec(`
-		UPDATE user_credentials SET failed_attempts=?, locked_until_ns=?
-		WHERE username=?`, failedAttempts, lockedUntilUpdate, username)
+		UPDATE user_credentials SET failed_attempts=$1, locked_until_ns=$2
+		WHERE username=$3`, failedAttempts, lockedUntilUpdate, username)
 
 	return false, nil
 }
@@ -220,7 +220,7 @@ func mfaStatusForUser(db *sql.DB, username string) (enabled bool, hasSecret bool
 	var encSecret string
 	var totpEnabled int
 	err = db.QueryRow(`
-		SELECT totp_secret_enc, totp_enabled FROM user_credentials WHERE username=?`, username,
+		SELECT totp_secret_enc, totp_enabled FROM user_credentials WHERE username=$1`, username,
 	).Scan(&encSecret, &totpEnabled)
 	if err != nil {
 		return false, false, err
@@ -334,7 +334,7 @@ func handleMFADisable(db *sql.DB, logger *slog.Logger) http.HandlerFunc {
 		}
 
 		_, err := db.Exec(`
-			UPDATE user_credentials SET totp_secret_enc='', totp_enabled=0 WHERE username=?`,
+			UPDATE user_credentials SET totp_secret_enc='', totp_enabled=0 WHERE username=$1`,
 			body.Username,
 		)
 		if err != nil {
@@ -392,7 +392,7 @@ func handleCreateUser(db *sql.DB, logger *slog.Logger) http.HandlerFunc {
 		now := time.Now().UnixNano()
 		_, err := db.Exec(`
 			INSERT INTO user_credentials (username, bcrypt_hash, role, created_at_ns, must_change_password)
-			VALUES (?, ?, ?, ?, 1)`,
+			VALUES ($1, $2, $3, $4, 1)`,
 			body.Username, h, body.Role, now,
 		)
 		if err != nil {

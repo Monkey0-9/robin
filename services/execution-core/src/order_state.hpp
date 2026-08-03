@@ -32,7 +32,8 @@ enum class OrderType : uint8_t {
     LIMIT = 0,
     MARKET = 1,
     IOC = 2,
-    FOK = 3
+    FOK = 3,
+    CANCEL = 4
 };
 
 struct Order {

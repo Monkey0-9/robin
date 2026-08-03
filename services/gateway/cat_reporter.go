@@ -57,7 +57,7 @@ func recordCATEvent(db *sql.DB, orderID int64, eventType CATEventType, exchange 
 		INSERT INTO cat_reports
 		  (order_id, cat_event_type, event_timestamp_ns, fdid, rfid,
 		   reporting_party, exchange, status)
-		VALUES (?, ?, ?, ?, ?, 'ROBIN', ?, 'PENDING')`,
+		VALUES ($1, $2, $3, $4, $5, 'ROBIN', $6, 'PENDING')`,
 		orderID, string(eventType), now, defaultFDID, defaultRFID, exchange,
 	)
 	return err
@@ -73,7 +73,7 @@ func recordMiFIDReport(db *sql.DB, orderID int64, algoID, decisionMaker, trading
 		INSERT INTO mifid_reports
 		  (order_id, transaction_ref, trading_venue, algo_id,
 		   decision_maker_id, client_id_scheme, report_status)
-		VALUES (?, ?, ?, ?, ?, 'CONCAT', 'PENDING')`,
+		VALUES ($1, $2, $3, $4, $5, 'CONCAT', 'PENDING')`,
 		orderID, transRef, tradingVenue, algoID, decisionMaker,
 	)
 	return err
@@ -173,8 +173,8 @@ func handleCATSubmit(db *sql.DB, logger *slog.Logger) http.HandlerFunc {
 		submittedCount := 0
 		for _, id := range body.EventIDs {
 			result, err := db.Exec(`
-				UPDATE cat_reports SET status='SUBMITTED', batch_id=?, submitted_at_ns=?
-				WHERE id=?`, body.BatchID, now, id)
+				UPDATE cat_reports SET status='SUBMITTED', batch_id=$1, submitted_at_ns=$2
+				WHERE id=$3`, body.BatchID, now, id)
 			if err == nil {
 				if n, _ := result.RowsAffected(); n > 0 {
 					submittedCount++

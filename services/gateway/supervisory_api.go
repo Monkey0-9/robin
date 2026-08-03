@@ -52,7 +52,7 @@ func checkSupervisoryApproval(db *sql.DB, orderID int64, symbol string, notional
 			INSERT INTO supervisory_decisions
 			  (order_id, notional, symbol, decision, principal_id, principal_name,
 			   reason, decided_at_ns, expires_at_ns, signature_hash)
-			VALUES (?, ?, ?, 'AUTO_APPROVED', 0, 'SYSTEM', 'Below threshold', ?, 0, ?)`,
+			VALUES ($1, $2, $3, 'AUTO_APPROVED', 0, 'SYSTEM', 'Below threshold', $4, 0, $5)`,
 			orderID, notional, symbol, now, hash,
 		)
 		if dbErr != nil {
@@ -71,7 +71,7 @@ func checkSupervisoryApproval(db *sql.DB, orderID int64, symbol string, notional
 		INSERT INTO supervisory_decisions
 		  (order_id, notional, symbol, decision, principal_id, principal_name,
 		   reason, decided_at_ns, expires_at_ns, signature_hash)
-		VALUES (?, ?, ?, 'PENDING', 0, '', 'Awaiting principal approval (FINRA 3110)', ?, ?, ?)`,
+		VALUES ($1, $2, $3, 'PENDING', 0, '', 'Awaiting principal approval (FINRA 3110)', $4, $5, $6)`,
 		orderID, notional, symbol, now, expiresAt, hash,
 	)
 	if err != nil {
@@ -97,9 +97,9 @@ func recordSupervisoryDecision(db *sql.DB, approvalID int64, decision, principal
 
 	_, err := db.Exec(`
 		UPDATE supervisory_decisions
-		SET decision=?, principal_id=?, principal_name=?, reason=?,
-		    decided_at_ns=?, signature_hash=?
-		WHERE id=? AND decision='PENDING'`,
+		SET decision=$1, principal_id=$2, principal_name=$3, reason=$4,
+		    decided_at_ns=$5, signature_hash=$6
+		WHERE id=$7 AND decision='PENDING'`,
 		decision, principalID, principalName, reason, now, hash, approvalID,
 	)
 	return err
@@ -126,7 +126,7 @@ func handleSupervisoryPending(db *sql.DB) http.HandlerFunc {
 			UPDATE supervisory_decisions
 			SET decision='AUTO_REJECTED', principal_name='SYSTEM',
 			    reason='TTL expired — FINRA 3110 principal approval timeout'
-			WHERE decision='PENDING' AND expires_at_ns > 0 AND expires_at_ns < ?`,
+			WHERE decision='PENDING' AND expires_at_ns > 0 AND expires_at_ns < $1`,
 			time.Now().UnixNano(),
 		)
 
@@ -255,7 +255,7 @@ func handleSupervisoryHistory(db *sql.DB) http.HandlerFunc {
 			SELECT id, order_id, notional, symbol, decision, principal_name,
 			       reason, decided_at_ns, signature_hash
 			FROM supervisory_decisions
-			ORDER BY id DESC LIMIT ?`, limit)
+			ORDER BY id DESC LIMIT $1`, limit)
 		if err != nil {
 			http.Error(w, `{"error":"database error"}`, http.StatusInternalServerError)
 			return

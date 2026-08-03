@@ -17,6 +17,14 @@
 #include <vector>
 #include <numeric>
 
+#include <rte_eal.h>
+#include <rte_ethdev.h>
+#include <rte_mbuf.h>
+#include <rte_mempool.h>
+#include <rte_mbuf_dyn.h>
+
+extern int timestamp_dynfield_offset;
+
 #ifndef likely
 #define likely(x)   __builtin_expect(!!(x), 1)
 #endif
@@ -100,6 +108,8 @@ public:
         }
     }
 
+int timestamp_dynfield_offset = -1;
+
     int init(int argc, char** argv, int port_id = 0) noexcept {
         calibrate_tsc();
         printf("[DPDK] TSC frequency: %.2f GHz\n", g_tsc_hz / 1e9);
@@ -108,6 +118,13 @@ public:
         int ret = rte_eal_init(argc, argv);
         if (ret < 0) return ret;
         port_id_ = port_id;
+
+        // Register dynamic mbuf field for timestamp
+        ret = rte_mbuf_dyn_rx_timestamp_register(&timestamp_dynfield_offset, nullptr);
+        if (ret != 0) {
+            printf("[DPDK] Failed to register dynamic timestamp field\n");
+            return -1;
+        }
 
         // Create mbuf pool with 2MB hugepages
         mbuf_pool_ = rte_pktmbuf_pool_create(
@@ -206,7 +223,10 @@ public:
             metas[i].length = rte_pktmbuf_pkt_len(mbuf);
 
             // Prefer hardware timestamp (PTP) if available
-            uint64_t hw_ts = mbuf->timestamp;
+            uint64_t hw_ts = 0;
+            if (timestamp_dynfield_offset >= 0 && (mbuf->ol_flags & RTE_MBUF_F_RX_IEEE1588_TMST)) {
+                hw_ts = *RTE_MBUF_DYNFIELD(mbuf, timestamp_dynfield_offset, uint64_t*);
+            }
             if (PTP_HW_TIMESTAMP_ENABLE && hw_ts > 0) {
                 metas[i].timestamp_ns = hw_ts;
                 stats.hw_timestamps++;

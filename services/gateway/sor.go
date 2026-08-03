@@ -7,7 +7,7 @@ import (
 
 // Exchanges is the static list of global exchanges supported by the SOR
 var Exchanges = []string{
-	"Coinbase", "Binance", "Kraken",
+	"Coinbase", "Binance", "Kraken", "NYSE", "Euronext Paris",
 }
 
 // ExchangeQuote represents a simulated quote from a specific exchange

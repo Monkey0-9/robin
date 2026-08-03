@@ -31,8 +31,7 @@ This will automatically spin up all the necessary services and background proces
 - **Rust Risk Analytics Engine**: Port `9092`
 
 ### Default Login Credentials
-- **Username**: `admin`
-- **Password**: `admin`
+**SECURITY NOTICE:** Default hardcoded credentials have been removed. You must configure initial admin credentials securely via environment variables or the secure configuration vault before starting the system.
 
 ---
 

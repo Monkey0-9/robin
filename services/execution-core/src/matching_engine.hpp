@@ -142,6 +142,14 @@ private:
                 const uint64_t start_ns = rdtscp();
                 OrderBook* book = get_or_create_book(incoming.instrument_id);
                 if (unlikely(!book)) { stats_.orders_rejected++; continue; }
+
+                if (unlikely(incoming.type == OrderType::CANCEL)) {
+                    if (book->cancel_order(incoming.id, incoming.price, incoming.side)) {
+                        stats_.orders_cancelled++;
+                    }
+                    continue;
+                }
+
                 FixedVector<Trade, 64> matches;
                 if (unlikely(!book->match_order(incoming, matches))) {
                     stats_.orders_rejected++;

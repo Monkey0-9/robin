@@ -33,25 +33,45 @@ impl HardwareKillSwitch {
         let handle = thread::spawn(move || {
             #[cfg(target_os = "linux")]
             {
-                const GPIO_PATH: &str = "/sys/class/gpio/gpio18/value";
-                loop {
-                    if let Ok(content) = std::fs::read_to_string(GPIO_PATH) {
-                        if content.trim() == "1" {
-                            println!("[KILL_SWITCH] GPIO trigger detected");
-                            active.store(true, Ordering::Release);
-                            trigger_count.fetch_add(1, Ordering::Relaxed);
-                            last_trigger_ns.store(
-                                std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_nanos() as u64,
-                                Ordering::Relaxed,
-                            );
-                            println!("[KILL_SWITCH] ACTIVATED");
-                            break;
+                use std::os::fd::AsRawFd;
+                use std::fs::OpenOptions;
+                use std::io::{Read, Seek, SeekFrom};
+
+                let file = OpenOptions::new().read(true).open("/sys/class/gpio/gpio18/value");
+                if let Ok(mut f) = file {
+                    let fd = f.as_raw_fd();
+                    let mut pfd = libc::pollfd {
+                        fd,
+                        events: libc::POLLPRI | libc::POLLERR,
+                        revents: 0,
+                    };
+
+                    let mut buf = [0u8; 2];
+                    loop {
+                        let _ = f.seek(SeekFrom::Start(0));
+                        let _ = f.read(&mut buf);
+
+                        let ret = unsafe { libc::poll(&mut pfd as *mut _, 1, -1) };
+                        if ret > 0 && (pfd.revents & libc::POLLPRI) != 0 {
+                            let _ = f.seek(SeekFrom::Start(0));
+                            if let Ok(n) = f.read(&mut buf) {
+                                if n > 0 && buf[0] == b'1' {
+                                    println!("[KILL_SWITCH] GPIO trigger detected");
+                                    active.store(true, Ordering::Release);
+                                    trigger_count.fetch_add(1, Ordering::Relaxed);
+                                    last_trigger_ns.store(
+                                        std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_nanos() as u64,
+                                        Ordering::Relaxed,
+                                    );
+                                    println!("[KILL_SWITCH] ACTIVATED");
+                                    break;
+                                }
+                            }
                         }
                     }
-                    thread::sleep(Duration::from_millis(10));
                 }
             }
 

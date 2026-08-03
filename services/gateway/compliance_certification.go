@@ -191,7 +191,7 @@ func handleCEOCertify(db *sql.DB, logger *slog.Logger) http.HandlerFunc {
 			INSERT INTO compliance_certifications
 			  (year, ceo_name, ceo_title, attested_at_ns, review_notes,
 			   systems_reviewed, signature_hash, next_review_due_ns, created_by)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 			ON CONFLICT(year) DO UPDATE SET
 			  ceo_name=excluded.ceo_name, ceo_title=excluded.ceo_title,
 			  attested_at_ns=excluded.attested_at_ns, review_notes=excluded.review_notes,
@@ -314,7 +314,7 @@ func handleComplianceReview(db *sql.DB, logger *slog.Logger) http.HandlerFunc {
 			INSERT INTO compliance_reviews
 			  (review_date_ns, reviewer, reviewer_title, findings, remediation,
 			   controls_tested, result, hash)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 			now, req.Reviewer, req.ReviewerTitle,
 			string(findingsJSON), string(remediationJSON), string(controlsJSON),
 			req.Result, hash,

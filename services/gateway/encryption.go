@@ -18,7 +18,10 @@ import (
 	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
+	"crypto"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -149,9 +152,10 @@ type HSMStatus struct {
 // WARNING: NOT production-safe. Keys are stored in memory only.
 // Replace with CloudHSMClient or ThalesLunaClient for production.
 type SoftwareHSM struct {
-	keys    map[string][]byte // keyID -> AES key bytes
-	sigKeys map[string][]byte // keyID -> HMAC-SHA256 signing key
-	enc     *EncryptionService
+	keys       map[string][]byte // keyID -> AES key bytes
+	sigKeys    map[string][]byte // keyID -> HMAC-SHA256 signing key
+	rsaKeys    map[string]*rsa.PrivateKey // keyID -> RSA private key
+	enc        *EncryptionService
 }
 
 // NewSoftwareHSM creates a software HSM backed by the EncryptionService.
@@ -159,12 +163,18 @@ func NewSoftwareHSM(enc *EncryptionService) *SoftwareHSM {
 	return &SoftwareHSM{
 		keys:    make(map[string][]byte),
 		sigKeys: make(map[string][]byte),
+		rsaKeys: make(map[string]*rsa.PrivateKey),
 		enc:     enc,
 	}
 }
 
-// SignData performs HMAC-SHA256 signing using the in-process key.
+// SignData performs signing using the in-process key.
 func (h *SoftwareHSM) SignData(keyID string, data []byte) ([]byte, error) {
+	if rsaKey, ok := h.rsaKeys[keyID]; ok {
+		// RSA PKCS#1v1.5 signing (for JWTs)
+		hashed := sha256.Sum256(data)
+		return rsa.SignPKCS1v15(rand.Reader, rsaKey, crypto.SHA256, hashed[:])
+	}
 	key, ok := h.sigKeys[keyID]
 	if !ok {
 		// Generate and cache a new key for this keyID
@@ -191,19 +201,23 @@ func (h *SoftwareHSM) VerifySignature(keyID string, data, signature []byte) (boo
 
 // GetPublicKey returns a mock public key representation for the software HSM.
 func (h *SoftwareHSM) GetPublicKey(keyID string) ([]byte, error) {
-	// Software HSM uses symmetric keys — return SHA-256 of keyID as a placeholder
+	if rsaKey, ok := h.rsaKeys[keyID]; ok {
+		return x509.MarshalPKIXPublicKey(&rsaKey.PublicKey)
+	}
 	hash := sha256.Sum256([]byte("pubkey:" + keyID))
 	return hash[:], nil
 }
 
 // RotateKey generates a new key for the given keyID.
 func (h *SoftwareHSM) RotateKey(keyID string) (string, error) {
-	newKeyID := fmt.Sprintf("%s-v%d", keyID, len(h.sigKeys)+1)
-	newKey := make([]byte, 32)
-	if _, err := rand.Read(newKey); err != nil {
+	newKeyID := fmt.Sprintf("%s-v%d", keyID, len(h.sigKeys)+len(h.rsaKeys)+1)
+	
+	// Default to generating a new RSA key for mocking purposes, unless it's a known HMAC key
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
 		return "", err
 	}
-	h.sigKeys[newKeyID] = newKey
+	h.rsaKeys[newKeyID] = priv
 	return newKeyID, nil
 }
 
