@@ -74,7 +74,7 @@ foreach(tgt matching_engine live_feed order_book_benchmark strategy_benchmark st
         target_link_libraries(${tgt} PRIVATE ws2_32)
     endif()
     if(NOT MSVC)
-        target_compile_options(${tgt} PRIVATE -mavx2 -mrdrnd -msse4.2 -mpopcnt -mrdtscp)
+        target_compile_options(${tgt} PRIVATE -mavx2 -msse4.2 -mpopcnt)
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             target_link_libraries(${tgt} PRIVATE numa pthread)
         endif()
