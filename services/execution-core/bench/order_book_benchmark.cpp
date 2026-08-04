@@ -10,8 +10,7 @@
 #include <chrono>
 #include <new>
 #include <memory>
-#ifdef _MSC_VER
-#include <intrin.h>
+#if defined(_MSC_VER) || defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
 #include <immintrin.h>
 #endif
 
@@ -158,10 +157,10 @@ void producer_thread(LockFreeSPSCQueue<Order, 65536>& queue, uint64_t count) noe
         order.id = i + 1;
 
         while (!queue.push(order)) {
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
             _mm_pause();
 #else
-            __asm__ __volatile__("pause" ::: "memory");
+            std::this_thread::yield();
 #endif
         }
 
@@ -178,10 +177,10 @@ void consumer_thread(OrderBook** books, LockFreeSPSCQueue<Order, 65536>& inbound
 
     for (uint64_t i = 0; i < count; ++i) {
         while (!inbound.pop(order)) {
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
             _mm_pause();
 #else
-            __asm__ __volatile__("pause" ::: "memory");
+            std::this_thread::yield();
 #endif
         }
 
@@ -196,10 +195,10 @@ void consumer_thread(OrderBook** books, LockFreeSPSCQueue<Order, 65536>& inbound
 
         for (size_t idx = 0; idx < trades_batch.size(); ++idx) {
             while (!outbound.push(trades_batch[idx])) {
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
                 _mm_pause();
 #else
-                __asm__ __volatile__("pause" ::: "memory");
+                std::this_thread::yield();
 #endif
             }
         }

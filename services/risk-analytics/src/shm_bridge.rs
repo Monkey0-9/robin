@@ -223,10 +223,7 @@ mod tests {
         assert!(bridge.push(&msg));
         assert_eq!(bridge.available(), 1);
 
-        let mut received = unsafe {
-            let m = MaybeUninit::<ShmMessage>::zeroed();
-            m.assume_init()
-        };
+        let mut received = unsafe { std::mem::zeroed() };
         assert!(bridge.pop(&mut received));
         assert_eq!(received.order_id, 1);
         assert_eq!(received.price, 50000);
