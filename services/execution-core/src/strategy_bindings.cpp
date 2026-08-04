@@ -1,6 +1,12 @@
 #include "strategy_engine.hpp"
 #include <cstring>
 
+#if defined(_WIN32) || defined(_MSC_VER)
+#  define EXPORT_SYMBOL __declspec(dllexport)
+#else
+#  define EXPORT_SYMBOL __attribute__((visibility("default")))
+#endif
+
 extern "C" {
 
 using namespace robin::strategy;
@@ -8,16 +14,16 @@ using namespace robin::strategy;
 // Pointer to global engine instance
 MeanReversionEngine* g_mr_engine = nullptr;
 
-__declspec(dllexport) void init_mean_reversion(const char* symbol) {
+EXPORT_SYMBOL void init_mean_reversion(const char* symbol) {
     if (g_mr_engine) delete g_mr_engine;
     g_mr_engine = new MeanReversionEngine(symbol);
 }
 
-__declspec(dllexport) void reset_mean_reversion() {
+EXPORT_SYMBOL void reset_mean_reversion() {
     if (g_mr_engine) g_mr_engine->reset();
 }
 
-__declspec(dllexport) int process_tick(const char* symbol, double price, double volume, 
+EXPORT_SYMBOL int process_tick(const char* symbol, double price, double volume, 
                                        double* out_confidence, int* out_side) {
     if (!g_mr_engine) return 0;
     
