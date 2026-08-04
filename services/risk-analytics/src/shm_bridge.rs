@@ -199,11 +199,10 @@ impl ShmBridge {
 mod tests {
     use super::{ShmBridge, ShmMessage};
 
-
     #[test]
     #[cfg(target_os = "linux")]
     fn test_shm_bridge() {
-        let path = "/robin_risk_test";
+        let path = "robin_risk_test.shm";
         let mut bridge = ShmBridge::new(path, true).unwrap();
 
         let msg = ShmMessage {
