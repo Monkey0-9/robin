@@ -34,6 +34,7 @@ struct alignas(64) ShmHeader {
     uint8_t pad3_[40];
 };
 
+#pragma pack(push, 1)
 struct ShmMessage {
     uint8_t msg_type;
     uint32_t client_id;
@@ -47,6 +48,7 @@ struct ShmMessage {
     uint64_t timestamp_ns;
     uint8_t _pad[13];
 };
+#pragma pack(pop)
 static_assert(sizeof(ShmMessage) == 64, "ShmMessage size must be 64 bytes");
 constexpr size_t SHM_CAPACITY = 65536;
 constexpr size_t SHM_SIZE = sizeof(ShmHeader) + SHM_CAPACITY * sizeof(ShmMessage);
