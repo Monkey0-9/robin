@@ -19,9 +19,9 @@ heapless = "0.8"
 libm = "0.2"
 coarsetime = "0.1"
 tracing = "0.1"
-opentelemetry = "0.21"
-opentelemetry_sdk = { version = "0.21", features = ["rt-tokio"] }
-opentelemetry-otlp = "0.14"
+opentelemetry = { version = "0.21", features = ["trace"] }
+opentelemetry_sdk = { version = "0.21", features = ["rt-tokio", "trace"] }
+opentelemetry-otlp = { version = "0.14", features = ["tonic", "metrics"] }
 tracing-opentelemetry = "0.22"
 tracing-subscriber = "0.3"
 
