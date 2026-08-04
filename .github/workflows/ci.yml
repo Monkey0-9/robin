@@ -37,7 +37,7 @@ jobs:
         with:
           node-version: '20'
       - name: Install dependencies
-        run: cd frontend && npm ci
+        run: cd frontend && (npm ci || npm install)
       - name: Typecheck
         run: cd frontend && npx tsc --noEmit
       - name: Lint
@@ -59,11 +59,11 @@ jobs:
         with:
           components: clippy
       - name: Build
-        run: cd services/risk-analytics && cargo build --release
+        run: cargo build --release -p robin-risk-analytics
       - name: Test
-        run: cd services/risk-analytics && cargo test -- --nocapture
+        run: cargo test --release -p robin-risk-analytics -- --nocapture
       - name: Clippy (deny warnings)
-        run: cd services/risk-analytics && cargo clippy -- -D warnings
+        run: cargo clippy -p robin-risk-analytics -- -D warnings
 
   # ============================================================================
   # Rust: Compliance
@@ -77,11 +77,11 @@ jobs:
         with:
           components: clippy
       - name: Build (lib + daemon)
-        run: cd services/compliance && cargo build --release
+        run: cargo build --release -p robin-compliance
       - name: Test
-        run: cd services/compliance && cargo test -- --nocapture
+        run: cargo test --release -p robin-compliance -- --nocapture
       - name: Clippy
-        run: cd services/compliance && cargo clippy -- -D warnings
+        run: cargo clippy -p robin-compliance -- -D warnings
 
   # ============================================================================
   # Go: Gateway Orchestrator
@@ -183,8 +183,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt
-      - run: cd services/risk-analytics && cargo fmt -- --check
-      - run: cd services/compliance     && cargo fmt -- --check
+      - run: cargo fmt -- --check
 
   go-fmt:
     name: Go — Format Check

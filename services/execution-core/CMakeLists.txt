@@ -10,8 +10,8 @@ if(MSVC)
 elseif(MINGW)
     set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -fno-exceptions -fno-rtti -fomit-frame-pointer")
 else()
-    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -march=native -mtune=native -flto=auto -fno-exceptions -fno-rtti -fomit-frame-pointer -frename-registers -falign-functions=64")
-    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "-flto=auto -Wl,--gc-sections")
+    set(CMAKE_CXX_FLAGS_RELEASE "-O2 -mavx2 -fno-exceptions -fno-rtti -fomit-frame-pointer")
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "-Wl,--gc-sections")
 endif()
 
 # ─── Matching Engine ──────────────────────────────────────────────────────────
