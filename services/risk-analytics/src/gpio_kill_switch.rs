@@ -79,8 +79,9 @@ impl HardwareKillSwitch {
 
             #[cfg(not(target_os = "linux"))]
             {
+                let _ = (&active, &trigger_count, &last_trigger_ns);
                 loop {
-                    thread::sleep(Duration::from_secs(1));
+                    thread::sleep(std::time::Duration::from_secs(1));
                 }
             }
         });

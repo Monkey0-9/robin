@@ -224,7 +224,7 @@ mod tests {
         assert_eq!(bridge.available(), 1);
 
         let mut received = unsafe {
-            let mut m = MaybeUninit::<ShmMessage>::zeroed();
+            let m = MaybeUninit::<ShmMessage>::zeroed();
             m.assume_init()
         };
         assert!(bridge.pop(&mut received));
