@@ -1,4 +1,4 @@
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::fs::OpenOptions;
 use std::io::Write;
 
@@ -31,8 +31,13 @@ impl AuditLogger {
     pub fn log_transaction(&mut self, record: &AuditRecord) -> std::io::Result<()> {
         let serialized = format!(
             "TS:{}|ID:{}|ACT:{}|P:{}|Q:{}|CL:{}|INST:{}\n",
-            record.timestamp_ns, record.order_id, record.action,
-            record.price, record.qty, record.client_id, record.instrument_id
+            record.timestamp_ns,
+            record.order_id,
+            record.action,
+            record.price,
+            record.qty,
+            record.client_id,
+            record.instrument_id
         );
 
         let mut hasher = Sha256::new();
@@ -45,14 +50,22 @@ impl AuditLogger {
             .append(true)
             .open(&self.log_path)?;
 
-        writeln!(file, "{}HASH:{}", serialized.trim(), hex::encode(self.current_state_hash))?;
+        writeln!(
+            file,
+            "{}HASH:{}",
+            serialized.trim(),
+            hex::encode(self.current_state_hash)
+        )?;
 
         self.records_written += 1;
 
         #[allow(clippy::manual_is_multiple_of)]
         if self.records_written % 10000 == 0 {
-            println!("[AUDIT] {} records written. Chain hash: {}",
-                     self.records_written, self.get_chain_hash());
+            println!(
+                "[AUDIT] {} records written. Chain hash: {}",
+                self.records_written,
+                self.get_chain_hash()
+            );
         }
 
         Ok(())

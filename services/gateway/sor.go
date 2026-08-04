@@ -31,7 +31,7 @@ type RoutingResult struct {
 // GenerateQuotes returns the current market price mapped across available exchanges
 func GenerateQuotes(symbol string, midPrice float64) []ExchangeQuote {
 	quotes := make([]ExchangeQuote, len(Exchanges))
-	
+
 	// Default spread (1 bps) since we don't have L2 books cached per-exchange in Go yet
 	bps := midPrice / 10000.0
 	if bps < 0.0001 {

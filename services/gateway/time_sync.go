@@ -36,24 +36,24 @@ import (
 type TimeSyncQuality string
 
 const (
-	TimeSyncGood      TimeSyncQuality = "GOOD"      // offset < 100µs
-	TimeSyncDegraded  TimeSyncQuality = "DEGRADED"  // 100µs < offset < 1ms
-	TimeSyncPoor      TimeSyncQuality = "POOR"       // offset > 1ms
-	TimeSyncUnknown   TimeSyncQuality = "UNKNOWN"   // no sync yet
+	TimeSyncGood     TimeSyncQuality = "GOOD"     // offset < 100µs
+	TimeSyncDegraded TimeSyncQuality = "DEGRADED" // 100µs < offset < 1ms
+	TimeSyncPoor     TimeSyncQuality = "POOR"     // offset > 1ms
+	TimeSyncUnknown  TimeSyncQuality = "UNKNOWN"  // no sync yet
 )
 
 const (
-	ntpEpochOffset  = 2208988800 // seconds from NTP epoch (1900) to Unix (1970)
-	ntpPollInterval = 10 * time.Second
-	ntpTimeout      = 2 * time.Second
-	goodOffsetNs    = 100_000     // 100µs
+	ntpEpochOffset   = 2208988800 // seconds from NTP epoch (1900) to Unix (1970)
+	ntpPollInterval  = 10 * time.Second
+	ntpTimeout       = 2 * time.Second
+	goodOffsetNs     = 100_000   // 100µs
 	degradedOffsetNs = 1_000_000 // 1ms
 )
 
 // TimeSyncMonitor tracks clock offset from NTP/PTP reference.
 type TimeSyncMonitor struct {
-	ntpServer  string
-	ptpGM      string // PTP grandmaster address (optional)
+	ntpServer string
+	ptpGM     string // PTP grandmaster address (optional)
 
 	// Atomic state — read lock-free on hot path
 	offsetNs    atomic.Int64  // current measured offset in ns
@@ -62,9 +62,9 @@ type TimeSyncMonitor struct {
 	quality     atomic.Uint32 // 0=unknown, 1=good, 2=degraded, 3=poor
 
 	// History for drift estimation
-	mu          sync.Mutex
-	history     []ntpSample
-	maxHistory  int
+	mu         sync.Mutex
+	history    []ntpSample
+	maxHistory int
 
 	logger *slog.Logger
 }
@@ -245,15 +245,15 @@ func handleTimeSyncStatus(ts *TimeSyncMonitor) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"quality":          string(ts.Quality()),
-			"offset_ns":        ts.OffsetNs(),
-			"drift_ns_per_s":   ts.driftNsPerS.Load(),
-			"last_sync_ns":     lastSync,
-			"last_sync_ago":    lastSyncAgo,
-			"ntp_server":       ts.ntpServer,
-			"ptp_grandmaster":  ts.ptpGM,
-			"mifid_rts25_ok":   ts.Quality() == TimeSyncGood,
-			"adjusted_now_ns":  ts.Now(),
+			"quality":         string(ts.Quality()),
+			"offset_ns":       ts.OffsetNs(),
+			"drift_ns_per_s":  ts.driftNsPerS.Load(),
+			"last_sync_ns":    lastSync,
+			"last_sync_ago":   lastSyncAgo,
+			"ntp_server":      ts.ntpServer,
+			"ptp_grandmaster": ts.ptpGM,
+			"mifid_rts25_ok":  ts.Quality() == TimeSyncGood,
+			"adjusted_now_ns": ts.Now(),
 		})
 	}
 }

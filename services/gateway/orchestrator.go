@@ -51,9 +51,9 @@ type MatchingEngineClient struct {
 
 func NewMatchingEngineClient(host string, port int) *MatchingEngineClient {
 	return &MatchingEngineClient{
-		addr:   net.JoinHostPort(host, strconv.Itoa(port)),
+		addr:    net.JoinHostPort(host, strconv.Itoa(port)),
 		enabled: false,
-		cmdCh:  make(chan engineCmd, 64),
+		cmdCh:   make(chan engineCmd, 64),
 	}
 }
 
@@ -204,13 +204,13 @@ type HotReloadConfig struct {
 
 // OrderRequest is the JSON body for POST /order
 type OrderRequest struct {
-	Symbol      string  `json:"symbol"`
-	Side        string  `json:"side"` // BUY or SELL
-	Price       int64   `json:"price"` // Fixed-point (1e8)
-	Qty         int64   `json:"qty"`   // Fixed-point (1e8)
-	OrderType   string  `json:"order_type"` // LIMIT or MARKET
-	ClientOrdID string  `json:"cl_ord_id"`
-	Exchange    string  `json:"exchange"` // AUTO (Best Price) or specific exchange
+	Symbol      string `json:"symbol"`
+	Side        string `json:"side"`       // BUY or SELL
+	Price       int64  `json:"price"`      // Fixed-point (1e8)
+	Qty         int64  `json:"qty"`        // Fixed-point (1e8)
+	OrderType   string `json:"order_type"` // LIMIT or MARKET
+	ClientOrdID string `json:"cl_ord_id"`
+	Exchange    string `json:"exchange"` // AUTO (Best Price) or specific exchange
 }
 
 func (o *OrderRequest) UnmarshalJSON(data []byte) error {
@@ -288,21 +288,21 @@ type Orchestrator struct {
 	matchClient *MatchingEngineClient
 
 	// Institutional compliance modules (Gap closure Wave 1-6)
-	killSwitch      *KillSwitchManager
-	surveillance    *SurveillanceEngine
-	timeSync        *TimeSyncMonitor
-	bestExecution   *BestExecutionMonitor
-	encryption      *EncryptionService
-	hsmClient       HSMClient
-	failover        *FailoverManager
+	killSwitch    *KillSwitchManager
+	surveillance  *SurveillanceEngine
+	timeSync      *TimeSyncMonitor
+	bestExecution *BestExecutionMonitor
+	encryption    *EncryptionService
+	hsmClient     HSMClient
+	failover      *FailoverManager
 	// aiRateLimit tracks AI signal rate for feedback-loop prevention
-	aiOrderCount    atomic.Uint64
-	aiLastResetNs   atomic.Int64
+	aiOrderCount  atomic.Uint64
+	aiLastResetNs atomic.Int64
 
 	// Risk analytics data (updated from Rust risk engine)
-	riskData       RiskData
-	peakEquity     atomic.Uint64
-	currentEquity  atomic.Uint64
+	riskData      RiskData
+	peakEquity    atomic.Uint64
+	currentEquity atomic.Uint64
 }
 
 func NewOrchestrator() *Orchestrator {
@@ -387,7 +387,7 @@ func (o *Orchestrator) initDB() {
 		db.SetMaxOpenConns(1)
 		db.SetMaxIdleConns(1)
 		db.SetConnMaxLifetime(1 * time.Hour)
-	
+
 		// Enable WAL mode explicitly
 		for _, pragma := range []string{
 			"PRAGMA journal_mode=WAL;",
@@ -517,15 +517,15 @@ func (o *Orchestrator) StartHealthProbes(ctx context.Context, interval time.Dura
 				o.wsHub.BroadcastJSON(map[string]interface{}{
 					"type": "risk_update",
 					"data": map[string]interface{}{
-						"var_95":    o.riskData.Var95,
-						"cvar_95":   o.riskData.Cvar95,
-						"drawdown":  drawdown,
-						"sharpe":    o.riskData.Sharpe,
-						"sortino":   o.riskData.Sortino,
-						"delta":     o.riskData.Delta,
-						"gamma":     o.riskData.Gamma,
-						"vega":      o.riskData.Vega,
-						"theta":     o.riskData.Theta,
+						"var_95":   o.riskData.Var95,
+						"cvar_95":  o.riskData.Cvar95,
+						"drawdown": drawdown,
+						"sharpe":   o.riskData.Sharpe,
+						"sortino":  o.riskData.Sortino,
+						"delta":    o.riskData.Delta,
+						"gamma":    o.riskData.Gamma,
+						"vega":     o.riskData.Vega,
+						"theta":    o.riskData.Theta,
 					},
 				})
 			}
@@ -543,8 +543,6 @@ type RiskData struct {
 	Vega    float64 `json:"vega"`
 	Theta   float64 `json:"theta"`
 }
-
-
 
 func (o *Orchestrator) runHealthChecks() {
 	o.mu.RLock()
@@ -851,7 +849,6 @@ func rbacMiddleware(allowedRoles ...string) func(http.Handler) http.Handler {
 	}
 }
 
-
 // ============================================================================
 // HTTP Server Setup
 // ============================================================================
@@ -920,14 +917,14 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			http.Error(w, `{"error":"symbol required"}`, http.StatusBadRequest)
 			return
 		}
-		
+
 		// In a real system, this would query TimescaleDB or KDB+.
 		// For the prototype, we simply confirm the data is being logged to flat-files.
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"symbol": symbol,
 			"status": "historical_data_available_in_kdb_storage",
-			"note": "Tick data is being asynchronously logged to c:\\Robin\\kdb_storage",
+			"note":   "Tick data is being asynchronously logged to c:\\Robin\\kdb_storage",
 		})
 	}))).Methods("GET", "OPTIONS")
 
@@ -972,7 +969,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		}()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":     string(order.State),
+			"status":    string(order.State),
 			"cl_ord_id": clOrdID,
 			"message":   "Cancel submitted",
 		})
@@ -1010,7 +1007,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		}()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":     string(order.State),
+			"status":    string(order.State),
 			"cl_ord_id": reqBody.ClOrdID,
 			"message":   "Cancel submitted",
 		})
@@ -1029,7 +1026,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":     "MODIFIED",
+			"status":    "MODIFIED",
 			"cl_ord_id": reqBody.ClOrdID,
 			"new_price": reqBody.Price,
 			"new_qty":   reqBody.Qty,
@@ -1129,14 +1126,14 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 				sideInt = 1
 			}
 			now := time.Now().UnixNano()
-			
+
 			tx, err := o.db.Begin()
 			if err != nil {
 				o.logger.Error("failed to begin db transaction", "error", err)
 				http.Error(w, `{"error":"DATABASE_ERROR"}`, http.StatusInternalServerError)
 				return
 			}
-			
+
 			res, err := tx.Exec(`
 				INSERT INTO orders (cl_order_id, instrument_id, price, qty, side, status, account_id, client_id, strategy_id, created_at_ns, updated_at_ns)
 				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
@@ -1184,19 +1181,19 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 						} else if meResp.Error == "engine offline" {
 							finalStatus = "REJECTED"
 						}
-						
+
 						// Update state
 						if o.db != nil {
 							now := time.Now().UnixNano()
 							o.db.Exec(`UPDATE orders SET status = $1, updated_at_ns = $2 WHERE cl_order_id = $3`, finalStatus, now, orderReq.ClientOrdID)
 						}
-						
+
 						// Broadcast update
 						o.wsHub.BroadcastJSON(map[string]interface{}{
 							"type": "order_update",
 							"data": map[string]interface{}{
-								"cl_ord_id": orderReq.ClientOrdID,
-								"status":    finalStatus,
+								"cl_ord_id":  orderReq.ClientOrdID,
+								"status":     finalStatus,
 								"fill_price": float64(meResp.FillPrice) / 100000000.0,
 								"fill_qty":   float64(meResp.FillQty) / 100000000.0,
 							},
@@ -1215,7 +1212,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 							if globalPositionManager != nil {
 								globalPositionManager.OnFill(
 									execID, orderReq.Symbol, orderReq.Side,
-									float64(meResp.FillQty) / 100000000.0, float64(meResp.FillPrice) / 100000000.0,
+									float64(meResp.FillQty)/100000000.0, float64(meResp.FillPrice)/100000000.0,
 								)
 							}
 						}
@@ -1249,19 +1246,19 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		respPayload := map[string]interface{}{
-			"status":                 status,
-			"exec_id":                execID,
-			"cl_ord_id":              orderReq.ClientOrdID,
-			"symbol":                 orderReq.Symbol,
-			"side":                   orderReq.Side,
-			"qty":                    float64(orderReq.Qty) / 100000000.0,
-			"fill_price":             0.0, 
-			"latency_ns":             latencyNs,
-			"engine":                 true,
-			"routed_exchange":        routedExchange,
-			"price_improvement_bps":  priceImprovement,
-			"exchanges_searched":     exchangesSearched,
-			"execution_summary":      fmt.Sprintf("Routed via %s (%d exchanges searched, +%.1fbps savings)", routedExchange, exchangesSearched, priceImprovement),
+			"status":                status,
+			"exec_id":               execID,
+			"cl_ord_id":             orderReq.ClientOrdID,
+			"symbol":                orderReq.Symbol,
+			"side":                  orderReq.Side,
+			"qty":                   float64(orderReq.Qty) / 100000000.0,
+			"fill_price":            0.0,
+			"latency_ns":            latencyNs,
+			"engine":                true,
+			"routed_exchange":       routedExchange,
+			"price_improvement_bps": priceImprovement,
+			"exchanges_searched":    exchangesSearched,
+			"execution_summary":     fmt.Sprintf("Routed via %s (%d exchanges searched, +%.1fbps savings)", routedExchange, exchangesSearched, priceImprovement),
 		}
 		if engineError != "" {
 			respPayload["error"] = engineError
@@ -1469,15 +1466,15 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"symbol":      sig.Symbol,
-			"action":      sig.Action,
-			"confidence":  sig.Confidence,
-			"regime":      sig.Regime,
-			"sentiment":   sig.Sentiment,
-			"reason":      sig.Reasoning,
-			"price":       sig.Price,
+			"symbol":       sig.Symbol,
+			"action":       sig.Action,
+			"confidence":   sig.Confidence,
+			"regime":       sig.Regime,
+			"sentiment":    sig.Sentiment,
+			"reason":       sig.Reasoning,
+			"price":        sig.Price,
 			"entry_target": sig.EntryTarget,
-			"timestamp":   time.Now().UnixMilli(),
+			"timestamp":    time.Now().UnixMilli(),
 		})
 	})))).Methods("GET", "OPTIONS")
 
@@ -1565,11 +1562,11 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			SectorName string        `json:"sector_name"`
 			Nodes      []HeatmapNode `json:"nodes"`
 		}
-		
+
 		getDynamicChange := func(symbol string, baseChange float64) float64 {
 			return baseChange
 		}
-		
+
 		heatmap := []HeatmapSector{
 			{
 				SectorName: "Cryptocurrency",
@@ -1590,7 +1587,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		if alpacaEndpoint == "" {
 			alpacaEndpoint = "https://paper-api.alpaca.markets/v2"
 		}
-		
+
 		vaultClient := NewVaultClient()
 		keyID, err1 := vaultClient.GetSecret("secret/data/alpaca", "API_KEY_ID")
 		secretKey, err2 := vaultClient.GetSecret("secret/data/alpaca", "API_SECRET_KEY")
@@ -1842,7 +1839,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"ETH/USD": "Ethereum",
 			"SOL/USD": "Solana",
 		}
-for symbol, price := range prices {
+		for symbol, price := range prices {
 			name, ok := nameMap[symbol]
 			if !ok {
 				name = symbol
@@ -2020,4 +2017,3 @@ func (o *Orchestrator) SendOrderToAlpaca(symbol string, qty float64, side string
 // ============================================================================
 
 // Main moved to main.go
-

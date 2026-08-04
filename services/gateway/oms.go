@@ -37,7 +37,6 @@ import (
 	"sync/atomic"
 	"time"
 
-
 	_ "github.com/lib/pq"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -49,7 +48,7 @@ const numOrderWorkers = 10
 type OrderState int32
 
 const (
-	StateNew             OrderState = iota
+	StateNew OrderState = iota
 	StatePendingNew
 	StateLive
 	StatePartiallyFilled
@@ -60,14 +59,22 @@ const (
 
 func (s OrderState) String() string {
 	switch s {
-	case StateNew:             return "NEW"
-	case StatePendingNew:     return "PENDING_NEW"
-	case StateLive:           return "LIVE"
-	case StatePartiallyFilled: return "PARTIALLY_FILLED"
-	case StateFilled:         return "FILLED"
-	case StateCancelled:      return "CANCELLED"
-	case StateRejected:       return "REJECTED"
-	default:                  return "UNKNOWN"
+	case StateNew:
+		return "NEW"
+	case StatePendingNew:
+		return "PENDING_NEW"
+	case StateLive:
+		return "LIVE"
+	case StatePartiallyFilled:
+		return "PARTIALLY_FILLED"
+	case StateFilled:
+		return "FILLED"
+	case StateCancelled:
+		return "CANCELLED"
+	case StateRejected:
+		return "REJECTED"
+	default:
+		return "UNKNOWN"
 	}
 }
 
@@ -76,7 +83,7 @@ func (s OrderState) String() string {
 type Order struct {
 	ClientOrderID string     `json:"cl_ord_id"`
 	Symbol        string     `json:"symbol"`
-	Side          string     `json:"side"`   // "BUY" | "SELL"
+	Side          string     `json:"side"` // "BUY" | "SELL"
 	Qty           float64    `json:"qty"`
 	Price         float64    `json:"price"`
 	KellyFraction float64    `json:"kelly_fraction"`
@@ -96,7 +103,7 @@ func (o *Order) Transition(next OrderState, note string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	log.Printf("[OMS] %s: %s → %s (%s)", o.ClientOrderID, o.State, next, note)
-	o.State     = next
+	o.State = next
 	o.UpdatedAt = time.Now().UTC()
 }
 
@@ -110,9 +117,9 @@ func (o *Order) ToJSON() []byte {
 // ─── C++ Signal (JSON published by live_feed.exe) ─────────────────────────────
 
 type CppSignal struct {
-	Type       string  `json:"type"`   // "SIGNAL"
+	Type       string  `json:"type"` // "SIGNAL"
 	Symbol     string  `json:"symbol"`
-	Side       string  `json:"side"`   // "BUY" | "SELL"
+	Side       string  `json:"side"` // "BUY" | "SELL"
 	Price      float64 `json:"price"`
 	Confidence float64 `json:"confidence"`
 	Kelly      float64 `json:"kelly"`
@@ -145,7 +152,7 @@ func NewAuditLogger(path string) (*AuditLogger, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS audit_log (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -174,16 +181,16 @@ func (a *AuditLogger) Close() { a.db.Close() }
 // ─── OMS ──────────────────────────────────────────────────────────────────────
 
 type OMS struct {
-	orders   map[string]*Order
-	mu       sync.RWMutex
-	audit    *AuditLogger
-	binance  *BinanceConnector
-	alpaca   *AlpacaConnector
-	seqNum   atomic.Uint64
-	killSwitch atomic.Bool   // Emergency stop
+	orders     map[string]*Order
+	mu         sync.RWMutex
+	audit      *AuditLogger
+	binance    *BinanceConnector
+	alpaca     *AlpacaConnector
+	seqNum     atomic.Uint64
+	killSwitch atomic.Bool // Emergency stop
 
-	orderCh  chan *Order
-	wg       sync.WaitGroup
+	orderCh chan *Order
+	wg      sync.WaitGroup
 }
 
 func NewOMS(audit *AuditLogger) *OMS {
@@ -219,7 +226,7 @@ func (o *OMS) IsKilled() bool { return o.killSwitch.Load() }
 // GenerateClientOrderID generates a unique, human-readable order ID
 func (o *OMS) GenerateClientOrderID(symbol, side string) string {
 	seq := o.seqNum.Add(1)
-	ts  := time.Now().UTC().UnixNano() / 1e6 // ms
+	ts := time.Now().UTC().UnixNano() / 1e6 // ms
 	return fmt.Sprintf("ROBIN-%s-%s-%d-%d", symbol, side, ts, seq)
 }
 
@@ -384,13 +391,13 @@ func (o *OMS) pollForFill(ctx context.Context, order *Order) {
 			// In paper mode, assume immediate fill
 			order.mu.Lock()
 			if order.State == StateLive || order.State == StatePartiallyFilled {
-				order.FilledQty    = order.Qty
-				order.FilledAvgPx  = order.Price
+				order.FilledQty = order.Qty
+				order.FilledAvgPx = order.Price
 				order.mu.Unlock()
 				order.Transition(StateFilled, "paper fill")
 				o.audit.Log("ORDER_FILLED", map[string]any{
-					"cl_ord_id":    order.ClientOrderID,
-					"filled_qty":   order.Qty,
+					"cl_ord_id":     order.ClientOrderID,
+					"filled_qty":    order.Qty,
 					"filled_avg_px": order.Price,
 				})
 			} else {
@@ -448,19 +455,21 @@ func (b *BinanceConnector) SubmitOrder(ctx context.Context, o *Order) (string, e
 	// Normalise symbol: "BTC-USD" → "BTCUSDT"
 	sym := o.Symbol
 	switch sym {
-	case "BTC-USD": sym = "BTCUSDT"
-	case "ETH-USD": sym = "ETHUSDT"
+	case "BTC-USD":
+		sym = "BTCUSDT"
+	case "ETH-USD":
+		sym = "ETHUSDT"
 	}
 
 	side := o.Side
-	ts   := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	ts := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	params := url.Values{}
-	params.Set("symbol",       sym)
-	params.Set("side",         side)
-	params.Set("type",         "MARKET")
-	params.Set("quantity",     strconv.FormatFloat(o.Qty, 'f', 6, 64))
-	params.Set("timestamp",    ts)
-	params.Set("recvWindow",   "5000")
+	params.Set("symbol", sym)
+	params.Set("side", side)
+	params.Set("type", "MARKET")
+	params.Set("quantity", strconv.FormatFloat(o.Qty, 'f', 6, 64))
+	params.Set("timestamp", ts)
+	params.Set("recvWindow", "5000")
 
 	// HMAC-SHA256 signature
 	mac := hmac.New(sha256.New, []byte(b.apiSecret))
@@ -485,7 +494,9 @@ func (b *BinanceConnector) SubmitOrder(ctx context.Context, o *Order) (string, e
 		return "", fmt.Errorf("binance error %d: %s", resp.StatusCode, string(body))
 	}
 
-	var result struct{ OrderID int64 `json:"orderId"` }
+	var result struct {
+		OrderID int64 `json:"orderId"`
+	}
 	if err := json.Unmarshal(body, &result); err != nil {
 		return "", err
 	}
@@ -533,9 +544,9 @@ func (a *AlpacaConnector) SubmitOrder(ctx context.Context, o *Order) (string, er
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("APCA-API-KEY-ID",     a.apiKey)
+	req.Header.Set("APCA-API-KEY-ID", a.apiKey)
 	req.Header.Set("APCA-API-SECRET-KEY", a.apiSecret)
-	req.Header.Set("Content-Type",        "application/json")
+	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := a.client.Do(req)
 	if err != nil {
@@ -548,7 +559,9 @@ func (a *AlpacaConnector) SubmitOrder(ctx context.Context, o *Order) (string, er
 		return "", fmt.Errorf("alpaca error %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	var result struct{ ID string `json:"id"` }
+	var result struct {
+		ID string `json:"id"`
+	}
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return "", err
 	}

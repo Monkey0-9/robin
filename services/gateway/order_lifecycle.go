@@ -31,38 +31,38 @@ var ValidTransitions = map[OrderLifecycleState][]OrderLifecycleState{
 }
 
 type StateTransitionEvent struct {
-	From      OrderLifecycleState `json:"from"`
-	To        OrderLifecycleState `json:"to"`
-	Reason    string              `json:"reason"`
-	TimestampNs int64             `json:"timestamp_ns"`
+	From        OrderLifecycleState `json:"from"`
+	To          OrderLifecycleState `json:"to"`
+	Reason      string              `json:"reason"`
+	TimestampNs int64               `json:"timestamp_ns"`
 }
 
 type ManagedOrder struct {
-	ClOrdID       string              `json:"cl_ord_id"`
-	OrderID       uint64              `json:"order_id"`
-	ParentID      string              `json:"parent_id,omitempty"`
-	Symbol        string              `json:"symbol"`
-	Side          string              `json:"side"`
-	OrderType     string              `json:"order_type"`
-	Qty           float64             `json:"qty"`
-	Price         float64             `json:"price"`
-	FilledQty     float64             `json:"filled_qty"`
-	AvgFillPrice  float64             `json:"avg_fill_price"`
-	LeavesQty     float64             `json:"leaves_qty"`
-	State         OrderLifecycleState `json:"status"`
-	RoutedExchange string             `json:"routed_exchange"`
-	CreatedAtNs   int64               `json:"created_at_ns"`
-	UpdatedAtNs   int64               `json:"updated_at_ns"`
-	History       []StateTransitionEvent `json:"history,omitempty"`
+	ClOrdID        string                 `json:"cl_ord_id"`
+	OrderID        uint64                 `json:"order_id"`
+	ParentID       string                 `json:"parent_id,omitempty"`
+	Symbol         string                 `json:"symbol"`
+	Side           string                 `json:"side"`
+	OrderType      string                 `json:"order_type"`
+	Qty            float64                `json:"qty"`
+	Price          float64                `json:"price"`
+	FilledQty      float64                `json:"filled_qty"`
+	AvgFillPrice   float64                `json:"avg_fill_price"`
+	LeavesQty      float64                `json:"leaves_qty"`
+	State          OrderLifecycleState    `json:"status"`
+	RoutedExchange string                 `json:"routed_exchange"`
+	CreatedAtNs    int64                  `json:"created_at_ns"`
+	UpdatedAtNs    int64                  `json:"updated_at_ns"`
+	History        []StateTransitionEvent `json:"history,omitempty"`
 
 	// For bracket orders
 	TakeProfitID string `json:"take_profit_id,omitempty"`
 	StopLossID   string `json:"stop_loss_id,omitempty"`
 
 	// For TWAP orders
-	IsTWAP      bool    `json:"is_twap,omitempty"`
-	TWAPSlices  int     `json:"twap_slices,omitempty"`
-	TWAPFilled  int     `json:"twap_filled,omitempty"`
+	IsTWAP       bool          `json:"is_twap,omitempty"`
+	TWAPSlices   int           `json:"twap_slices,omitempty"`
+	TWAPFilled   int           `json:"twap_filled,omitempty"`
 	TWAPInterval time.Duration `json:"-"`
 }
 
@@ -70,7 +70,9 @@ type OrderStateMachine struct {
 	mu     sync.RWMutex
 	orders map[string]*ManagedOrder
 	wsHub  *WebSocketHub
-	db     interface{ Exec(string, ...interface{}) (interface{}, error) }
+	db     interface {
+		Exec(string, ...interface{}) (interface{}, error)
+	}
 }
 
 var globalOrderSM *OrderStateMachine

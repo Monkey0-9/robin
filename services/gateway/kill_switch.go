@@ -63,10 +63,10 @@ type KillSwitchManager struct {
 	traderReasons map[string]string // trader_id -> reason
 
 	// Trip metadata
-	systemReason   string
+	systemReason    string
 	systemTrippedBy string
 	systemTripTime  int64 // unix nanoseconds
-	metaMu         sync.RWMutex
+	metaMu          sync.RWMutex
 
 	// Pending dual-person reset: maps reset token -> requesting admin
 	pendingResets map[string]string // token -> admin_username
@@ -82,7 +82,7 @@ func NewKillSwitchManager(db *sql.DB, logger *slog.Logger, wsHub *WebSocketHub) 
 	ks := &KillSwitchManager{
 		algoReasons:   make(map[string]string),
 		traderReasons: make(map[string]string),
-		pendingResets:  make(map[string]string),
+		pendingResets: make(map[string]string),
 		db:            db,
 		logger:        logger,
 		wsHub:         wsHub,
@@ -272,12 +272,12 @@ func (ks *KillSwitchManager) ConfirmSystemReset(resetToken, confirmingAdmin, rea
 
 	if ks.wsHub != nil {
 		ks.wsHub.BroadcastJSON(map[string]interface{}{
-			"type":          "KILL_SWITCH",
-			"level":         "SYSTEM",
-			"action":        "RESET",
-			"initiated_by":  initiatingAdmin,
-			"confirmed_by":  confirmingAdmin,
-			"time_ns":       now,
+			"type":         "KILL_SWITCH",
+			"level":        "SYSTEM",
+			"action":       "RESET",
+			"initiated_by": initiatingAdmin,
+			"confirmed_by": confirmingAdmin,
+			"time_ns":      now,
 		})
 	}
 	return nil
@@ -587,7 +587,9 @@ func killSwitchTripAlgoHandler(ks *KillSwitchManager) http.HandlerFunc {
 func killSwitchResetAlgoHandler(ks *KillSwitchManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		algoID := extractPathParam(r, "id")
-		var body struct{ Reason string `json:"reason"` }
+		var body struct {
+			Reason string `json:"reason"`
+		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		admin := adminFromContext(r)
 		ks.ResetAlgo(algoID, admin, body.Reason)
@@ -623,7 +625,9 @@ func killSwitchTripTraderHandler(ks *KillSwitchManager) http.HandlerFunc {
 func killSwitchResetTraderHandler(ks *KillSwitchManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		traderID := extractPathParam(r, "id")
-		var body struct{ Reason string `json:"reason"` }
+		var body struct {
+			Reason string `json:"reason"`
+		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		admin := adminFromContext(r)
 		ks.ResetTrader(traderID, admin, body.Reason)
@@ -669,7 +673,7 @@ func killSwitchLogHandler(db *sql.DB) http.HandlerFunc {
 				"id": id, "level": level, "target_id": targetID,
 				"action": action, "reason": reason, "tripped_by": trippedBy,
 				"secondary_approver": secondaryApprover,
-				"tripped_at_ns": trippedAt, "reset_at_ns": resetAt,
+				"tripped_at_ns":      trippedAt, "reset_at_ns": resetAt,
 				"chain_hash": chainHash,
 			})
 		}

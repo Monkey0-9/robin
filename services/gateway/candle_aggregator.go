@@ -23,10 +23,10 @@ type candleKey struct {
 }
 
 type candleAccumulator struct {
-	mu       sync.RWMutex
-	bars     map[candleKey][]*CandleBar
-	current  map[candleKey]*CandleBar
-	maxBars  int
+	mu      sync.RWMutex
+	bars    map[candleKey][]*CandleBar
+	current map[candleKey]*CandleBar
+	maxBars int
 }
 
 var globalCandleAgg = &candleAccumulator{

@@ -164,22 +164,17 @@ fn serve_metrics_impl(port: u16) {
     };
     eprintln!("[METRICS] Serving Prometheus metrics on :{port}/metrics");
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(mut s) => {
-                let mut buf = [0u8; 256];
-                let _ = s.read(&mut buf);
-                let body = render_text();
-                let response = format!(
-                    "HTTP/1.0 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\n\
-                     Content-Length: {}\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
-                let _ = s.write_all(response.as_bytes());
-            }
-            Err(_) => {}
-        }
+    for mut s in listener.incoming().flatten() {
+        let mut buf = [0u8; 256];
+        let _ = s.read(&mut buf);
+        let body = render_text();
+        let response = format!(
+            "HTTP/1.0 200 OK\r\nContent-Type: text/plain; version=0.0.4\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = s.write_all(response.as_bytes());
     }
 }
 

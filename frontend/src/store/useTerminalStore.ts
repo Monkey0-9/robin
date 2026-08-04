@@ -124,6 +124,7 @@ export interface Execution {
 interface TerminalState {
   assets: Asset[];
   selectedSymbol: string;
+  symbol: string;
   notification: Notification | null;
   tradeHistory: Trade[];
   positions: Position[];
@@ -156,6 +157,7 @@ interface TerminalState {
   submitOrder: (symbol: string, side: 'BUY' | 'SELL', price: number, size: number, isMarket?: boolean, orderType?: 'MARKET' | 'LIMIT' | 'STOP') => Promise<void>;
   cancelOrder: (id: string) => Promise<void>;
   setSelectedSymbol: (symbol: string) => void;
+  setSymbol: (symbol: string) => void;
   setRoutingMode: (mode: string) => void;
   fetchScreenerData: () => Promise<void>;
   fetchHeatmapData: () => Promise<void>;
@@ -197,6 +199,7 @@ function createWebSocket(
 export const useTerminalStore = create<TerminalState>((set, get) => ({
   assets: [],
   selectedSymbol: 'BTC/USD',
+  symbol: 'BTC/USD',
   notification: null,
   tradeHistory: [],
   positions: [],
@@ -535,8 +538,11 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
   showNotification: (message, type) => set({ notification: { message, type } }),
   setSelectedSymbol: (symbol) => {
-    set({ selectedSymbol: symbol });
+    set({ selectedSymbol: symbol, symbol });
     get().fetchSorPrices(symbol);
+  },
+  setSymbol: (symbol) => {
+    get().setSelectedSymbol(symbol);
   },
 
   setRoutingMode: (mode) => set({ routingMode: mode }),

@@ -16,33 +16,33 @@
 // On other OS: runs in log-only mode (no SHM)
 // ============================================================================
 
-use robin_compliance::spoofing_detector::{SpoofingDetector, OrderEvent};
 use robin_compliance::audit_logger::{AuditLogger, AuditRecord};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use robin_compliance::spoofing_detector::{OrderEvent, SpoofingDetector};
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use robin_risk::config::{PORT_COMPLIANCE, SHM_RISK_TO_MATCH};
 use robin_risk::shm_bridge::{ShmBridge, ShmMessage};
-use robin_risk::config::{SHM_RISK_TO_MATCH, PORT_COMPLIANCE};
 
 // ============================================================================
 // Configuration
 // ============================================================================
-const _DEFAULT_SHM_PATH:  &str = "robin_risk_match.shm"; // Fallback if SHM_RISK_TO_MATCH fails
-const DEFAULT_AUDIT_LOG:  &str = "logs/audit.log";
-const DEFAULT_PORT:       u16  = 9095;
+const _DEFAULT_SHM_PATH: &str = "robin_risk_match.shm"; // Fallback if SHM_RISK_TO_MATCH fails
+const DEFAULT_AUDIT_LOG: &str = "logs/audit.log";
+const DEFAULT_PORT: u16 = 9095;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 
 // ============================================================================
 // Global metrics
 // ============================================================================
-static EVENTS_PROCESSED:  AtomicU64 = AtomicU64::new(0);
-static SPOOFING_ALERTS:   AtomicU64 = AtomicU64::new(0);
-static AUDIT_RECORDS:     AtomicU64 = AtomicU64::new(0);
-static RUNNING:           AtomicBool = AtomicBool::new(true);
+static EVENTS_PROCESSED: AtomicU64 = AtomicU64::new(0);
+static SPOOFING_ALERTS: AtomicU64 = AtomicU64::new(0);
+static AUDIT_RECORDS: AtomicU64 = AtomicU64::new(0);
+static RUNNING: AtomicBool = AtomicBool::new(true);
 
 fn now_ns() -> u64 {
     SystemTime::now()
@@ -55,9 +55,9 @@ fn now_ns() -> u64 {
 // Prometheus metrics
 // ============================================================================
 fn render_metrics() -> String {
-    let events   = EVENTS_PROCESSED.load(Ordering::Relaxed);
-    let alerts   = SPOOFING_ALERTS.load(Ordering::Relaxed);
-    let records  = AUDIT_RECORDS.load(Ordering::Relaxed);
+    let events = EVENTS_PROCESSED.load(Ordering::Relaxed);
+    let alerts = SPOOFING_ALERTS.load(Ordering::Relaxed);
+    let records = AUDIT_RECORDS.load(Ordering::Relaxed);
     format!(
         "# HELP robin_compliance_events_processed_total Total order events processed\n\
          # TYPE robin_compliance_events_processed_total counter\n\
@@ -86,7 +86,9 @@ fn serve_http(port: u16) {
     listener.set_nonblocking(false).ok();
 
     for stream in listener.incoming() {
-        if !RUNNING.load(Ordering::Relaxed) { break; }
+        if !RUNNING.load(Ordering::Relaxed) {
+            break;
+        }
         let Ok(mut s) = stream else { continue };
         let mut buf = [0u8; 512];
         let n = s.read(&mut buf).unwrap_or(0);
@@ -95,12 +97,15 @@ fn serve_http(port: u16) {
         let (status, body) = if req.contains("GET /metrics") {
             ("200 OK", render_metrics())
         } else if req.contains("GET /health") {
-            ("200 OK", format!(
-                "{{\"status\":\"ok\",\"events\":{},\"alerts\":{},\"audit_records\":{}}}",
-                EVENTS_PROCESSED.load(Ordering::Relaxed),
-                SPOOFING_ALERTS.load(Ordering::Relaxed),
-                AUDIT_RECORDS.load(Ordering::Relaxed),
-            ))
+            (
+                "200 OK",
+                format!(
+                    "{{\"status\":\"ok\",\"events\":{},\"alerts\":{},\"audit_records\":{}}}",
+                    EVENTS_PROCESSED.load(Ordering::Relaxed),
+                    SPOOFING_ALERTS.load(Ordering::Relaxed),
+                    AUDIT_RECORDS.load(Ordering::Relaxed),
+                ),
+            )
         } else {
             ("404 Not Found", "Not Found".to_string())
         };
@@ -124,7 +129,7 @@ fn serve_http(port: u16) {
 // ============================================================================
 fn process_loop(shm_path: &str, audit_log_path: &str) {
     let mut detector = SpoofingDetector::new(5_000_000_000); // 5-second window
-    let mut logger   = AuditLogger::new(audit_log_path);
+    let mut logger = AuditLogger::new(audit_log_path);
 
     eprintln!("[COMPLIANCE] Starting compliance daemon");
     eprintln!("[COMPLIANCE]   SHM path:   {shm_path}");
@@ -160,7 +165,9 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
     let mut shm_buf = unsafe { std::mem::zeroed::<ShmMessage>() };
 
     loop {
-        if !RUNNING.load(Ordering::Relaxed) { break; }
+        if !RUNNING.load(Ordering::Relaxed) {
+            break;
+        }
 
         let now = now_ns();
         let mut processed = false;
@@ -185,23 +192,26 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
 
                 // Check for spoofing
                 let event = OrderEvent {
-                    order_id:     shm_buf.order_id,
-                    symbol:       format!("INST{}", shm_buf.instrument_id),
-                    price:        shm_buf.price,
-                    qty:          shm_buf.qty,
-                    event_type:   msg_type_str,
+                    order_id: shm_buf.order_id,
+                    symbol: format!("INST{}", shm_buf.instrument_id),
+                    price: shm_buf.price,
+                    qty: shm_buf.qty,
+                    event_type: msg_type_str,
                     timestamp_ns: shm_buf.timestamp_ns,
                 };
                 let alert = detector.process_order_event(event);
                 EVENTS_PROCESSED.fetch_add(1, Ordering::Relaxed);
                 if alert {
                     SPOOFING_ALERTS.fetch_add(1, Ordering::Relaxed);
-                    eprintln!("[COMPLIANCE] SPOOFING ALERT: OrderID={} {} {} @ {}x{}",
-                              shm_buf.order_id, side_str, msg_type_str, shm_buf.price, shm_buf.qty);
+                    eprintln!(
+                        "[COMPLIANCE] SPOOFING ALERT: OrderID={} {} {} @ {}x{}",
+                        shm_buf.order_id, side_str, msg_type_str, shm_buf.price, shm_buf.qty
+                    );
                 }
 
                 // FINRA 3110: principal approval for large orders
-                let order_value = (shm_buf.price as u64).saturating_mul(shm_buf.qty as u64) / 100_000_000;
+                let order_value =
+                    (shm_buf.price as u64).saturating_mul(shm_buf.qty as u64) / 100_000_000;
                 if shm_buf.qty >= 10_000 * 100_000_000 || order_value >= 10_000_000 * 100_000_000 {
                     eprintln!("[COMPLIANCE] FINRA 3110: Principal approval required for OrderID={} (Qty={}, Value={})",
                               shm_buf.order_id, shm_buf.qty, order_value);
@@ -209,12 +219,12 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
 
                 // Write to audit log
                 let record = AuditRecord {
-                    timestamp_ns:  shm_buf.timestamp_ns,
-                    order_id:      shm_buf.order_id,
-                    action:        msg_type_str,
-                    price:         shm_buf.price,
-                    qty:           shm_buf.qty,
-                    client_id:     shm_buf.client_id,
+                    timestamp_ns: shm_buf.timestamp_ns,
+                    order_id: shm_buf.order_id,
+                    action: msg_type_str,
+                    price: shm_buf.price,
+                    qty: shm_buf.qty,
+                    client_id: shm_buf.client_id,
                     instrument_id: shm_buf.instrument_id,
                 };
                 if logger.log_transaction(&record).is_ok() {
@@ -230,12 +240,12 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
             // Heartbeat log entry every 10 seconds
             if now.wrapping_sub(last_heartbeat) > HEARTBEAT_INTERVAL.as_nanos() as u64 {
                 let record = AuditRecord {
-                    timestamp_ns:  now,
-                    order_id:      0,
-                    action:        "HEARTBEAT",
-                    price:         0,
-                    qty:           0,
-                    client_id:     0,
+                    timestamp_ns: now,
+                    order_id: 0,
+                    action: "HEARTBEAT",
+                    price: 0,
+                    qty: 0,
+                    client_id: 0,
                     instrument_id: 0,
                 };
                 if let Err(e) = logger.log_transaction(&record) {
@@ -249,11 +259,11 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
             // Synthetic NEW order every 100ms in demo mode
             if shm_reader.is_none() {
                 let event = OrderEvent {
-                    order_id:     synthetic_order_id,
-                    symbol:       "DEMO".to_string(),
-                    price:        50_000,
-                    qty:          1000,
-                    event_type:   "NEW",
+                    order_id: synthetic_order_id,
+                    symbol: "DEMO".to_string(),
+                    price: 50_000,
+                    qty: 1000,
+                    event_type: "NEW",
                     timestamp_ns: now,
                 };
                 let alert = detector.process_order_event(event.clone());
@@ -269,12 +279,12 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
                 }
 
                 let record = AuditRecord {
-                    timestamp_ns:  now,
-                    order_id:      synthetic_order_id,
-                    action:        "NEW",
-                    price:         50_000,
-                    qty:           1000,
-                    client_id:     1,
+                    timestamp_ns: now,
+                    order_id: synthetic_order_id,
+                    action: "NEW",
+                    price: 50_000,
+                    qty: 1000,
+                    client_id: 1,
                     instrument_id: 1,
                 };
                 if logger.log_transaction(&record).is_ok() {
@@ -288,7 +298,10 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
         thread::sleep(Duration::from_millis(10));
     }
 
-    eprintln!("[COMPLIANCE] Daemon stopped. Chain hash: {}", logger.get_chain_hash());
+    eprintln!(
+        "[COMPLIANCE] Daemon stopped. Chain hash: {}",
+        logger.get_chain_hash()
+    );
 }
 
 // ============================================================================
@@ -297,17 +310,27 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     // Try the shared config path first, then fallback
-    let mut shm_path       = SHM_RISK_TO_MATCH.to_string();
+    let mut shm_path = SHM_RISK_TO_MATCH.to_string();
     let mut audit_log_path = DEFAULT_AUDIT_LOG.to_string();
-    let mut port           = PORT_COMPLIANCE;
+    let mut port = PORT_COMPLIANCE;
 
     // Simple argument parsing
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
-            "--shm-path"  => { i += 1; if i < args.len() { shm_path = args[i].clone(); } }
-            "--audit-log" => { i += 1; if i < args.len() { audit_log_path = args[i].clone(); } }
-            "--port"      => {
+            "--shm-path" => {
+                i += 1;
+                if i < args.len() {
+                    shm_path = args[i].clone();
+                }
+            }
+            "--audit-log" => {
+                i += 1;
+                if i < args.len() {
+                    audit_log_path = args[i].clone();
+                }
+            }
+            "--port" => {
                 i += 1;
                 if i < args.len() {
                     port = args[i].parse().unwrap_or(DEFAULT_PORT);

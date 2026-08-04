@@ -1,13 +1,13 @@
-use std::net::{TcpListener, TcpStream};
-use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use robin_risk::gate::{RiskGate, Order, OrderSide};
-use robin_risk::metrics;
-use robin_risk::config::PORT_RISK_METRICS;
-use serde_json::Value;
-use robin_risk::shm_bridge::{ShmBridge, ShmMessage};
 use opentelemetry::trace::TracerProvider as _;
+use robin_risk::config::PORT_RISK_METRICS;
+use robin_risk::gate::{Order, OrderSide, RiskGate};
+use robin_risk::metrics;
+use robin_risk::shm_bridge::{ShmBridge, ShmMessage};
+use serde_json::Value;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use tracing_subscriber::prelude::*;
 
 fn main() {
@@ -18,7 +18,11 @@ fn main() {
         .tracing()
         .with_exporter(opentelemetry_otlp::new_exporter().tonic())
         .install_batch(opentelemetry_sdk::runtime::Tokio)
-        .unwrap_or_else(|_| opentelemetry_sdk::trace::TracerProvider::builder().build().tracer("robin-risk-gate"));
+        .unwrap_or_else(|_| {
+            opentelemetry_sdk::trace::TracerProvider::builder()
+                .build()
+                .tracer("robin-risk-gate")
+        });
     let telemetry = tracing_opentelemetry::layer().with_tracer(tracer);
     let subscriber = tracing_subscriber::Registry::default().with(telemetry);
     tracing::subscriber::set_global_default(subscriber).ok();
@@ -30,14 +34,14 @@ fn main() {
             metrics::serve_metrics(metrics_port);
         });
     }
-    
+
     let mut gate = RiskGate::with_config(
         "robin_risk_match.shm",
         1_000_000_000_000_000_000u64, // credit limit ($10B scaled by 1e8)
-        100 * 100_000_000,           // position limit (100 contracts scaled by 1e8)
-        100_000 * 100_000_000,       // max qty per order (100k contracts scaled by 1e8)
+        100 * 100_000_000,            // position limit (100 contracts scaled by 1e8)
+        100_000 * 100_000_000,        // max qty per order (100k contracts scaled by 1e8)
     );
-    
+
     // Attempt to load snapshot
     let snapshot_path = "positions.bin";
     if let Ok(count) = gate.load_snapshot(snapshot_path) {
@@ -45,24 +49,22 @@ fn main() {
     } else {
         println!("[RISK] No valid snapshot found, starting fresh.");
     }
-    
+
     // Set realistic initial reference prices in ticks (price * 100,000,000)
     gate.update_reference_price(1, 6_450_000_000_000); // BTC/USD ~ 64,500
-    gate.update_reference_price(2, 345_000_000_000);  // ETH/USD ~ 3,450
-    gate.update_reference_price(3, 18_530_000_000);   // AAPL ~ 185.30
-    gate.update_reference_price(4, 108_500_000);      // EUR/USD ~ 1.0850
+    gate.update_reference_price(2, 345_000_000_000); // ETH/USD ~ 3,450
+    gate.update_reference_price(3, 18_530_000_000); // AAPL ~ 185.30
+    gate.update_reference_price(4, 108_500_000); // EUR/USD ~ 1.0850
 
     let gate = Arc::new(Mutex::new(gate));
     let gate_clone = gate.clone();
     let gate_bg = gate.clone();
 
     // Setup background thread for periodic snapshot saving
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            if let Ok(g) = gate_bg.lock() {
-                let _ = g.save_snapshot(snapshot_path);
-            }
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        if let Ok(g) = gate_bg.lock() {
+            let _ = g.save_snapshot(snapshot_path);
         }
     });
 
@@ -77,13 +79,27 @@ fn main() {
             }
         };
         let mut msg = ShmMessage {
-            msg_type: 0, client_id: 0, instrument_id: 0, price: 0, qty: 0, side: 0, flags: 0, order_id: 0, cl_order_id: 0, timestamp_ns: 0, _pad: [0; 13],
+            msg_type: 0,
+            client_id: 0,
+            instrument_id: 0,
+            price: 0,
+            qty: 0,
+            side: 0,
+            flags: 0,
+            order_id: 0,
+            cl_order_id: 0,
+            timestamp_ns: 0,
+            _pad: [0; 13],
         };
         loop {
             if ai_shm.pop(&mut msg) {
                 if let Ok(mut g) = gate_ai.lock() {
-                    let side = if msg.side == 1 { OrderSide::Bid } else { OrderSide::Ask };
-                    let mut order = Order {
+                    let side = if msg.side == 1 {
+                        OrderSide::Bid
+                    } else {
+                        OrderSide::Ask
+                    };
+                    let order = Order {
                         id: msg.order_id,
                         cl_order_id: msg.cl_order_id,
                         instrument_id: msg.instrument_id,
@@ -97,7 +113,7 @@ fn main() {
                         strategy_id: 0,
                         entry_time_ns: msg.timestamp_ns,
                     };
-                    let _ = g.check_order(&mut order);
+                    let _ = g.check_order(&order);
                 }
             } else {
                 std::thread::sleep(std::time::Duration::from_millis(1));
@@ -118,10 +134,13 @@ fn main() {
                 println!("[RISK] Snapshot saved successfully.");
             }
         }
-    }).expect("Error setting Ctrl-C handler");
+    })
+    .expect("Error setting Ctrl-C handler");
 
     let listener = TcpListener::bind("127.0.0.1:9092").unwrap();
-    listener.set_nonblocking(true).expect("Cannot set non-blocking");
+    listener
+        .set_nonblocking(true)
+        .expect("Cannot set non-blocking");
 
     let active_connections = Arc::new(AtomicU64::new(0));
     const MAX_CONNECTIONS: u64 = 64;
@@ -141,7 +160,10 @@ fn main() {
                 let active = active_connections.clone();
                 let order_seq = order_seq.clone();
                 if active.load(Ordering::Relaxed) >= MAX_CONNECTIONS {
-                    eprintln!("[RISK] Max connections ({}) reached, dropping client", MAX_CONNECTIONS);
+                    eprintln!(
+                        "[RISK] Max connections ({}) reached, dropping client",
+                        MAX_CONNECTIONS
+                    );
                     continue;
                 }
                 active.fetch_add(1, Ordering::Relaxed);
@@ -165,7 +187,11 @@ fn main() {
     println!("[RISK] All connections closed. Exiting.");
 }
 
-fn handle_client(mut client_stream: TcpStream, gate: Arc<Mutex<RiskGate>>, order_seq: Arc<AtomicU64>) {
+fn handle_client(
+    mut client_stream: TcpStream,
+    gate: Arc<Mutex<RiskGate>>,
+    order_seq: Arc<AtomicU64>,
+) {
     let mut buffer = [0; 4096];
     let mut stream_buffer = String::new();
 
@@ -195,7 +221,9 @@ fn handle_client(mut client_stream: TcpStream, gate: Arc<Mutex<RiskGate>>, order
                 let price = v["price"].as_u64().unwrap_or(0);
                 let qty = v["qty"].as_u64().unwrap_or(0);
                 let side_str = v["side"].as_str().unwrap_or("BUY");
-                let side = if side_str.eq_ignore_ascii_case("SELL") || side_str.eq_ignore_ascii_case("ASK") {
+                let side = if side_str.eq_ignore_ascii_case("SELL")
+                    || side_str.eq_ignore_ascii_case("ASK")
+                {
                     OrderSide::Ask
                 } else {
                     OrderSide::Bid
@@ -211,7 +239,10 @@ fn handle_client(mut client_stream: TcpStream, gate: Arc<Mutex<RiskGate>>, order
                     price,
                     qty,
                     side,
-                    timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as u64,
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_nanos() as u64,
                     account_id: 0,
                     client_id: 0,
                     strategy_id: 0,
@@ -233,7 +264,12 @@ fn handle_client(mut client_stream: TcpStream, gate: Arc<Mutex<RiskGate>>, order
                 metrics::record_order(latency_ns, approved.is_ok());
 
                 // Emit OpenTelemetry span
-                let span = tracing::span!(tracing::Level::INFO, "risk_check", order_id = order.id, instrument = order.instrument_id);
+                let span = tracing::span!(
+                    tracing::Level::INFO,
+                    "risk_check",
+                    order_id = order.id,
+                    instrument = order.instrument_id
+                );
                 let _enter = span.enter();
 
                 if let Err(e) = approved {

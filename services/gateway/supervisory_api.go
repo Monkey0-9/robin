@@ -151,12 +151,12 @@ func handleSupervisoryPending(db *sql.DB) http.HandlerFunc {
 			}
 			remaining := (expiresAt - time.Now().UnixNano()) / int64(time.Second)
 			pending = append(pending, map[string]interface{}{
-				"approval_id":  id,
-				"order_id":     orderID,
-				"notional":     notional,
-				"symbol":       symbol,
+				"approval_id":   id,
+				"order_id":      orderID,
+				"notional":      notional,
+				"symbol":        symbol,
 				"created_at_ns": decidedAt,
-				"expires_in_s": remaining,
+				"expires_in_s":  remaining,
 			})
 		}
 		if pending == nil {

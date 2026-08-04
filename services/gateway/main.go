@@ -65,7 +65,6 @@ func main() {
 
 	orch.StartHealthProbes(ctx, 5*time.Second)
 
-
 	httpPort := 8080
 	if p := os.Getenv("ORCH_PORT"); p != "" {
 		if val, err := strconv.Atoi(p); err == nil {
@@ -139,5 +138,3 @@ func envOrDefault(key, def string) string {
 	}
 	return def
 }
-
-

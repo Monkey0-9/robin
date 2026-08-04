@@ -460,7 +460,10 @@ impl RiskGate {
         }
         impl Pcg32 {
             fn new(seed: u64, seq: u64) -> Self {
-                let mut pcg = Self { state: 0, inc: (seq << 1) | 1 };
+                let mut pcg = Self {
+                    state: 0,
+                    inc: (seq << 1) | 1,
+                };
                 pcg.next_u32();
                 pcg.state = pcg.state.wrapping_add(seed);
                 pcg.next_u32();
@@ -468,7 +471,9 @@ impl RiskGate {
             }
             fn next_u32(&mut self) -> u32 {
                 let oldstate = self.state;
-                self.state = oldstate.wrapping_mul(6364136223846793005).wrapping_add(self.inc);
+                self.state = oldstate
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(self.inc);
                 let xorshifted = (((oldstate >> 18) ^ oldstate) >> 27) as u32;
                 let rot = (oldstate >> 59) as u32;
                 (xorshifted >> rot) | (xorshifted << ((rot.wrapping_neg()) & 31))
@@ -500,13 +505,13 @@ impl RiskGate {
 
         let idx_95 = (SIMULATIONS as f64 * 0.05).floor() as usize;
         let var_95 = -sim_returns[idx_95];
-        
+
         let idx_99 = (SIMULATIONS as f64 * 0.01).floor() as usize;
         let var_99 = -sim_returns[idx_99];
 
         let mut cvar_sum = 0.0;
-        for i in 0..=idx_95 {
-            cvar_sum += sim_returns[i];
+        for val in sim_returns.iter().take(idx_95 + 1) {
+            cvar_sum += val;
         }
         let cvar_95 = -(cvar_sum / (idx_95 as f64 + 1.0));
 

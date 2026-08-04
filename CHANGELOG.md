@@ -5,6 +5,27 @@ All notable changes to the Robin Platform will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-08-03
+
+### Added
+
+- **CEO Demo Integration & Real-Time Feeds**:
+  - Integrated live Coinbase WebSocket feed ingestion for real-time market data streaming.
+  - Implemented `lightweight-charts` visual components in terminal dashboard for low-latency market charting.
+  - Expanded Rust Risk & Compliance Engine metrics and RBAC role optimization across gateway endpoints.
+- **API CORS & Preflight Hardening**:
+  - Implemented full CORS middleware and explicit preflight `OPTIONS` handling in Go Gateway API (`services/gateway/main.go`).
+  - Synchronized `Authorization` header propagation with JWT bearer tokens across Next.js frontend requests.
+
+### Fixed
+
+- **Multi-Service Build & Compilation Stability**:
+  - Resolved Go Gateway compilation and handler wiring issues (`oms.go`, `main.go`).
+  - Fixed Rust build errors and type definitions across `risk-analytics` and `compliance` services (`gpio_kill_switch.rs`, `gate.rs`).
+  - Fixed C++ Execution Engine compilation and linking errors in `network-bridge` (`dpdk_ingest.cpp`, `CMakeLists.txt`).
+
+---
+
 ## [1.2.0] - 2026-07-20
 
 ### Added

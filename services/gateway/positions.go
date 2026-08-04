@@ -34,39 +34,39 @@ import (
 
 // Lot represents a single purchase lot for FIFO tax tracking.
 type Lot struct {
-	OpenedAt  time.Time `json:"opened_at"`
-	Qty       float64   `json:"qty"`
-	EntryPrice float64  `json:"entry_price"`
-	OrderID   string    `json:"order_id"`
+	OpenedAt   time.Time `json:"opened_at"`
+	Qty        float64   `json:"qty"`
+	EntryPrice float64   `json:"entry_price"`
+	OrderID    string    `json:"order_id"`
 }
 
 // Position represents a live position in a single symbol.
 type Position struct {
-	Symbol         string    `json:"symbol"`
-	Side           string    `json:"side"` // "LONG" | "SHORT"
-	TotalQty       float64   `json:"total_qty"`
-	AvgEntryPrice  float64   `json:"avg_entry_price"`
-	CurrentPrice   float64   `json:"current_price"`
-	UnrealizedPnL  float64   `json:"unrealized_pnl"`
-	UnrealizedPct  float64   `json:"unrealized_pct"`
-	RealizedPnL    float64   `json:"realized_pnl"`
-	TotalNotional  float64   `json:"total_notional"`
-	MarketValue    float64   `json:"market_value"`
-	DayChange      float64   `json:"day_change_pct"`
-	Lots           []Lot     `json:"lots"`
-	LastUpdated    time.Time `json:"last_updated"`
+	Symbol        string    `json:"symbol"`
+	Side          string    `json:"side"` // "LONG" | "SHORT"
+	TotalQty      float64   `json:"total_qty"`
+	AvgEntryPrice float64   `json:"avg_entry_price"`
+	CurrentPrice  float64   `json:"current_price"`
+	UnrealizedPnL float64   `json:"unrealized_pnl"`
+	UnrealizedPct float64   `json:"unrealized_pct"`
+	RealizedPnL   float64   `json:"realized_pnl"`
+	TotalNotional float64   `json:"total_notional"`
+	MarketValue   float64   `json:"market_value"`
+	DayChange     float64   `json:"day_change_pct"`
+	Lots          []Lot     `json:"lots"`
+	LastUpdated   time.Time `json:"last_updated"`
 }
 
 // PortfolioSummary aggregates all positions.
 type PortfolioSummary struct {
-	TotalMarketValue  float64            `json:"total_market_value"`
-	TotalCost         float64            `json:"total_cost"`
-	TotalUnrealizedPnL float64           `json:"total_unrealized_pnl"`
-	TotalRealizedPnL  float64            `json:"total_realized_pnl"`
-	TotalPnLPct       float64            `json:"total_pnl_pct"`
-	PositionCount     int                `json:"position_count"`
-	Positions         map[string]*Position `json:"positions"`
-	LastUpdated       time.Time          `json:"last_updated"`
+	TotalMarketValue   float64              `json:"total_market_value"`
+	TotalCost          float64              `json:"total_cost"`
+	TotalUnrealizedPnL float64              `json:"total_unrealized_pnl"`
+	TotalRealizedPnL   float64              `json:"total_realized_pnl"`
+	TotalPnLPct        float64              `json:"total_pnl_pct"`
+	PositionCount      int                  `json:"position_count"`
+	Positions          map[string]*Position `json:"positions"`
+	LastUpdated        time.Time            `json:"last_updated"`
 }
 
 // ─── PositionManager ──────────────────────────────────────────────────────────
@@ -116,15 +116,15 @@ func (pm *PositionManager) OnFill(orderID, symbol, side string, qty, price float
 	pos.Lots = append(pos.Lots, lot)
 
 	// Recalculate weighted average entry price
-	totalCost := pos.AvgEntryPrice * pos.TotalQty + price*qty
+	totalCost := pos.AvgEntryPrice*pos.TotalQty + price*qty
 	pos.TotalQty += qty
 	if pos.TotalQty > 0 {
 		pos.AvgEntryPrice = totalCost / pos.TotalQty
 	}
 
 	pos.TotalNotional = pos.AvgEntryPrice * pos.TotalQty
-	pos.CurrentPrice  = price // Will be updated by priceRefreshLoop
-	pos.LastUpdated   = time.Now().UTC()
+	pos.CurrentPrice = price // Will be updated by priceRefreshLoop
+	pos.LastUpdated = time.Now().UTC()
 
 	log.Printf("[POSITIONS] OnFill: %s %s %.6f @ %.4f (total qty=%.6f avg=%.4f)",
 		side, symbol, qty, price, pos.TotalQty, pos.AvgEntryPrice)
@@ -152,7 +152,7 @@ func (pm *PositionManager) OnClose(symbol string, closedQty, closePrice float64)
 		}
 		fillQty := min(remaining, lot.Qty)
 		realizedPnL += fillQty * (closePrice - lot.EntryPrice)
-		remaining   -= fillQty
+		remaining -= fillQty
 
 		if lot.Qty-fillQty > 0 {
 			lot.Qty -= fillQty
@@ -160,10 +160,10 @@ func (pm *PositionManager) OnClose(symbol string, closedQty, closePrice float64)
 		}
 	}
 
-	pos.Lots          = newLots
-	pos.TotalQty     -= closedQty
-	pos.RealizedPnL  += realizedPnL
-	pos.LastUpdated   = time.Now().UTC()
+	pos.Lots = newLots
+	pos.TotalQty -= closedQty
+	pos.RealizedPnL += realizedPnL
+	pos.LastUpdated = time.Now().UTC()
 
 	if pos.TotalQty <= 0 {
 		delete(pm.positions, symbol)
@@ -210,9 +210,9 @@ func (pm *PositionManager) refreshPrices() {
 			if pos.Side == "SHORT" {
 				sideMultiplier = -1.0
 			}
-			pos.CurrentPrice  = data.Price
-			pos.DayChange     = data.ChangePct
-			pos.MarketValue   = pos.CurrentPrice * pos.TotalQty
+			pos.CurrentPrice = data.Price
+			pos.DayChange = data.ChangePct
+			pos.MarketValue = pos.CurrentPrice * pos.TotalQty
 			pos.UnrealizedPnL = (pos.CurrentPrice - pos.AvgEntryPrice) * pos.TotalQty * sideMultiplier
 			if pos.TotalNotional > 0 {
 				pos.UnrealizedPct = pos.UnrealizedPnL / pos.TotalNotional * 100
@@ -233,11 +233,11 @@ func (pm *PositionManager) GetSummary() PortfolioSummary {
 	}
 
 	for sym, pos := range pm.positions {
-		summary.Positions[sym]        = pos
-		summary.TotalMarketValue     += pos.MarketValue
-		summary.TotalCost            += pos.TotalNotional
-		summary.TotalUnrealizedPnL  += pos.UnrealizedPnL
-		summary.TotalRealizedPnL    += pos.RealizedPnL
+		summary.Positions[sym] = pos
+		summary.TotalMarketValue += pos.MarketValue
+		summary.TotalCost += pos.TotalNotional
+		summary.TotalUnrealizedPnL += pos.UnrealizedPnL
+		summary.TotalRealizedPnL += pos.RealizedPnL
 		summary.PositionCount++
 	}
 

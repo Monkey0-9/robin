@@ -65,15 +65,16 @@ func (k *KDBClient) IsAvailable() bool {
 
 // ExecQ executes a Q expression synchronously and returns raw response bytes.
 // Q IPC v3 sync message format:
-//   byte[0] = 1 (little-endian)
-//   byte[1] = 1 (sync message type)
-//   byte[2] = 0 (no compression)
-//   byte[3] = 0 (reserved)
-//   byte[4-7] = total message length (4 + 1 + 4 + len(expr))
-//   byte[8]   = 10 (char list type = string)
-//   byte[9]   = 0  (attributes)
-//   byte[10-13] = string length
-//   byte[14+]  = expression bytes
+//
+//	byte[0] = 1 (little-endian)
+//	byte[1] = 1 (sync message type)
+//	byte[2] = 0 (no compression)
+//	byte[3] = 0 (reserved)
+//	byte[4-7] = total message length (4 + 1 + 4 + len(expr))
+//	byte[8]   = 10 (char list type = string)
+//	byte[9]   = 0  (attributes)
+//	byte[10-13] = string length
+//	byte[14+]  = expression bytes
 func (k *KDBClient) ExecQ(expr string) ([]byte, error) {
 	conn, err := net.DialTimeout("tcp", k.addr, k.timeout)
 	if err != nil {

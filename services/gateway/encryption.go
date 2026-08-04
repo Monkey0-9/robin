@@ -14,6 +14,7 @@ package main
 // ============================================================================
 
 import (
+	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -21,7 +22,6 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
-	"crypto"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -138,7 +138,7 @@ type HSMClient interface {
 // HSMStatus describes the HSM health state.
 type HSMStatus struct {
 	Connected    bool   `json:"connected"`
-	Provider     string `json:"provider"`      // "software", "cloudhsm", "luna"
+	Provider     string `json:"provider"` // "software", "cloudhsm", "luna"
 	KeysManaged  int    `json:"keys_managed"`
 	LastRotated  int64  `json:"last_rotated_ns"`
 	ErrorMessage string `json:"error_message,omitempty"`
@@ -152,10 +152,10 @@ type HSMStatus struct {
 // WARNING: NOT production-safe. Keys are stored in memory only.
 // Replace with CloudHSMClient or ThalesLunaClient for production.
 type SoftwareHSM struct {
-	keys       map[string][]byte // keyID -> AES key bytes
-	sigKeys    map[string][]byte // keyID -> HMAC-SHA256 signing key
-	rsaKeys    map[string]*rsa.PrivateKey // keyID -> RSA private key
-	enc        *EncryptionService
+	keys    map[string][]byte          // keyID -> AES key bytes
+	sigKeys map[string][]byte          // keyID -> HMAC-SHA256 signing key
+	rsaKeys map[string]*rsa.PrivateKey // keyID -> RSA private key
+	enc     *EncryptionService
 }
 
 // NewSoftwareHSM creates a software HSM backed by the EncryptionService.
@@ -211,7 +211,7 @@ func (h *SoftwareHSM) GetPublicKey(keyID string) ([]byte, error) {
 // RotateKey generates a new key for the given keyID.
 func (h *SoftwareHSM) RotateKey(keyID string) (string, error) {
 	newKeyID := fmt.Sprintf("%s-v%d", keyID, len(h.sigKeys)+len(h.rsaKeys)+1)
-	
+
 	// Default to generating a new RSA key for mocking purposes, unless it's a known HMAC key
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -283,8 +283,8 @@ func (c *CloudHSMClient) Status() HSMStatus {
 		return s
 	}
 	return HSMStatus{
-		Connected: true,
-		Provider:  "cloudhsm",
+		Connected:    true,
+		Provider:     "cloudhsm",
 		ErrorMessage: "PKCS#11 integration pending (set ROBIN_HSM_ENDPOINT)",
 	}
 }

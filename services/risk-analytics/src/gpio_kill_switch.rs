@@ -33,11 +33,13 @@ impl HardwareKillSwitch {
         let handle = thread::spawn(move || {
             #[cfg(target_os = "linux")]
             {
-                use std::os::fd::AsRawFd;
                 use std::fs::OpenOptions;
                 use std::io::{Read, Seek, SeekFrom};
+                use std::os::fd::AsRawFd;
 
-                let file = OpenOptions::new().read(true).open("/sys/class/gpio/gpio18/value");
+                let file = OpenOptions::new()
+                    .read(true)
+                    .open("/sys/class/gpio/gpio18/value");
                 if let Ok(mut f) = file {
                     let fd = f.as_raw_fd();
                     let mut pfd = libc::pollfd {
@@ -63,7 +65,8 @@ impl HardwareKillSwitch {
                                         std::time::SystemTime::now()
                                             .duration_since(std::time::UNIX_EPOCH)
                                             .unwrap_or_default()
-                                            .as_nanos() as u64,
+                                            .as_nanos()
+                                            as u64,
                                         Ordering::Relaxed,
                                     );
                                     println!("[KILL_SWITCH] ACTIVATED");

@@ -90,7 +90,7 @@ func (c *CoinbaseFeed) connectAndListen() {
 		}
 
 		// L2 Book State
-		books := make(map[string]*struct{
+		books := make(map[string]*struct {
 			Bids map[float64]float64
 			Asks map[float64]float64
 		})
@@ -117,7 +117,7 @@ func (c *CoinbaseFeed) connectAndListen() {
 				price, err := strconv.ParseFloat(priceStr, 64)
 				if err == nil {
 					globalMarketData.UpdatePrice(normalizedID, price)
-					
+
 					// Calculate Indicators
 					inds := globalIndicators.AddPrice(normalizedID, price)
 					if inds != nil {
@@ -139,15 +139,15 @@ func (c *CoinbaseFeed) connectAndListen() {
 			} else if msgType == "snapshot" {
 				bidsList, _ := msg["bids"].([]interface{})
 				asksList, _ := msg["asks"].([]interface{})
-				
-				book := &struct{
+
+				book := &struct {
 					Bids map[float64]float64
 					Asks map[float64]float64
 				}{
 					Bids: make(map[float64]float64),
 					Asks: make(map[float64]float64),
 				}
-				
+
 				for _, b := range bidsList {
 					level := b.([]interface{})
 					price, _ := strconv.ParseFloat(level[0].(string), 64)
@@ -165,7 +165,7 @@ func (c *CoinbaseFeed) connectAndListen() {
 				priceStr, _ := msg["price"].(string)
 				sizeStr, _ := msg["size"].(string)
 				makerSide, _ := msg["side"].(string)
-				
+
 				price, _ := strconv.ParseFloat(priceStr, 64)
 				size, _ := strconv.ParseFloat(sizeStr, 64)
 
@@ -193,13 +193,13 @@ func (c *CoinbaseFeed) connectAndListen() {
 				if !ok {
 					continue
 				}
-				
+
 				for _, c := range changes {
 					change := c.([]interface{})
 					side := change[0].(string)
 					price, _ := strconv.ParseFloat(change[1].(string), 64)
 					size, _ := strconv.ParseFloat(change[2].(string), 64)
-					
+
 					if side == "buy" {
 						if size == 0 {
 							delete(book.Bids, price)
@@ -213,13 +213,13 @@ func (c *CoinbaseFeed) connectAndListen() {
 							book.Asks[price] = size
 						}
 					}
-					
+
 					// Log L2 Update to persistence layer
 					if globalTickLogger != nil {
 						globalTickLogger.LogL2Update(normalizedID, side, price, size, time.Now())
 					}
 				}
-				
+
 				// Reconstruct top 20 levels for broadcast
 				var flatBids [][2]float64
 				var flatAsks [][2]float64
@@ -229,17 +229,17 @@ func (c *CoinbaseFeed) connectAndListen() {
 				for p, s := range book.Asks {
 					flatAsks = append(flatAsks, [2]float64{p, s})
 				}
-				
+
 				// Sort Bids descending
 				sort.Slice(flatBids, func(i, j int) bool {
 					return flatBids[i][0] > flatBids[j][0]
 				})
-				
+
 				// Sort Asks ascending
 				sort.Slice(flatAsks, func(i, j int) bool {
 					return flatAsks[i][0] < flatAsks[j][0]
 				})
-				
+
 				// Truncate to top 20 levels
 				if len(flatBids) > 20 {
 					flatBids = flatBids[:20]
@@ -247,7 +247,7 @@ func (c *CoinbaseFeed) connectAndListen() {
 				if len(flatAsks) > 20 {
 					flatAsks = flatAsks[:20]
 				}
-				
+
 				c.wsHub.BroadcastOrderBook(normalizedID, flatBids, flatAsks)
 			}
 		}

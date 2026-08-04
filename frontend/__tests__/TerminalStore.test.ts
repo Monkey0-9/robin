@@ -1,3 +1,4 @@
+import { describe, it, expect } from 'vitest';
 import { useTerminalStore } from '../src/store/useTerminalStore';
 
 describe('useTerminalStore State Management', () => {

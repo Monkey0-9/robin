@@ -66,9 +66,11 @@ The system is structured as a low-latency quantitative trading prototype with th
 
 ## 3. Latest Project Completion Updates
 
-1. **Gate Security Restored**: Bypasses have been removed from Go Orchestrator's `jwtAuthMiddleware` and `rbacMiddleware` to enforce standard authorization.
-2. **Auto-Migrations**: SQLite database initialization now runs migration statements to ensure all columns across `orders`, `trades`, and `audit_log` tables exist before index creation.
-3. **Python Collection Fixes**: `pytest.ini` exclusions prevent OS symlink collection errors during test execution.
+1. **Multi-Service Build Verification**: Resolved build and linking issues across Go Gateway (`oms.go`), Rust Risk (`gpio_kill_switch.rs`, `gate.rs`), and C++ Execution (`dpdk_ingest.cpp`).
+2. **CORS & Preflight Authorization**: Added robust CORS middleware and `OPTIONS` preflight handling across Go Gateway API endpoints, aligning with frontend JWT bearer token transmission.
+3. **CEO Demo Integration**: Integrated live Coinbase WebSocket feed ingestion, `lightweight-charts` visualization, and real-time risk/compliance metric streams.
+4. **Gate Security Restored**: Bypasses have been removed from Go Orchestrator's `jwtAuthMiddleware` and `rbacMiddleware` to enforce standard authorization.
+5. **Auto-Migrations**: SQLite database initialization runs migration statements to ensure schema coherence before index creation.
 
 ---
 

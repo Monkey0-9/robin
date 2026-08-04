@@ -85,8 +85,8 @@ type SPIFFEIdentity struct {
 
 // SVIDManager manages SPIFFE Verifiable Identity Documents.
 type SVIDManager struct {
-	mu      sync.RWMutex
-	svids   map[string]*SPIFFEIdentity // service -> identity
+	mu       sync.RWMutex
+	svids    map[string]*SPIFFEIdentity // service -> identity
 	spireCfg SPIREConfig
 }
 
@@ -230,17 +230,17 @@ func InitJWTAuth() error {
 		if err != nil {
 			return fmt.Errorf("failed to read JWT public key: %w", err)
 		}
-		
+
 		block, _ := pem.Decode(pubBytes)
 		if block == nil {
 			return fmt.Errorf("failed to parse PEM block containing the public key")
 		}
-		
+
 		pub, err := x509.ParsePKIXPublicKey(block.Bytes)
 		if err != nil {
 			return fmt.Errorf("failed to parse JWT public key: %w", err)
 		}
-		
+
 		var ok bool
 		jwtAuth.PublicKey, ok = pub.(*rsa.PublicKey)
 		if !ok {
@@ -287,13 +287,13 @@ func InitJWTAuth() error {
 func createJWT(subject, role string, expiry time.Duration) (string, error) {
 	now := time.Now()
 	claims := jwt.MapClaims{
-		"sub":   subject,
-		"role":  role,
-		"iat":   now.Unix(),
-		"exp":   now.Add(expiry).Unix(),
-		"iss":   "robin-gateway",
-		"aud":   "robin.trading",
-		"jti":   fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s-%d", subject, now.UnixNano())))),
+		"sub":  subject,
+		"role": role,
+		"iat":  now.Unix(),
+		"exp":  now.Add(expiry).Unix(),
+		"iss":  "robin-gateway",
+		"aud":  "robin.trading",
+		"jti":  fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprintf("%s-%d", subject, now.UnixNano())))),
 	}
 
 	jwtAuth.mu.RLock()

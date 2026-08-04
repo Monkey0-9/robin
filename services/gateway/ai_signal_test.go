@@ -14,16 +14,16 @@ func TestAISignalProxy_Contract(t *testing.T) {
 	// Mock Python /trade_decision — full signal path
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"reasoning":     "Bull regime, sentiment +0.45 -> BUY (78.0% conf)",
-			"action":        "BUY",
-			"confidence":    0.78,
-			"regime":        "Bull",
-			"sentiment":     0.45,
-			"symbol":        "BTC-USD",
-			"qty":           0.015,
-			"price":         66000.0,
-			"entry_target":  66000.0,
-			"data_source":   "live",
+			"reasoning":    "Bull regime, sentiment +0.45 -> BUY (78.0% conf)",
+			"action":       "BUY",
+			"confidence":   0.78,
+			"regime":       "Bull",
+			"sentiment":    0.45,
+			"symbol":       "BTC-USD",
+			"qty":          0.015,
+			"price":        66000.0,
+			"entry_target": 66000.0,
+			"data_source":  "live",
 		})
 	}))
 	defer upstream.Close()

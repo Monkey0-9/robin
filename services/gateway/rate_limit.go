@@ -25,7 +25,7 @@ func RateLimitMiddleware(next http.Handler, limit int, window time.Duration) htt
 
 		now := time.Now()
 		val, loaded := rateLimitStore.Load(userID)
-		
+
 		var entry *UserRateLimit
 		if !loaded || now.After(val.(*UserRateLimit).resetTime) {
 			entry = &UserRateLimit{

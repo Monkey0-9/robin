@@ -41,12 +41,12 @@ import (
 )
 
 const (
-	totpWindow    = 30                 // 30 second window per RFC 6238
-	totpTolerance = 1                  // accept ±1 window for clock drift
-	totpDigits    = 6                  // 6-digit codes
+	totpWindow    = 30 // 30 second window per RFC 6238
+	totpTolerance = 1  // accept ±1 window for clock drift
+	totpDigits    = 6  // 6-digit codes
 	totpIssuer    = "Robin Trading"
-	totpLockAfter = 5                  // lock account after 5 failures
-	totpLockDur   = 15 * time.Minute  // 15 min lockout
+	totpLockAfter = 5                // lock account after 5 failures
+	totpLockDur   = 15 * time.Minute // 15 min lockout
 )
 
 // ============================================================================
@@ -293,10 +293,10 @@ func handleMFAVerify(db *sql.DB, enc *EncryptionService, logger *slog.Logger) ht
 		logger.Info("MFA verified successfully", "user", username)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":       "mfa_verified",
-			"user":         username,
-			"message":      "MFA verification successful. mfa_verified=true will be included in your next JWT.",
-			"verified_at":  time.Now().UnixNano(),
+			"status":      "mfa_verified",
+			"user":        username,
+			"message":     "MFA verification successful. mfa_verified=true will be included in your next JWT.",
+			"verified_at": time.Now().UnixNano(),
 		})
 	}
 }
@@ -312,9 +312,9 @@ func handleMFAStatus(db *sql.DB) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"username":   username,
+			"username":    username,
 			"mfa_enabled": enabled,
-			"has_secret": hasSecret,
+			"has_secret":  hasSecret,
 			"totp_digits": totpDigits,
 			"totp_period": totpWindow,
 		})
@@ -439,7 +439,7 @@ func handleListUsers(db *sql.DB) http.HandlerFunc {
 			}
 			users = append(users, map[string]interface{}{
 				"user_id": userID, "username": username, "role": role,
-				"mfa_enabled": totpEnabled == 1,
+				"mfa_enabled":   totpEnabled == 1,
 				"created_at_ns": createdAt, "last_login_ns": lastLogin,
 				"failed_attempts": failedAttempts,
 			})

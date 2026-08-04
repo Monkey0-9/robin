@@ -30,36 +30,35 @@ import (
 	"time"
 )
 
-
 // ExecutionRecord captures per-order execution quality data.
 type ExecutionRecord struct {
-	OrderID          int64
-	Symbol           string
-	Side             string
-	ArrivalPriceUSD  float64 // price when order entered system
-	FillPriceUSD     float64 // actual execution price
-	SubmittedQty     float64
-	FilledQty        float64
-	Exchange         string
-	EntryTimeNs      int64
-	FillTimeNs       int64
-	SlippageBps      float64 // (FillPrice - ArrivalPrice) / ArrivalPrice * 10000 * side_sign
-	PriceImprovBps   float64 // positive = price improvement vs NBBO mid
-	TimeToFillNs     int64
+	OrderID         int64
+	Symbol          string
+	Side            string
+	ArrivalPriceUSD float64 // price when order entered system
+	FillPriceUSD    float64 // actual execution price
+	SubmittedQty    float64
+	FilledQty       float64
+	Exchange        string
+	EntryTimeNs     int64
+	FillTimeNs      int64
+	SlippageBps     float64 // (FillPrice - ArrivalPrice) / ArrivalPrice * 10000 * side_sign
+	PriceImprovBps  float64 // positive = price improvement vs NBBO mid
+	TimeToFillNs    int64
 }
 
 // BestExecutionMonitor tracks execution quality for MiFID II / Reg NMS reporting.
 type BestExecutionMonitor struct {
-	mu              sync.RWMutex
-	records         []ExecutionRecord
-	maxRecords      int
+	mu         sync.RWMutex
+	records    []ExecutionRecord
+	maxRecords int
 
 	// Rolling stats (last 1000 orders)
-	totalOrders     atomic.Uint64
-	totalFilled     atomic.Uint64
-	totalSlippageBps atomic.Int64   // sum of slippage_bps * 1000 for precision
-	totalTTFNs      atomic.Int64   // sum of time-to-fill in ns
-	totalPImpBps    atomic.Int64   // sum of price improvement bps * 1000
+	totalOrders      atomic.Uint64
+	totalFilled      atomic.Uint64
+	totalSlippageBps atomic.Int64 // sum of slippage_bps * 1000 for precision
+	totalTTFNs       atomic.Int64 // sum of time-to-fill in ns
+	totalPImpBps     atomic.Int64 // sum of price improvement bps * 1000
 
 	logger *slog.Logger
 	db     *sql.DB
@@ -144,14 +143,14 @@ func (bem *BestExecutionMonitor) GetRollingStats() map[string]interface{} {
 	bem.mu.RUnlock()
 
 	return map[string]interface{}{
-		"total_orders":       orders,
-		"total_filled":       filled,
-		"fill_rate_pct":      fillRate,
-		"avg_slippage_bps":   avgSlippageBps,
-		"avg_time_to_fill_ms": avgTTFMs,
+		"total_orders":         orders,
+		"total_filled":         filled,
+		"fill_rate_pct":        fillRate,
+		"avg_slippage_bps":     avgSlippageBps,
+		"avg_time_to_fill_ms":  avgTTFMs,
 		"avg_price_improv_bps": avgPImpBps,
-		"exchange_routing":   exchangeCounts,
-		"mifid_art27_ok":    avgSlippageBps < 5.0, // <5bps slippage = good execution
+		"exchange_routing":     exchangeCounts,
+		"mifid_art27_ok":       avgSlippageBps < 5.0, // <5bps slippage = good execution
 	}
 }
 
@@ -224,23 +223,23 @@ func handleExecutionQualityReport(bem *BestExecutionMonitor, logger *slog.Logger
 type FailoverRole string
 
 const (
-	RolePrimary  FailoverRole = "PRIMARY"
-	RoleStandby  FailoverRole = "STANDBY"
-	RoleUnknown  FailoverRole = "UNKNOWN"
+	RolePrimary FailoverRole = "PRIMARY"
+	RoleStandby FailoverRole = "STANDBY"
+	RoleUnknown FailoverRole = "UNKNOWN"
 )
 
 // FailoverManager manages primary/standby gateway state.
 type FailoverManager struct {
-	role         atomic.Uint32 // 0=unknown, 1=primary, 2=standby
-	primaryAddr  string
-	standbyAddr  string
+	role              atomic.Uint32 // 0=unknown, 1=primary, 2=standby
+	primaryAddr       string
+	standbyAddr       string
 	heartbeatInterval time.Duration
 	heartbeatTimeout  time.Duration
 
 	consecutiveFailures atomic.Uint32
 	promotionThreshold  uint32
 
-	mu             sync.RWMutex
+	mu              sync.RWMutex
 	lastHeartbeatNs atomic.Int64
 
 	logger *slog.Logger
@@ -249,12 +248,12 @@ type FailoverManager struct {
 // NewFailoverManager creates a new FailoverManager.
 func NewFailoverManager(primaryAddr, standbyAddr string, logger *slog.Logger) *FailoverManager {
 	fm := &FailoverManager{
-		primaryAddr:       primaryAddr,
-		standbyAddr:       standbyAddr,
-		heartbeatInterval: 100 * time.Millisecond,
-		heartbeatTimeout:  500 * time.Millisecond,
+		primaryAddr:        primaryAddr,
+		standbyAddr:        standbyAddr,
+		heartbeatInterval:  100 * time.Millisecond,
+		heartbeatTimeout:   500 * time.Millisecond,
 		promotionThreshold: 5,
-		logger:            logger,
+		logger:             logger,
 	}
 	// Default to primary role
 	fm.role.Store(1)
@@ -338,15 +337,14 @@ func (fm *FailoverManager) DemoteToStandby() {
 	fm.logger.Warn("[FAILOVER] Demoted to STANDBY")
 }
 
-
 // GetStatus returns the failover state for the /api/failover/status endpoint.
 func (fm *FailoverManager) GetStatus() map[string]interface{} {
 	return map[string]interface{}{
-		"role":                string(fm.GetRole()),
-		"primary_addr":        fm.primaryAddr,
-		"standby_addr":        fm.standbyAddr,
+		"role":                 string(fm.GetRole()),
+		"primary_addr":         fm.primaryAddr,
+		"standby_addr":         fm.standbyAddr,
 		"consecutive_failures": fm.consecutiveFailures.Load(),
-		"last_heartbeat_ns":   fm.lastHeartbeatNs.Load(),
+		"last_heartbeat_ns":    fm.lastHeartbeatNs.Load(),
 	}
 }
 

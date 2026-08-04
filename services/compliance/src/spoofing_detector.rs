@@ -52,7 +52,7 @@ impl SpoofingDetector {
 
         let total_vol = buy_vol + sell_vol;
         if total_vol > 100_000 * 100_000_000 {
-            let imbalance = (cancel_buy_vol as i64 - cancel_sell_vol as i64).abs() as u64;
+            let imbalance = (cancel_buy_vol as i64 - cancel_sell_vol as i64).unsigned_abs();
             let vpin = imbalance as f64 / total_vol as f64;
 
             // Flag if VPIN is extremely high (e.g. > 0.8) and large cancel ratio
@@ -90,12 +90,20 @@ mod tests {
 
         for i in 0..10 {
             detector.process_order_event(OrderEvent {
-                order_id: i, symbol: "AAPL".into(), price: 50000 * 100_000_000,
-                qty: 11000 * 100_000_000, event_type: "NEW", timestamp_ns: 1000 + i * 10,
+                order_id: i,
+                symbol: "AAPL".into(),
+                price: 50000 * 100_000_000,
+                qty: 11000 * 100_000_000,
+                event_type: "NEW",
+                timestamp_ns: 1000 + i * 10,
             });
             detector.process_order_event(OrderEvent {
-                order_id: i, symbol: "AAPL".into(), price: 50000 * 100_000_000,
-                qty: 11000 * 100_000_000, event_type: "CANCEL", timestamp_ns: 1500 + i * 10,
+                order_id: i,
+                symbol: "AAPL".into(),
+                price: 50000 * 100_000_000,
+                qty: 11000 * 100_000_000,
+                event_type: "CANCEL",
+                timestamp_ns: 1500 + i * 10,
             });
         }
 

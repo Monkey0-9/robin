@@ -142,11 +142,11 @@ func handleCATExport(db *sql.DB) http.HandlerFunc {
 		batchID := fmt.Sprintf("CAT-BATCH-%d", time.Now().UnixNano())
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"batch_id":   batchID,
-			"events":     events,
-			"count":      len(events),
+			"batch_id":    batchID,
+			"events":      events,
+			"count":       len(events),
 			"export_time": time.Now().UTC().Format(time.RFC3339),
-			"format":     "CAT-JSON-v1",
+			"format":      "CAT-JSON-v1",
 		})
 	}
 }
@@ -189,10 +189,10 @@ func handleCATSubmit(db *sql.DB, logger *slog.Logger) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":            "submitted",
-			"batch_id":          body.BatchID,
-			"events_submitted":  submittedCount,
-			"submitted_at_ns":   now,
+			"status":           "submitted",
+			"batch_id":         body.BatchID,
+			"events_submitted": submittedCount,
+			"submitted_at_ns":  now,
 		})
 	}
 }

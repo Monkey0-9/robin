@@ -31,81 +31,109 @@ pub struct OrderStateMachine {
     orders: Arc<Mutex<HashMap<u64, OrderLifecycle>>>,
 }
 
+impl Default for OrderStateMachine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OrderStateMachine {
     pub fn new() -> Self {
         Self {
             orders: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-    
+
     pub fn create(&self, order_id: u64, cl_ord_id: String, symbol: String, side: String, qty: u64) {
         let mut orders = self.orders.lock().unwrap();
-        orders.insert(order_id, OrderLifecycle {
+        orders.insert(
             order_id,
-            client_order_id: cl_ord_id,
-            symbol,
-            side,
-            state: OrderState::New,
-            filled_qty: 0,
-            leaves_qty: qty,
-            avg_price: None,
-            history: vec![(OrderState::New, now_ns(), "Order created".to_string())],
-        });
+            OrderLifecycle {
+                order_id,
+                client_order_id: cl_ord_id,
+                symbol,
+                side,
+                state: OrderState::New,
+                filled_qty: 0,
+                leaves_qty: qty,
+                avg_price: None,
+                history: vec![(OrderState::New, now_ns(), "Order created".to_string())],
+            },
+        );
     }
-    
-    pub fn transition(&self, order_id: u64, new_state: OrderState, reason: &str) -> Result<(), String> {
+
+    pub fn transition(
+        &self,
+        order_id: u64,
+        new_state: OrderState,
+        reason: &str,
+    ) -> Result<(), String> {
         let mut orders = self.orders.lock().unwrap();
         let order = orders.get_mut(&order_id).ok_or("Order not found")?;
-        
-        let valid = match (order.state, new_state) {
-            (OrderState::New, OrderState::Pending) => true,
-            (OrderState::New, OrderState::Rejected) => true,
-            (OrderState::Pending, OrderState::Working) => true,
-            (OrderState::Pending, OrderState::Rejected) => true,
-            (OrderState::Working, OrderState::PartiallyFilled) => true,
-            (OrderState::Working, OrderState::Filled) => true,
-            (OrderState::Working, OrderState::CancelPending) => true,
-            (OrderState::PartiallyFilled, OrderState::Filled) => true,
-            (OrderState::PartiallyFilled, OrderState::CancelPending) => true,
-            (OrderState::CancelPending, OrderState::Cancelled) => true,
-            (OrderState::CancelPending, OrderState::PartiallyFilled) => true,
-            _ => false,
-        };
-        
+
+        let valid = matches!(
+            (order.state, new_state),
+            (OrderState::New, OrderState::Pending)
+                | (OrderState::New, OrderState::Rejected)
+                | (OrderState::Pending, OrderState::Working)
+                | (OrderState::Pending, OrderState::Rejected)
+                | (OrderState::Working, OrderState::PartiallyFilled)
+                | (OrderState::Working, OrderState::Filled)
+                | (OrderState::Working, OrderState::CancelPending)
+                | (OrderState::PartiallyFilled, OrderState::Filled)
+                | (OrderState::PartiallyFilled, OrderState::CancelPending)
+                | (OrderState::CancelPending, OrderState::Cancelled)
+                | (OrderState::CancelPending, OrderState::PartiallyFilled)
+        );
+
         if !valid {
-            return Err(format!("Invalid transition: {:?} -> {:?}", order.state, new_state));
+            return Err(format!(
+                "Invalid transition: {:?} -> {:?}",
+                order.state, new_state
+            ));
         }
-        
+
         order.state = new_state;
-        order.history.push((new_state, now_ns(), reason.to_string()));
+        order
+            .history
+            .push((new_state, now_ns(), reason.to_string()));
         Ok(())
     }
-    
+
     pub fn fill(&self, order_id: u64, fill_qty: u64, fill_price: u64) -> Result<(), String> {
         let mut orders = self.orders.lock().unwrap();
         let order = orders.get_mut(&order_id).ok_or("Order not found")?;
-        
+
         order.filled_qty += fill_qty;
         order.leaves_qty -= fill_qty;
-        
+
         // Update average price
-        let total_notional = order.avg_price.unwrap_or(0) * (order.filled_qty - fill_qty) + fill_price * fill_qty;
+        let total_notional =
+            order.avg_price.unwrap_or(0) * (order.filled_qty - fill_qty) + fill_price * fill_qty;
         order.avg_price = Some(total_notional / order.filled_qty);
-        
+
         if order.leaves_qty == 0 {
             order.state = OrderState::Filled;
-            order.history.push((OrderState::Filled, now_ns(), format!("Filled {} @ {}", fill_qty, fill_price)));
+            order.history.push((
+                OrderState::Filled,
+                now_ns(),
+                format!("Filled {} @ {}", fill_qty, fill_price),
+            ));
         } else {
             order.state = OrderState::PartiallyFilled;
-            order.history.push((OrderState::PartiallyFilled, now_ns(), format!("Partial {} @ {}", fill_qty, fill_price)));
+            order.history.push((
+                OrderState::PartiallyFilled,
+                now_ns(),
+                format!("Partial {} @ {}", fill_qty, fill_price),
+            ));
         }
         Ok(())
     }
-    
+
     pub fn get_order(&self, order_id: u64) -> Option<OrderLifecycle> {
         self.orders.lock().unwrap().get(&order_id).cloned()
     }
-    
+
     pub fn get_all_orders(&self) -> Vec<OrderLifecycle> {
         self.orders.lock().unwrap().values().cloned().collect()
     }

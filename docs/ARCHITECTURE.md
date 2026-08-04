@@ -39,8 +39,8 @@ The platform follows a pipeline architecture with three tiers: hot path (<1ms ta
 **Current**: Gradient descent optimizer with simplex projection for maximum Sharpe ratio portfolio. VaR calculation with covariance matrix.
 
 ### 7. Go Orchestrator (Gateway)
-**Location**: `services/gateway/orchestrator.go`
-**Current**: HTTP server with health checks, service registry, hot-reloadable config, JWT-secured proxy for AI endpoints, and WebSocket Hub for Next.js frontend communication.
+**Location**: `services/gateway/orchestrator.go`, `services/gateway/main.go`, `services/gateway/oms.go`
+**Current**: HTTP server with health checks, service registry, hot-reloadable config, JWT+RBAC authentication middleware, CORS preflight handling, live WebSocket Hub, and OMS order submission handling.
 
 ## Cold Path Components
 

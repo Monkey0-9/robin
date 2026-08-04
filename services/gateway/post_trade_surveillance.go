@@ -38,15 +38,15 @@ import (
 
 // TradeEvent is sent to the surveillance engine for each completed trade/order.
 type TradeEvent struct {
-	EventType  string  // "NEW", "FILL", "CANCEL"
-	OrderID    int64
-	ClientID   int64
-	Symbol     string
+	EventType    string // "NEW", "FILL", "CANCEL"
+	OrderID      int64
+	ClientID     int64
+	Symbol       string
 	InstrumentID int64
-	Side       string  // "BUY" or "SELL"
-	Price      float64
-	Qty        float64
-	TimestampNs int64
+	Side         string // "BUY" or "SELL"
+	Price        float64
+	Qty          float64
+	TimestampNs  int64
 }
 
 // SurveillanceEngine processes trade events and detects manipulation patterns.
@@ -56,15 +56,15 @@ type SurveillanceEngine struct {
 	logger *slog.Logger
 
 	// Pattern detection state
-	mu            sync.Mutex
-	clientOrders  map[int64][]TradeEvent          // clientID -> recent orders
-	clientFills   map[int64][]TradeEvent           // clientID -> recent fills
-	priceLevels   map[string][]TradeEvent          // "clientID:symbol:price:side" -> orders
-	cancelCounts  map[int64]int                    // orderID -> cancel count
+	mu           sync.Mutex
+	clientOrders map[int64][]TradeEvent  // clientID -> recent orders
+	clientFills  map[int64][]TradeEvent  // clientID -> recent fills
+	priceLevels  map[string][]TradeEvent // "clientID:symbol:price:side" -> orders
+	cancelCounts map[int64]int           // orderID -> cancel count
 
 	// Metrics
-	alertsTotal   atomic.Uint64
-	eventsTotal   atomic.Uint64
+	alertsTotal atomic.Uint64
+	eventsTotal atomic.Uint64
 }
 
 // Alert type constants
@@ -77,12 +77,12 @@ const (
 )
 
 const (
-	washTradeWindowNs     = 60 * int64(time.Second)  // 60 second window
-	layeringMinOrders     = 5                          // 5+ orders at same level
-	layeringCancelThresh  = 0.80                       // 80%+ cancel rate
-	markingCloseWindowMin = 5                          // last 5 minutes of session
-	eventBufferSize       = 10000                      // async event channel buffer
-	maxClientHistory      = 500                        // orders per client kept in memory
+	washTradeWindowNs     = 60 * int64(time.Second) // 60 second window
+	layeringMinOrders     = 5                       // 5+ orders at same level
+	layeringCancelThresh  = 0.80                    // 80%+ cancel rate
+	markingCloseWindowMin = 5                       // last 5 minutes of session
+	eventBufferSize       = 10000                   // async event channel buffer
+	maxClientHistory      = 500                     // orders per client kept in memory
 )
 
 // NewSurveillanceEngine creates and returns a new SurveillanceEngine.
@@ -228,7 +228,7 @@ func (se *SurveillanceEngine) checkMarkingTheClose(event TradeEvent) {
 			evidence := map[string]interface{}{
 				"symbol": event.Symbol, "side": event.Side,
 				"price": event.Price, "qty": event.Qty,
-				"notional": notional,
+				"notional":         notional,
 				"minutes_to_close": sessionCloseUTC.Sub(t).Minutes(),
 			}
 			se.raiseAlert(AlertMarkingTheClose, event.ClientID, []int64{event.OrderID}, evidence)
@@ -459,9 +459,9 @@ func handleSurveillanceStatus(db *sql.DB, se *SurveillanceEngine) http.HandlerFu
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"engine_running":  true,
+			"engine_running":   true,
 			"events_processed": se.eventsTotal.Load(),
-			"alerts_total":    se.alertsTotal.Load(),
+			"alerts_total":     se.alertsTotal.Load(),
 			"alerts": map[string]int64{
 				"unreviewed": unreviewed,
 				"escalated":  escalated,

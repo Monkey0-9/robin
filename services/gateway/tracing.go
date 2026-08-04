@@ -45,7 +45,7 @@ func InitTracer(ctx context.Context, serviceName string) (*sdktrace.TracerProvid
 
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
-	
+
 	Tracer = tp.Tracer(serviceName)
 
 	return tp, nil
@@ -54,7 +54,7 @@ func InitTracer(ctx context.Context, serviceName string) (*sdktrace.TracerProvid
 func tracingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
-		
+
 		var span trace.Span
 		if Tracer != nil {
 			ctx, span = Tracer.Start(ctx, r.URL.Path)
