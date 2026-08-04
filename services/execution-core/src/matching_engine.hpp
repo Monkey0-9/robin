@@ -13,7 +13,9 @@
 #include <array>
 #include <vector>
 #include <cstddef>
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
 #include <immintrin.h>
+#endif
 #ifdef _MSC_VER
 #include <intrin.h>
 #endif
