@@ -29,6 +29,8 @@ add_executable(matching_engine
     src/indicators.hpp
     src/twap_engine.cpp
     src/twap_engine.hpp
+    src/sor.cpp
+    src/sor.hpp
 )
 target_include_directories(matching_engine PRIVATE src)
 
