@@ -49,6 +49,7 @@ endif()
 
 # ─── C++ Strategy Python Bindings (DLL/SO) ────────────────────────────────────
 add_library(strategy_bindings SHARED src/strategy_bindings.cpp)
+set_property(TARGET strategy_bindings PROPERTY POSITION_INDEPENDENT_CODE ON)
 target_include_directories(strategy_bindings PRIVATE src)
 
 # ─── Benchmarks ───────────────────────────────────────────────────────────────
