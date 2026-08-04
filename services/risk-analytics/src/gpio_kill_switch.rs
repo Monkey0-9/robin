@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+
 
 pub struct HardwareKillSwitch {
     active: Arc<AtomicBool>,
@@ -27,9 +27,9 @@ impl HardwareKillSwitch {
     }
 
     pub fn start_monitoring(&mut self) {
-        let _active = self.active.clone();
-        let _trigger_count = self.trigger_count.clone();
-        let _last_trigger_ns = self.last_trigger_ns.clone();
+        let active = self.active.clone();
+        let trigger_count = self.trigger_count.clone();
+        let last_trigger_ns = self.last_trigger_ns.clone();
         let handle = thread::spawn(move || {
             #[cfg(target_os = "linux")]
             {

@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <string>
 #include <vector>
+#include <memory>
 #include "order_book.hpp"
 
 using namespace quantum::execution;
@@ -11,7 +12,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         return 0; // Not enough data to create an Order
     }
 
-    OrderBook book(1); // Initialize order book for instrument 1
+    auto book = std::make_unique<OrderBook>(1); // Initialize order book for instrument 1
 
     // Treat the random fuzzing data as an array of Orders
     size_t num_orders = size / sizeof(Order);
@@ -47,7 +48,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
         }
 
         FixedVector<Trade, 64> trades;
-        book.match_order(order, trades);
+        book->match_order(order, trades);
     }
 
     return 0;
