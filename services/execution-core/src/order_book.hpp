@@ -63,14 +63,15 @@ inline uint64_t rdtscp_local() {
     return __rdtscp(&aux);
 }
 #elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
-#include <x86intrin.h>
 inline uint64_t rdtscp_local() {
-    unsigned int aux;
-    return __rdtscp(&aux);
+    uint32_t aux;
+    uint64_t rax, rdx;
+    __asm__ __volatile__("rdtscp" : "=a"(rax), "=d"(rdx), "=c"(aux));
+    return (rdx << 32) | rax;
 }
 #else
 inline uint64_t rdtscp_local() {
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+    return static_cast<uint64_t>(
         std::chrono::high_resolution_clock::now().time_since_epoch()).count();
 }
 #endif
