@@ -1,0 +1,12 @@
+title = "Gitleaks config for Robin quantitative trading prototype"
+
+[allowlist]
+description = "Allow development RSA keys, TLS test certs, and local config files"
+paths = [
+    '''config/keys/private\.pem''',
+    '''config/keys/public\.pem''',
+    '''config/certs/.*\.key''',
+    '''config/certs/.*\.crt''',
+    '''config/certs/.*\.csr''',
+    '''\.env.*''',
+]

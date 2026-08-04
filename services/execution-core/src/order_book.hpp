@@ -62,11 +62,16 @@ inline uint64_t rdtscp_local() {
     unsigned int aux;
     return __rdtscp(&aux);
 }
-#else
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
 #include <x86intrin.h>
 inline uint64_t rdtscp_local() {
     unsigned int aux;
     return __rdtscp(&aux);
+}
+#else
+inline uint64_t rdtscp_local() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::high_resolution_clock::now().time_since_epoch()).count();
 }
 #endif
 
