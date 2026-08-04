@@ -60,17 +60,16 @@ target_sources(order_book_benchmark PRIVATE src/latency_benchmark.hpp)
 add_executable(strategy_benchmark bench/strategy_benchmark.cpp)
 target_include_directories(strategy_benchmark PRIVATE src)
 
-# ─── Fuzzing ──────────────────────────────────────────────────────────────────
-add_executable(order_book_fuzzer src/order_book_fuzzer.cpp)
-target_include_directories(order_book_fuzzer PRIVATE src)
-# Use clang's libFuzzer and AddressSanitizer
+# ─── Fuzzing (Clang only) ─────────────────────────────────────────────────────
 if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    add_executable(order_book_fuzzer src/order_book_fuzzer.cpp)
+    target_include_directories(order_book_fuzzer PRIVATE src)
     target_compile_options(order_book_fuzzer PRIVATE -fsanitize=fuzzer,address)
     target_link_options(order_book_fuzzer PRIVATE -fsanitize=fuzzer,address)
 endif()
 
-# ─── Platform-specific flags for all targets ─────────────────────────────────
-foreach(tgt matching_engine live_feed order_book_benchmark strategy_benchmark order_book_fuzzer strategy_bindings)
+# ─── Platform-specific flags for targets ─────────────────────────────────────
+foreach(tgt matching_engine live_feed order_book_benchmark strategy_benchmark strategy_bindings)
     if(WIN32)
         target_link_libraries(${tgt} PRIVATE ws2_32)
     endif()

@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-
 pub struct HardwareKillSwitch {
     active: Arc<AtomicBool>,
     trigger_count: Arc<AtomicU64>,
