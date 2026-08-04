@@ -60,6 +60,7 @@ impl HardwareKillSwitch {
                                     println!("[KILL_SWITCH] GPIO trigger detected");
                                     active.store(true, Ordering::Release);
                                     trigger_count.fetch_add(1, Ordering::Relaxed);
+                                    #[allow(clippy::cast_possible_truncation)]
                                     last_trigger_ns.store(
                                         std::time::SystemTime::now()
                                             .duration_since(std::time::UNIX_EPOCH)
