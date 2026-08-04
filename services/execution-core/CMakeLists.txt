@@ -84,5 +84,10 @@ foreach(tgt matching_engine live_feed order_book_benchmark strategy_benchmark st
 endforeach()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT MSVC)
-    target_link_libraries(matching_engine PRIVATE numa)
+    find_library(NUMA_LIB numa)
+    if(NUMA_LIB)
+        target_link_libraries(matching_engine PRIVATE ${NUMA_LIB})
+    else()
+        target_compile_definitions(matching_engine PRIVATE NO_NUMA)
+    endif()
 endif()

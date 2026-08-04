@@ -25,8 +25,10 @@
 #else
 #include <pthread.h>
 #include <sched.h>
+#if defined(__linux__) && !defined(NO_NUMA)
 #include <numa.h>
 #include <numaif.h>
+#endif
 #endif
 
 #ifndef likely
@@ -127,13 +129,15 @@ private:
     }
 
     void bind_to_numa_node(uint32_t node) noexcept {
-#ifdef __linux__
+#if defined(__linux__) && !defined(NO_NUMA)
         struct bitmask *nodemask = numa_allocate_nodemask();
         if (nodemask) {
             numa_bitmask_setbit(nodemask, node);
             numa_bind(nodemask);
             numa_free_nodemask(nodemask);
         }
+#else
+        (void)node;
 #endif
     }
 
