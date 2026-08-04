@@ -15,9 +15,18 @@ public:
     LatencyTracker() : count_(0), max_latency_(0), buckets_(BUCKET_COUNT, 0) {}
 
     static inline uint64_t get_tsc() noexcept {
+#if defined(_MSC_VER)
+        unsigned int aux;
+        return __rdtscp(&aux);
+#elif defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
+        uint32_t aux;
         uint64_t rax, rdx;
-        __asm__ __volatile__("rdtscp" : "=a"(rax), "=d"(rdx) : : "rcx");
+        __asm__ __volatile__("rdtscp" : "=a"(rax), "=d"(rdx), "=c"(aux));
         return (rdx << 32) | rax;
+#else
+        return static_cast<uint64_t>(
+            std::chrono::high_resolution_clock::now().time_since_epoch().count());
+#endif
     }
 
     inline void record_sample(uint64_t start_tsc, uint64_t end_tsc) noexcept {
