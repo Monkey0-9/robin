@@ -1,7 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  swcMinify: true,
   // 100% Institutional Compliance: Add Content Security Policy (CSP) and Strict-Transport-Security (HSTS)
   async headers() {
     return [
