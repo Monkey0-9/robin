@@ -24,8 +24,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 )
@@ -33,6 +33,30 @@ import (
 // SupervisoryThreshold is the notional value above which principal approval is required.
 // Default: $1,000,000. Configurable via ROBIN_SUPERVISORY_THRESHOLD env.
 const defaultSupervisoryThresholdUSD = 1_000_000.0
+
+// supervisoryThresholdUSD returns the configured principal-approval threshold,
+// falling back to the $1M default when ROBIN_SUPERVISORY_THRESHOLD is unset or invalid.
+func supervisoryThresholdUSD() float64 {
+	if v := os.Getenv("ROBIN_SUPERVISORY_THRESHOLD"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 {
+			return f
+		}
+	}
+	return defaultSupervisoryThresholdUSD
+}
+
+// heldApproval captures the engine submission details of an order held for
+// principal approval (FINRA 3110) so an approval can route it to the engine.
+type heldApproval struct {
+	approvalID int64
+	clOrdID    string
+	orderID    int64
+	symbol     string
+	side       string
+	orderType  string
+	price      int64 // fixed-point 1e8
+	qty        int64 // fixed-point 1e8
+}
 
 // SupervisoryPendingTTL is how long a pending approval remains valid before auto-rejection.
 const supervisoryPendingTTL = 5 * time.Minute
@@ -174,78 +198,143 @@ func handleSupervisoryPending(db *sql.DB) http.HandlerFunc {
 }
 
 // handleSupervisoryApprove handles POST /api/supervisory/approve/{id}.
-func handleSupervisoryApprove(db *sql.DB, logger *slog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		approvalID := supervisoryIDFromPath(r)
-		if approvalID == 0 {
-			http.Error(w, `{"error":"approval id required"}`, http.StatusBadRequest)
-			return
-		}
+// As an Orchestrator method it can also release the held order to the engine.
+func (o *Orchestrator) handleSupervisoryApprove(w http.ResponseWriter, r *http.Request) {
+	approvalID := supervisoryIDFromPath(r)
+	if approvalID == 0 {
+		http.Error(w, `{"error":"approval id required"}`, http.StatusBadRequest)
+		return
+	}
 
-		var body struct {
-			Reason string `json:"reason"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body.Reason == "" {
-			body.Reason = "Approved by principal"
-		}
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.Reason == "" {
+		body.Reason = "Approved by principal"
+	}
 
-		principal := adminFromContext(r)
-		if err := approveSupervisoryOrder(db, approvalID, principal, body.Reason, 0); err != nil {
-			http.Error(w, `{"error":"failed to record approval"}`, http.StatusInternalServerError)
-			return
-		}
+	principal := adminFromContext(r)
+	if err := approveSupervisoryOrder(o.db, approvalID, principal, body.Reason, 0); err != nil {
+		http.Error(w, `{"error":"failed to record approval"}`, http.StatusInternalServerError)
+		return
+	}
 
-		logger.Info("Supervisory approval granted",
-			"approval_id", approvalID, "principal", principal, "reason", body.Reason,
-		)
+	o.logger.Info("Supervisory approval granted",
+		"approval_id", approvalID, "principal", principal, "reason", body.Reason,
+	)
 
+	// Route the (previously held) order to the matching engine. A failure here
+	// still means the approval was recorded; the order simply stays parked.
+	if err := o.releaseApprovedOrder(approvalID); err != nil {
+		o.logger.Error("approved order failed to route to engine",
+			"approval_id", approvalID, "error", err)
 		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":      "APPROVED",
+			"status":      "APPROVED_FAILED_TO_ROUTE",
 			"approval_id": approvalID,
 			"principal":   principal,
-			"reason":      body.Reason,
+			"error":       err.Error(),
+			"message":     "Approval recorded; order is paused awaiting an available matching engine.",
 		})
+		return
 	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":      "APPROVED",
+		"approval_id": approvalID,
+		"principal":   principal,
+		"reason":      body.Reason,
+	})
+}
+
+func (o *Orchestrator) releaseApprovedOrder(approvalID int64) error {
+	o.approvalMu.Lock()
+	held, ok := o.pendingApproval[approvalID]
+	o.approvalMu.Unlock()
+	if !ok {
+		return nil // nothing held at the gateway — nothing to release
+	}
+	if o.matchClient == nil || !o.matchClient.IsEnabled() {
+		return fmt.Errorf("matching engine unavailable")
+	}
+	instID := getInstrumentID(held.symbol)
+	matchJSON := fmt.Sprintf(
+		`{"cl_ord_id":"%s","id":%d,"instrument_id":%d,"price":%d,"qty":%d,"side":"%s","type":"%s"}`,
+		held.clOrdID, held.orderID, instID, held.price, held.qty, held.side, held.orderType,
+	)
+	resp, err := o.matchClient.SendOrderJSON(matchJSON)
+	if err != nil {
+		return err
+	}
+	var meResp MatchingEngineResponse
+	if json.Unmarshal([]byte(resp), &meResp) != nil || !meResp.Success {
+		status := "REJECTED"
+		if meResp.Status != "" {
+			status = meResp.Status
+		}
+		return fmt.Errorf("engine did not confirm approved order (%s)", status)
+	}
+	o.approvalMu.Lock()
+	delete(o.pendingApproval, approvalID)
+	o.approvalMu.Unlock()
+	if o.db != nil {
+		o.db.Exec("UPDATE orders SET status = $1, updated_at_ns = $2 WHERE cl_order_id = $3",
+			meResp.Status, time.Now().UnixNano(), held.clOrdID)
+	}
+	o.logger.Info("principal-approved order routed to engine",
+		"cl_ord_id", held.clOrdID, "approval_id", approvalID, "status", meResp.Status)
+	return nil
 }
 
 // handleSupervisoryReject handles POST /api/supervisory/reject/{id}.
-func handleSupervisoryReject(db *sql.DB, logger *slog.Logger) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		approvalID := supervisoryIDFromPath(r)
-		if approvalID == 0 {
-			http.Error(w, `{"error":"approval id required"}`, http.StatusBadRequest)
-			return
-		}
-
-		var body struct {
-			Reason string `json:"reason"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if body.Reason == "" {
-			http.Error(w, `{"error":"reason is required for rejection (FINRA 3110)"}`, http.StatusBadRequest)
-			return
-		}
-
-		principal := adminFromContext(r)
-		if err := rejectSupervisoryOrder(db, approvalID, principal, body.Reason, 0); err != nil {
-			http.Error(w, `{"error":"failed to record rejection"}`, http.StatusInternalServerError)
-			return
-		}
-
-		logger.Warn("Supervisory order rejected",
-			"approval_id", approvalID, "principal", principal, "reason", body.Reason,
-		)
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":      "REJECTED",
-			"approval_id": approvalID,
-			"principal":   principal,
-			"reason":      body.Reason,
-		})
+func (o *Orchestrator) handleSupervisoryReject(w http.ResponseWriter, r *http.Request) {
+	approvalID := supervisoryIDFromPath(r)
+	if approvalID == 0 {
+		http.Error(w, `{"error":"approval id required"}`, http.StatusBadRequest)
+		return
 	}
+
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.Reason == "" {
+		http.Error(w, `{"error":"reason is required for rejection (FINRA 3110)"}`, http.StatusBadRequest)
+		return
+	}
+
+	principal := adminFromContext(r)
+	if err := rejectSupervisoryOrder(o.db, approvalID, principal, body.Reason, 0); err != nil {
+		http.Error(w, `{"error":"failed to record rejection"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// Mark the held order rejected and drop it from the approval queue.
+	o.approvalMu.Lock()
+	held, ok := o.pendingApproval[approvalID]
+	if ok {
+		delete(o.pendingApproval, approvalID)
+	}
+	o.approvalMu.Unlock()
+	if ok && o.db != nil {
+		o.db.Exec("UPDATE orders SET status = 'REJECTED', updated_at_ns = $1 WHERE cl_order_id = $2",
+			time.Now().UnixNano(), held.clOrdID)
+	}
+
+	o.logger.Warn("Supervisory order rejected",
+		"approval_id", approvalID, "principal", principal, "reason", body.Reason,
+	)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":      "REJECTED",
+		"approval_id": approvalID,
+		"principal":   principal,
+		"reason":      body.Reason,
+	})
 }
 
 // handleSupervisoryHistory handles GET /api/supervisory/history.
@@ -305,6 +394,3 @@ func supervisoryIDFromPath(r *http.Request) int64 {
 	}
 	return 0
 }
-
-var _ = defaultSupervisoryThresholdUSD
-var _ = checkSupervisoryApproval

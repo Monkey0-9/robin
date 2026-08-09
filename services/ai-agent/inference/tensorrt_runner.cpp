@@ -5,26 +5,8 @@
 #include <iostream>
 #include <vector>
 
-// Dummy stubs for ONNX Runtime API to allow syntax check without installing the library
-namespace Ort {
-    class Env {
-    public:
-        Env(int logging_level, const char* logid) {}
-    };
-    class SessionOptions {
-    public:
-        void SetIntraOpNumThreads(int num_threads) {}
-        void SetGraphOptimizationLevel(int level) {}
-    };
-    class Session {
-    public:
-        Session(Env& env, const char* model_path, SessionOptions& options) {}
-        std::vector<float> Run(const std::vector<float>& input) {
-            // Simulated inference returning a dummy alpha score
-            return {0.05f}; 
-        }
-    };
-}
+// Real ONNX Runtime C++ API
+#include <onnxruntime_cxx_api.h>
 
 class MicrostructureAlphaInference {
 private:
@@ -49,7 +31,34 @@ public:
 
     float predict_alpha(const std::vector<float>& features) {
         // features: [order_book_imbalance, vpin, spread, micro_price]
-        auto result = session->Run(features);
-        return result.empty() ? 0.0f : result[0];
+        if (session == nullptr) return 0.0f;
+        
+        Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+        
+        // Define input tensor shape (1 batch, 4 features)
+        std::vector<int64_t> input_shape = {1, 4};
+        
+        // Ensure features size matches
+        if (features.size() != 4) return 0.0f;
+        
+        // Create input tensor
+        Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
+            memory_info, 
+            const_cast<float*>(features.data()), 
+            features.size(), 
+            input_shape.data(), 
+            input_shape.size()
+        );
+        
+        const char* input_names[] = {"input"};
+        const char* output_names[] = {"output"};
+        
+        // Run inference
+        auto output_tensors = session->Run(Ort::RunOptions{nullptr}, input_names, &input_tensor, 1, output_names, 1);
+        
+        if (output_tensors.empty()) return 0.0f;
+        
+        float* floatarr = output_tensors.front().GetTensorMutableData<float>();
+        return floatarr[0];
     }
 };

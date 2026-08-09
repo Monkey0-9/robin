@@ -288,23 +288,11 @@ func (b *KDBBridge) HandleTicks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !b.enabled {
-		// Return synthetic tick data for dashboard
-		now := time.Now()
-		ticks := make([]map[string]any, 10)
-		price := 65000.0
-		for i := range ticks {
-			ticks[i] = map[string]any{
-				"sym":       sym,
-				"timestamp": now.Add(-time.Duration(i) * time.Second).UnixNano(),
-				"price":     price + float64(i)*10.0,
-				"size":      0.1,
-				"source":    "stub",
-			}
-		}
+		// KDB is unavailable, and we no longer generate synthetic stub data
 		b.writeJSON(w, map[string]any{
 			"sym":    sym,
-			"ticks":  ticks,
-			"source": "stub_kdb_unavailable",
+			"ticks":  []map[string]any{},
+			"source": "kdb_unavailable",
 		})
 		return
 	}

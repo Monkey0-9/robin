@@ -34,28 +34,44 @@ impl SpoofingDetector {
         history.retain(|e| e.timestamp_ns >= threshold);
 
         // Calculate VPIN (Volume-Synchronized Probability of Informed Trading)
-        // Simplified metric: ratio of absolute volume imbalance to total volume
-        let mut buy_vol = 0;
-        let sell_vol = 0;
-        let mut cancel_buy_vol = 0;
-        let cancel_sell_vol = 0;
+        // VPIN = Sum(|BuyVol - SellVol|) / (TotalVol) over volume buckets
+        let bucket_size = 50_000 * 100_000_000; // 50,000 shares per bucket
+        let mut total_imbalance = 0_f64;
+        let mut total_volume_in_buckets = 0_f64;
+        
+        let mut current_bucket_buy = 0;
+        let mut current_bucket_sell = 0;
+        let mut current_bucket_vol = 0;
 
-        // Note: For a real VPIN we would bucket by volume, not time, but we adapt it here.
         for e in history.iter() {
+            // We proxy Buy/Sell based on event type since side isn't in OrderEvent.
+            // In a real VPIN we classify by aggressor side (tick rule or direct feed).
+            // For spoofing detection, we look at the imbalance of CANCELs vs NEWs
+            // as an adapted VPIN-like metric for spoofing.
+            let vol = e.qty;
             if e.event_type == "NEW" {
-                // Heuristic: assuming we know the side, or we just track total activity
-                buy_vol += e.qty; // Simplified
+                current_bucket_buy += vol;
             } else if e.event_type == "CANCEL" {
-                cancel_buy_vol += e.qty;
+                current_bucket_sell += vol; // Treat CANCEL as opposite side for spoofing pressure
+            }
+            current_bucket_vol += vol;
+
+            if current_bucket_vol >= bucket_size {
+                let imbalance = (current_bucket_buy as i64 - current_bucket_sell as i64).unsigned_abs();
+                total_imbalance += imbalance as f64;
+                total_volume_in_buckets += current_bucket_vol as f64;
+                
+                current_bucket_buy = 0;
+                current_bucket_sell = 0;
+                current_bucket_vol = 0;
             }
         }
 
-        let total_vol = buy_vol + sell_vol;
-        if total_vol > 100_000 * 100_000_000 {
-            let imbalance = (cancel_buy_vol as i64 - cancel_sell_vol as i64).unsigned_abs();
-            let vpin = imbalance as f64 / total_vol as f64;
+        if total_volume_in_buckets > 0.0 {
+            let vpin = total_imbalance / total_volume_in_buckets;
 
-            // Flag if VPIN is extremely high (e.g. > 0.8) and large cancel ratio
+            // Flag if VPIN-like imbalance is extremely high (e.g. > 0.8) meaning 
+            // 90% of activity was cancels compared to real orders (spoofing indicator)
             if vpin > 0.8 {
                 self.alert_count += 1;
                 println!(
@@ -88,25 +104,27 @@ mod tests {
     fn test_spoofing_detection() {
         let mut detector = SpoofingDetector::new(5_000_000_000);
 
-        for i in 0..10 {
+        for i in 0..100 {
+            // Small NEW order
             detector.process_order_event(OrderEvent {
                 order_id: i,
                 symbol: "AAPL".into(),
                 price: 50000 * 100_000_000,
-                qty: 11000 * 100_000_000,
+                qty: 500 * 100_000_000, // 500 qty
                 event_type: "NEW",
                 timestamp_ns: 1000 + i * 10,
             });
+            // Massive CANCEL order (Spoofing)
             detector.process_order_event(OrderEvent {
                 order_id: i,
                 symbol: "AAPL".into(),
                 price: 50000 * 100_000_000,
-                qty: 11000 * 100_000_000,
+                qty: 9500 * 100_000_000, // 9,500 qty (95% cancel ratio)
                 event_type: "CANCEL",
                 timestamp_ns: 1500 + i * 10,
             });
         }
 
-        assert_eq!(detector.get_alert_count(), 1); // Triggered once threshold exceeded
+        assert!(detector.get_alert_count() >= 1); // Triggered once threshold exceeded
     }
 }

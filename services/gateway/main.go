@@ -72,6 +72,27 @@ func main() {
 
 	orch.StartHealthProbes(ctx, 5*time.Second)
 
+	// Circuit breaker integration (Phase 3.6): poll the risk engine's metrics
+	// endpoint so a risk-side drawdown trip halts gateway order entry.
+	if orch.circuitBreaker != nil {
+		orch.circuitBreaker.StartRiskPolling(ctx)
+	}
+
+	// Phase 2 wiring: stream live NBBO/best prices + Reg SHO previous closes
+	// into the risk daemon so price-collar, correlation, and the short-sale
+	// circuit breaker act on real market data. Best-effort and non-fatal.
+	go StartRiskMarketFeed(ctx)
+
+	// Phase 4 wiring: start the post-trade surveillance and time-sync engines.
+	// They are constructed in NewOrchestrator but only begin consuming events
+	// once Start(ctx) is invoked; without this they were silent dead code.
+	if orch.surveillance != nil {
+		orch.surveillance.Start(ctx)
+	}
+	if orch.timeSync != nil {
+		orch.timeSync.Start(ctx)
+	}
+
 	httpPort := 8080
 	if p := os.Getenv("ORCH_PORT"); p != "" {
 		if val, err := strconv.Atoi(p); err == nil {

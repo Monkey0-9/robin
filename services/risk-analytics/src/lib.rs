@@ -1,5 +1,6 @@
 pub mod circuit_breaker;
 pub mod config;
+pub mod correlation;
 pub mod esg_mandate;
 pub mod gate;
 pub mod gpio_kill_switch;

@@ -99,6 +99,39 @@ func (sm *OrderStateMachine) Register(o *ManagedOrder) error {
 	return nil
 }
 
+// Restore adds an order to the state machine at a pre-existing lifecycle state
+// without validating a transition path. Used by restart / reconciliation flows
+// where the durable source of truth (SQLite, WAL, snapshot) already determined
+// the order's state. A "restored" history event is appended for auditability.
+func (sm *OrderStateMachine) Restore(o *ManagedOrder) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	if _, exists := sm.orders[o.ClOrdID]; exists {
+		return fmt.Errorf("order %s already registered", o.ClOrdID)
+	}
+	if o.State == "" {
+		o.State = OrderStateNew
+	}
+	if o.CreatedAtNs == 0 {
+		o.CreatedAtNs = time.Now().UnixNano()
+	}
+	o.UpdatedAtNs = time.Now().UnixNano()
+	if o.LeavesQty == 0 {
+		o.LeavesQty = o.Qty - o.FilledQty
+		if o.LeavesQty < 0 {
+			o.LeavesQty = 0
+		}
+	}
+	o.History = append(o.History, StateTransitionEvent{
+		From:        OrderStateNew,
+		To:          o.State,
+		Reason:      "restored_from_durable_state",
+		TimestampNs: o.UpdatedAtNs,
+	})
+	sm.orders[o.ClOrdID] = o
+	return nil
+}
+
 // Transition moves an order to a new state, enforcing valid paths
 func (sm *OrderStateMachine) Transition(clOrdID string, newState OrderLifecycleState, reason string) (*ManagedOrder, error) {
 	sm.mu.Lock()
@@ -241,6 +274,28 @@ func (sm *OrderStateMachine) GetOrder(clOrdID string) (*ManagedOrder, bool) {
 	}
 	copy := *o
 	return &copy, true
+}
+
+// ApplyReplace records an engine-acknowledged REPLACE (price/qty) on a live
+// order, recomputing leaves quantity while preserving any already-filled qty.
+// Unlike Cancel, it does not change lifecycle state — a working order stays
+// working through a modify. Returns the updated copy.
+func (sm *OrderStateMachine) ApplyReplace(clOrdID string, price, qty float64) (*ManagedOrder, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	o, ok := sm.orders[clOrdID]
+	if !ok {
+		return nil, fmt.Errorf("order %s not found", clOrdID)
+	}
+	o.Price = price
+	o.Qty = qty
+	o.LeavesQty = qty - o.FilledQty
+	if o.LeavesQty < 0 {
+		o.LeavesQty = 0
+	}
+	o.UpdatedAtNs = time.Now().UnixNano()
+	copy := *o
+	return &copy, nil
 }
 
 // GetAllOrders returns all tracked orders (for blotter)

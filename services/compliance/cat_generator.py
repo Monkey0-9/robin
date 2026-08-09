@@ -3,14 +3,32 @@ import csv
 import os
 from datetime import datetime
 import uuid
+import sqlite3
 
-def generate_cat_report(orders_file, output_file):
-    if not os.path.exists(orders_file):
-        print(f"No orders file found at {orders_file}")
+def generate_cat_report(db_file, output_file):
+    if not os.path.exists(db_file):
+        print(f"No database file found at {db_file}")
         return
 
-    with open(orders_file, 'r') as f:
-        orders = json.load(f)
+    orders = []
+    try:
+        conn = sqlite3.connect(db_file)
+        cursor = conn.cursor()
+        
+        # We look for OrderReceived events in the audit log
+        cursor.execute("SELECT data FROM audit_log WHERE event = 'OrderReceived'")
+        for row in cursor.fetchall():
+            try:
+                order_data = json.loads(row[0])
+                orders.append(order_data)
+            except json.JSONDecodeError:
+                continue
+    except Exception as e:
+        print(f"Error reading from SQLite database: {e}")
+        return
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
     # FINRA CAT Format (Consolidated Audit Trail)
     # 2a MENO (New Order Event)
@@ -44,15 +62,8 @@ def generate_cat_report(orders_file, output_file):
     print(f"Successfully generated FINRA CAT report: {output_file}")
 
 if __name__ == "__main__":
-    # In a real system, this reads from the central database
-    # For prototype, we can read a mock orders.json
-    orders_file = "mock_orders.json"
+    # Real system reads from the central SQLite database (robin.db)
+    db_file = os.path.join(os.path.dirname(__file__), "..", "gateway", "robin.db")
     output_file = f"cat_report_{datetime.now().strftime('%Y%m%d')}.csv"
     
-    if not os.path.exists(orders_file):
-        with open(orders_file, 'w') as f:
-            json.dump([
-                {"id": "ORD123", "symbol": "BTC-USD", "price": 50000.0, "qty": 1.5, "side": "BUY", "timestamp": datetime.utcnow().isoformat()}
-            ], f)
-            
-    generate_cat_report(orders_file, output_file)
+    generate_cat_report(db_file, output_file)

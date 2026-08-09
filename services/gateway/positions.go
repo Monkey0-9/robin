@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -69,12 +70,28 @@ type PortfolioSummary struct {
 	LastUpdated        time.Time            `json:"last_updated"`
 }
 
+// AccountPnL tracks realized P&L, fees, and open-position fiat exposure per
+// account (Phase 3.6). It is keyed by account_id so risk and compliance
+// reporting can break exposure/P&L down by client account rather than only by
+// symbol.
+type AccountPnL struct {
+	AccountID     uint64  `json:"account_id"`
+	RealizedPnL   float64 `json:"realized_pnl"`
+	UnrealizedPnL float64 `json:"unrealized_pnl"`
+	Fees          float64 `json:"fees"`
+	OpenNotional  float64 `json:"open_notional"`
+	TradeCount    uint64  `json:"trade_count"`
+}
+
 // ─── PositionManager ──────────────────────────────────────────────────────────
 
 // PositionManager maintains all open positions and computes live P&L.
 type PositionManager struct {
 	positions map[string]*Position
 	mu        sync.RWMutex
+
+	// Per-account P&L tracking (Phase 3.6).
+	accounts map[uint64]*AccountPnL
 
 	aiAgentURL string // e.g. "http://127.0.0.1:8000"
 	httpClient *http.Client
@@ -85,11 +102,50 @@ type PositionManager struct {
 func NewPositionManager(aiAgentURL string) *PositionManager {
 	pm := &PositionManager{
 		positions:  make(map[string]*Position),
+		accounts:   make(map[uint64]*AccountPnL),
 		aiAgentURL: aiAgentURL,
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 	}
 	go pm.priceRefreshLoop()
 	return pm
+}
+
+// RecordAccountFill updates the per-account realized/unrealized P&L after a
+// confirmed fill. Account P&L is additive to symbol-level tracking and does
+// not disturb the existing FIFO lot machinery.
+func (pm *PositionManager) RecordAccountFill(accountID uint64, symbol, side string, qty, price float64) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	acc, ok := pm.accounts[accountID]
+	if !ok {
+		acc = &AccountPnL{AccountID: accountID}
+		pm.accounts[accountID] = acc
+	}
+	acc.TradeCount++
+	acc.OpenNotional += qty * price
+	acc.Fees += qty * price * 0.0001 // 1bp commission model
+	// Realized P&L only for sells that reduce an existing long position.
+	if side == "SELL" && pm.positions[symbol] != nil {
+		pos := pm.positions[symbol]
+		if pos.TotalQty > 0 {
+			closeQty := qty
+			if closeQty > pos.TotalQty {
+				closeQty = pos.TotalQty
+			}
+			acc.RealizedPnL += closeQty * (price - pos.AvgEntryPrice)
+		}
+	}
+}
+
+// GetAccountPnL returns per-account P&L snapshots.
+func (pm *PositionManager) GetAccountPnL() []AccountPnL {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	out := make([]AccountPnL, 0, len(pm.accounts))
+	for _, acc := range pm.accounts {
+		out = append(out, *acc)
+	}
+	return out
 }
 
 // OnFill is called by the OMS when an order fill is confirmed.
@@ -171,6 +227,42 @@ func (pm *PositionManager) OnClose(symbol string, closedQty, closePrice float64)
 	}
 
 	return realizedPnL
+}
+
+// checkPositionLimit returns an error when accepting `orderQty` on `side`
+// would push the symbol's net position past `maxQty` (absolute exposure in
+// either direction). Uses the current observable position; conservative by
+// construction because it counts the full submitted quantity before any fill.
+func (pm *PositionManager) checkPositionLimit(symbol, side string, orderQty, maxQty float64) error {
+	if maxQty <= 0 || orderQty <= 0 {
+		return nil // unlimited / degenerate orders are not gated here
+	}
+	pm.mu.RLock()
+	pos, ok := pm.positions[symbol]
+	var sign float64
+	if ok {
+		switch strings.ToUpper(pos.Side) {
+		case "LONG", "BUY":
+			sign = 1.0
+		case "SHORT", "SELL":
+			sign = -1.0
+		}
+	}
+	net := pos.TotalQty * sign
+	pm.mu.RUnlock()
+
+	var after float64
+	if side == "SELL" {
+		after = net - orderQty
+	} else {
+		after = net + orderQty
+	}
+
+	if math.Abs(after) > maxQty {
+		return fmt.Errorf("position limit breached: symbol=%s net=%.0f order=%v side=%s max=%.0f",
+			symbol, net, orderQty, side, maxQty)
+	}
+	return nil
 }
 
 // priceRefreshLoop fetches live prices from AI agent every 5 seconds.
@@ -306,6 +398,20 @@ func handleGetPosition(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(pos)
+}
+
+// handleGetAccountPnL returns per-account realized/unrealized P&L (Phase 3.6).
+func handleGetAccountPnL(w http.ResponseWriter, r *http.Request) {
+	if globalPositionManager == nil {
+		http.Error(w, "position manager not initialized", http.StatusServiceUnavailable)
+		return
+	}
+	accounts := globalPositionManager.GetAccountPnL()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"accounts": accounts,
+		"total":    len(accounts),
+	})
 }
 
 func min(a, b float64) float64 {

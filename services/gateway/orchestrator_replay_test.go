@@ -83,6 +83,12 @@ func TestDeterministicReplay(t *testing.T) {
 	mockEngine := startMockMatchingEngine(t, PortRiskHealth)
 	defer mockEngine.Close()
 
+	// Phase 3.1 strict SOR only routes on live venue quotes.
+	publish("BTC/USD", "Coinbase", 59_999.5, 60_002.0)
+	publish("BTC/USD", "Binance", 59_998.0, 60_003.0)
+	publish("ETH/USD", "Coinbase", 2_999.0, 3_001.0)
+	publish("ETH/USD", "Binance", 2_998.0, 3_002.0)
+
 	orch := NewOrchestrator()
 	// Connect mock risk gate
 	if err := orch.matchClient.Connect(); err != nil {

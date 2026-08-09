@@ -265,4 +265,17 @@ CREATE TABLE IF NOT EXISTS supervisory_decisions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_supervisory_order ON supervisory_decisions(order_id);
+
+-- 14. Reference data: symbol → instrument-id mapping (Phase 3.4).
+-- Loaded into the gateway's runtime symbol map at startup so a new symbol is
+-- marketable without recompiling/redeploying the binary.
+CREATE TABLE IF NOT EXISTS instruments (
+    symbol TEXT PRIMARY KEY,
+    instrument_id INTEGER NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'ACTIVE',     -- ACTIVE, HALTED, DELISTED
+    created_at_ns INTEGER NOT NULL DEFAULT 0,
+    updated_at_ns INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_instruments_status ON instruments(status);
 CREATE INDEX IF NOT EXISTS idx_supervisory_principal ON supervisory_decisions(principal_id);

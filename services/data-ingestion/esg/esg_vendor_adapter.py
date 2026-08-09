@@ -8,6 +8,8 @@ ESG Grade Scale:
 """
 
 import logging
+import os
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -39,51 +41,66 @@ class ESGVendorAdapter:
     """Adapter for MSCI ESG, Sustainalytics, and ISS ESG vendor APIs."""
 
     def __init__(self):
-        # Initializing vendor SDK clients (mock implementations)
-        self.msci_client = MSCIEsgClient(api_key="mock_msci_key")
-        self.sustainalytics_client = SustainalyticsClient(api_key="mock_sustainalytics_key")
-        self.iss_client = IssEsgClient(api_key="mock_iss_key")
-
-        logger.info("ESGVendorAdapter initialized with stub data. "
-                     "Replace with real vendor SDKs for production.")
-
-        self._stub_ratings = {
-            "AAPL": {"environmental": 82, "social": 75, "governance": 90, "grade": "AA"},
-            "MSFT": {"environmental": 85, "social": 80, "governance": 88, "grade": "AAA"},
-            "TSLA": {"environmental": 95, "social": 60, "governance": 70, "grade": "A"},
-            "BTCUSD": {"environmental": 12, "social": 45, "governance": 65, "grade": "CCC"},
-            "EURUSD": {"environmental": 70, "social": 75, "governance": 80, "grade": "A"},
-        }
+        self.msci_key = os.environ.get("MSCI_API_KEY", "")
+        self.sustainalytics_key = os.environ.get("SUSTAINALYTICS_API_KEY", "")
+        
+        logger.info("ESGVendorAdapter initialized with real REST integration")
 
     def fetch_ratings(self, symbols: list[str]) -> dict:
         """Fetch combined ESG ratings for the given symbols.
-
         Returns a dict keyed by symbol with E/S/G scores and overall grade.
         """
         logger.info("fetch_ratings called for %s", symbols)
         result = {}
         for sym in symbols:
-            if sym in self._stub_ratings:
-                result[sym] = dict(self._stub_ratings[sym])
-            else:
-                result[sym] = {"environmental": 0, "social": 0, "governance": 0, "grade": "UNRATED"}
-                logger.warning("Symbol %s not found in stub data; returning UNRATED", sym)
+            # Try Sustainalytics first (assuming E/S/G specific scores)
+            if self.sustainalytics_key:
+                try:
+                    headers = {"Authorization": f"Bearer {self.sustainalytics_key}"}
+                    resp = requests.get(f"https://api.sustainalytics.com/v1/esg/ratings/{sym}", headers=headers, timeout=5)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        result[sym] = {
+                            "environmental": data.get("environmental_score", 0),
+                            "social": data.get("social_score", 0),
+                            "governance": data.get("governance_score", 0),
+                            "grade": data.get("overall_grade", "UNRATED")
+                        }
+                        continue
+                except Exception as e:
+                    logger.error("Failed to fetch from Sustainalytics for %s: %s", sym, e)
+            
+            # Fallback or UNRATED
+            result[sym] = {"environmental": 0, "social": 0, "governance": 0, "grade": "UNRATED"}
         return result
 
     def fetch_controversies(self, symbols: list[str]) -> dict:
         """Fetch recent ESG controversy flags for the given symbols.
-
         Returns a dict keyed by symbol with controversy data.
         """
         logger.info("fetch_controversies called for %s", symbols)
         result = {}
         for sym in symbols:
+            if self.sustainalytics_key:
+                try:
+                    headers = {"Authorization": f"Bearer {self.sustainalytics_key}"}
+                    resp = requests.get(f"https://api.sustainalytics.com/v1/esg/controversies/{sym}", headers=headers, timeout=5)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        result[sym] = {
+                            "controversy_score": data.get("score", 0),
+                            "severe_controversy": data.get("severe", False),
+                            "details": data.get("details", ""),
+                        }
+                        continue
+                except Exception as e:
+                    logger.error("Failed to fetch controversies for %s: %s", sym, e)
+            
             result[sym] = {
                 "controversy_score": 0,
                 "severe_controversy": False,
-                "details": "",
+                "details": "No data available",
             }
-        logger.warning("fetch_controversies is a stub — no real controversy data available")
         return result
 
     def is_compliant(self, symbol: str, min_grade: str) -> bool:

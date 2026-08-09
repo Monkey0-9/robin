@@ -4,6 +4,7 @@
 #include "lockfree_queue.hpp"
 #include "memory_pool.hpp"
 #include "order_book.hpp"
+#include "wal.hpp"
 #include <atomic>
 #include <thread>
 #include <cstring>
@@ -90,11 +91,41 @@ public:
         }
     }
 
-    bool init(uint32_t numa_node = 0, int cpu_core = 2) noexcept {
+    bool init(uint32_t numa_node = 0, int cpu_core = 2, const std::string& wal_path = "robin_engine.wal") noexcept {
         numa_node_ = numa_node;
         cpu_core_ = cpu_core;
         pin_to_cpu(cpu_core);
         bind_to_numa_node(numa_node);
+
+        wal_ = std::make_unique<WriteAheadLog>(wal_path);
+        if (wal_->open()) {
+            std::printf("[ENGINE] Opened WAL at %s, starting seq=%llu\n", wal_path.c_str(), (unsigned long long)wal_->current_seq());
+            // Replay WAL on startup to restore order book state
+            int64_t replayed = wal_->replay(
+                [this](const Order& o) {
+                    OrderBook* book = get_or_create_book(o.instrument_id);
+                    FixedVector<Trade, 64> matches;
+                    Order m = o;
+                    (void)book->match_order(m, matches); // deterministic replay
+                },
+                [this](const Order& o) {
+                    OrderBook* book = get_or_create_book(o.instrument_id);
+                    book->cancel_order(o.id, o.price, o.side);
+                },
+                [this](const Order& o) {
+                    OrderBook* book = get_or_create_book(o.instrument_id);
+                    FixedVector<Trade, 64> matches;
+                    Order m = o;
+                    (void)book->replace_order(m, matches);
+                },
+                [](const Trade&) {
+                    // Fills are recreated deterministically by match_order / replace_order
+                }
+            );
+            std::printf("[ENGINE] WAL replay complete: %lld records replayed\n", (long long)replayed);
+        } else {
+            std::fprintf(stderr, "[ENGINE] Failed to open WAL at %s. Starting fresh.\n", wal_path.c_str());
+        }
         return true;
     }
 
@@ -160,18 +191,22 @@ private:
                 if (unlikely(!book)) { stats_.orders_rejected++; continue; }
 
                 if (unlikely(incoming.type == OrderType::CANCEL)) {
+                    if (wal_) wal_->append_cancel(incoming);
                     if (book->cancel_order(incoming.id, incoming.price, incoming.side)) {
                         stats_.orders_cancelled++;
                     }
                     continue;
                 }
                 if (unlikely(incoming.type == OrderType::REPLACE)) {
+                    if (wal_) wal_->append_modify(incoming);
                     FixedVector<Trade, 64> repl_trades;
                     if (book->replace_order(incoming, repl_trades)) {
                         stats_.orders_submitted++;
                         stats_.trades_executed += repl_trades.size();
-                        for (size_t i = 0; i < repl_trades.size(); ++i)
+                        for (size_t i = 0; i < repl_trades.size(); ++i) {
+                            if (wal_) wal_->append_fill(repl_trades[i]);
                             outbound_queue_.push(repl_trades[i]);
+                        }
                     } else {
                         stats_.orders_rejected++;
                     }
@@ -179,12 +214,15 @@ private:
                 }
 
                 FixedVector<Trade, 64> matches;
+                if (wal_) wal_->append_new(incoming);
                 if (unlikely(!book->match_order(incoming, matches))) {
                     stats_.orders_rejected++;
                     continue;
                 }
-                for (size_t i = 0; i < matches.size(); ++i)
+                for (size_t i = 0; i < matches.size(); ++i) {
+                    if (wal_) wal_->append_fill(matches[i]);
                     outbound_queue_.push(matches[i]);
+                }
                 const uint64_t end_ns = rdtscp();
                 const uint64_t latency = end_ns - start_ns;
                 stats_.orders_submitted++;
@@ -224,6 +262,7 @@ private:
        placement-new constructs OrderBook instances on demand. */
     std::unique_ptr<std::array<std::byte, sizeof(OrderBook)>[]> book_storage_;
     OrderBook* books_[BOOK_COUNT];
+    std::unique_ptr<WriteAheadLog> wal_;
     ALIGN_PAD_64 EngineStats stats_;
 };
 

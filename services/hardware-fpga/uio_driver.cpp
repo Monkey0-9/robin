@@ -20,10 +20,24 @@ private:
 
 public:
     FPGADriver(const std::string& dev_path, size_t size) : map_size(size) {
-        // Mock implementation for demonstration
-        std::cout << "[FPGA] Initializing UIO driver for " << dev_path << " (size: " << size << ")\n";
-        uio_fd = -1;
-        mapped_base = nullptr;
+        uio_fd = open(dev_path.c_str(), O_RDWR);
+        if (uio_fd < 0) {
+            // Note: Since this will run in environments without an FPGA, we fallback gracefully
+            // so we don't crash the tests/compilation when no device exists.
+            std::cerr << "[WARN] Failed to open " << dev_path << ". FPGA UIO disabled.\n";
+            mapped_base = nullptr;
+            return;
+        }
+
+        mapped_base = mmap(nullptr, map_size, PROT_READ | PROT_WRITE, MAP_SHARED, uio_fd, 0);
+        if (mapped_base == MAP_FAILED) {
+            close(uio_fd);
+            uio_fd = -1;
+            mapped_base = nullptr;
+            throw std::runtime_error("mmap failed for UIO device");
+        }
+        
+        std::cout << "[FPGA] UIO driver successfully mapped " << dev_path << " (size: " << size << ")\n";
     }
 
     ~FPGADriver() {
@@ -36,14 +50,29 @@ public:
     }
 
     void write_order(uint64_t order_id, uint32_t inst_id, uint64_t price, uint32_t qty, bool is_buy) {
-        // In real hardware, we'd write to the memory-mapped PCIe registers
-        // e.g., *reinterpret_cast<volatile uint64_t*>(mapped_base) = order_id;
-        std::cout << "[FPGA] Simulated MMIO write: Order " << order_id << " (Buy=" << is_buy << ")\n";
+        if (!mapped_base) {
+            std::cout << "[FPGA-FALLBACK] Simulated MMIO write: Order " << order_id << " (Buy=" << is_buy << ")\n";
+            return;
+        }
+        
+        // Write to the memory-mapped PCIe registers
+        volatile uint64_t* regs = reinterpret_cast<volatile uint64_t*>(mapped_base);
+        regs[0] = order_id;
+        regs[1] = inst_id;
+        regs[2] = price;
+        regs[3] = qty;
+        regs[4] = is_buy ? 1 : 0;
+        
+        // Memory barrier
+        __sync_synchronize();
     }
 
     bool check_interrupt() {
-        // Real hardware uses blocking read on uio_fd for interrupts
-        return false; 
+        if (uio_fd < 0) return false;
+        
+        uint32_t info;
+        ssize_t ret = read(uio_fd, &info, sizeof(info));
+        return (ret == sizeof(info));
     }
 };
 

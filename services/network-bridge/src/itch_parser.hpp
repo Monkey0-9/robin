@@ -25,8 +25,31 @@ struct alignas(64) ITCHOrderAdd {
 
 class alignas(64) ITCHParserSIMD {
 public:
-    ITCHParserSIMD() noexcept = default;
+    ITCHParserSIMD() noexcept : expected_seq_num_(1), itch_sequence_gap_total(0) {}
     ~ITCHParserSIMD() noexcept = default;
+
+    // Track MoldUDP64 or SoupBinTCP sequence numbers
+    void check_sequence_number(uint64_t seq_num) noexcept {
+        if (seq_num > expected_seq_num_) {
+            // Gap detected!
+            itch_sequence_gap_total += (seq_num - expected_seq_num_);
+            std::fprintf(stderr, "[NETWORK] ITCH Sequence Gap Detected: expected %llu, got %llu. Triggering replay.\n", 
+                (unsigned long long)expected_seq_num_, (unsigned long long)seq_num);
+            trigger_replay(expected_seq_num_, seq_num - expected_seq_num_);
+        }
+        expected_seq_num_ = seq_num + 1; // Assuming 1 message per sequence increment for simplicity
+    }
+
+    uint64_t get_gap_metric() const noexcept {
+        return itch_sequence_gap_total;
+    }
+
+    void trigger_replay(uint64_t start_seq, uint64_t count) noexcept {
+        // Stub for triggering a replay request to the exchange
+        // (e.g. over TCP recovery connection)
+        (void)start_seq;
+        (void)count;
+    }
 
     // Parses a raw ITCH frame using AVX-512 instructions
     inline bool parse_add_order(const uint8_t* raw_buffer, ITCHOrderAdd& out_order) noexcept {
@@ -72,6 +95,10 @@ public:
 
         return true;
     }
+
+private:
+    uint64_t expected_seq_num_;
+    uint64_t itch_sequence_gap_total; // Prometheus metric
 };
 
 } // namespace network

@@ -32,41 +32,6 @@ type RoutingResult struct {
 	IsSimulated         bool    `json:"is_simulated"`
 }
 
-// GenerateQuotes returns synthetic market prices across simulated exchanges (SimulatedSOR mode)
-func GenerateQuotes(symbol string, midPrice float64) []ExchangeQuote {
-	quotes := make([]ExchangeQuote, len(Exchanges))
-
-	// Default spread (1 bps) since we don't have L2 books cached per-exchange in Go yet
-	bps := midPrice / 10000.0
-	if bps < 0.0001 {
-		bps = 0.0001
-	}
-
-	for i, ex := range Exchanges {
-		bid := midPrice - bps/2.0
-		ask := midPrice + bps/2.0
-
-		// Format decimals based on asset pricing
-		if symbol != "EUR/USD" {
-			bid = math.Round(bid*100) / 100
-			ask = math.Round(ask*100) / 100
-		} else {
-			bid = math.Round(bid*10000) / 10000
-			ask = math.Round(ask*10000) / 10000
-		}
-
-		quotes[i] = ExchangeQuote{
-			Exchange:    ex,
-			Bid:         bid,
-			Ask:         ask,
-			BidSize:     1.0,
-			AskSize:     1.0,
-			IsSimulated: true,
-		}
-	}
-	return quotes
-}
-
 // nbbo computes the National Best Bid/Offer across all quoted exchanges.
 // NBBO bid is the highest bid; NBBO offer is the lowest ask.
 func nbbo(quotes []ExchangeQuote) (bid, ask float64) {
@@ -89,105 +54,83 @@ func nbbo(quotes []ExchangeQuote) (bid, ask float64) {
 	return bid, ask
 }
 
-// RouteOrder selects the best price or directly routes an order to a preferred exchange
-func RouteOrder(symbol string, side string, midPrice float64, preferredExchange string) RoutingResult {
-	quotes := GenerateQuotes(symbol, midPrice)
-	nbboBid, nbboAsk := nbbo(quotes)
-	pref := strings.TrimSpace(strings.ToUpper(preferredExchange))
+// RouteOrder selects the best price or directly routes an order to a preferred exchange.
+// It strictly uses live venue quotes from the NBBO cache.
+func RouteOrder(symbol string, side string, midPrice float64, preferredExchange string) (RoutingResult, bool) {
+	if nbboBid, nbboAsk, bestAskVenue, ok := globalNBBO.BestBidAsk(symbol); ok {
+		return routeOnLiveQuotes(symbol, side, nbboBid, nbboAsk, bestAskVenue, preferredExchange), true
+	}
+	// No live quotes available; refuse to route on synthetic data.
+	return RoutingResult{}, false
+}
 
-	// Direct routing to a specific exchange
-	if pref != "" && pref != "AUTO" {
+// routeOnLiveQuotes routes a BUY to the venue posting the national best ask and
+// a SELL to the venue posting the national best bid. Price improvement is
+// measured against the mid of the consolidated NBBO.
+func routeOnLiveQuotes(symbol, side string, nbboBid, nbboAsk float64, bestAskVenue, preferredExchange string) RoutingResult {
+	venue := bestAskVenue
+	if side != "BUY" {
+		// For sells the best venue is the one with the highest bid.
+		quotes := globalNBBO.Venues(symbol)
+		bestBid := math.Inf(-1)
 		for _, q := range quotes {
-			normEx := strings.ReplaceAll(strings.ToUpper(q.Exchange), " ", "")
-			normPref := strings.ReplaceAll(pref, " ", "")
-			if normEx == normPref {
-				var fill float64
-				if side == "BUY" {
-					fill = q.Ask
-				} else {
-					fill = q.Bid
-				}
-
-				// Compute average across all exchanges for comparison
-				var sumPrice float64
-				for _, oq := range quotes {
-					if side == "BUY" {
-						sumPrice += oq.Ask
-					} else {
-						sumPrice += oq.Bid
-					}
-				}
-				avgPrice := sumPrice / float64(len(quotes))
-
-				var improvementBps float64
-				if side == "BUY" {
-					improvementBps = ((nbboAsk - fill) / nbboAsk) * 10000.0
-				} else {
-					improvementBps = ((fill - nbboBid) / nbboBid) * 10000.0
-				}
-				if improvementBps < 0 {
-					improvementBps = 0
-				}
-
-				return RoutingResult{
-					RoutedExchange:      q.Exchange,
-					FillPrice:           fill,
-					ExchangesSearched:   1,
-					PriceImprovementBps: math.Round(improvementBps*100) / 100,
-					AverageMarketPrice:  avgPrice,
-					NbboBid:             nbboBid,
-					NbboAsk:             nbboAsk,
-				}
+			if q.Bid > bestBid {
+				bestBid = q.Bid
+				venue = q.Exchange
 			}
 		}
 	}
 
-	// Smart Order Routing (Best Price Selection)
-	var bestIdx = 0
-	var sumPrice float64
-
-	for i, q := range quotes {
-		if side == "BUY" {
-			sumPrice += q.Ask
-			if q.Ask < quotes[bestIdx].Ask {
-				bestIdx = i
-			}
-		} else {
-			sumPrice += q.Bid
-			if q.Bid > quotes[bestIdx].Bid {
-				bestIdx = i
-			}
-		}
-	}
-
-	avgPrice := sumPrice / float64(len(quotes))
-	bestQuote := quotes[bestIdx]
-
-	var fillPrice float64
+	var fill float64
 	if side == "BUY" {
-		fillPrice = bestQuote.Ask
+		fill = nbboAsk
 	} else {
-		fillPrice = bestQuote.Bid
+		fill = nbboBid
 	}
-
+	mid := (nbboBid + nbboAsk) / 2
 	var improvementBps float64
-	if side == "BUY" {
-		improvementBps = ((nbboAsk - fillPrice) / nbboAsk) * 10000.0
-	} else {
-		improvementBps = ((fillPrice - nbboBid) / nbboBid) * 10000.0
+	if mid > 0 {
+		if side == "BUY" {
+			improvementBps = ((mid - fill) / mid) * 10000.0
+		} else {
+			improvementBps = ((fill - mid) / mid) * 10000.0
+		}
+	}
+	if improvementBps < 0 {
+		improvementBps = 0
 	}
 
-	if improvementBps < 0 {
-		improvementBps = 0 // Safeguard
+	exchanges := globalNBBO.Venues(symbol)
+
+	// Honor a specific preferred exchange: prefer it when it quotes at the NBBO.
+	if strings.TrimSpace(strings.ToUpper(preferredExchange)) != "" &&
+		strings.ToUpper(preferredExchange) != "AUTO" {
+		pref := strings.ReplaceAll(strings.ToUpper(preferredExchange), " ", "")
+		for _, q := range exchanges {
+			if strings.ReplaceAll(strings.ToUpper(q.Exchange), " ", "") == pref {
+				var pfill float64
+				if side == "BUY" {
+					pfill = q.Ask
+				} else {
+					pfill = q.Bid
+				}
+				// Only use the preferred venue if it actually improves the price.
+				if (side == "BUY" && pfill <= nbboAsk) || (side != "BUY" && pfill >= nbboBid) {
+					venue = q.Exchange
+					fill = pfill
+				}
+			}
+		}
 	}
 
 	return RoutingResult{
-		RoutedExchange:      bestQuote.Exchange,
-		FillPrice:           fillPrice,
-		ExchangesSearched:   len(Exchanges),
+		RoutedExchange:      venue,
+		FillPrice:           fill,
+		ExchangesSearched:   len(exchanges),
 		PriceImprovementBps: math.Round(improvementBps*100) / 100,
-		AverageMarketPrice:  avgPrice,
+		AverageMarketPrice:  mid,
 		NbboBid:             nbboBid,
 		NbboAsk:             nbboAsk,
+		IsSimulated:         false,
 	}
 }

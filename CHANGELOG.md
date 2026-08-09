@@ -5,6 +5,19 @@ All notable changes to the Robin Platform will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-08-09
+
+### Added
+
+- **Gateway — Phase 3 (Smart Order Routing, Reconciliation, Circuit Breaker, Bulk Orders)**:
+  - **Real SOR across live venues (3.1)**: added `services/gateway/nbbo.go` live NBBO cache (per-venue best bid/ask with staleness window) fed by the Coinbase, Binance, and Kraken WebSocket streams; `RouteOrder` now routes on live national best bid/offer (`routeOnLiveQuotes`) and only falls back to synthetic quotes while feeds warm up. NBBO aggregation, multi-venue routing, and stale-feed exclusion covered by tests in `sor_test.go`.
+  - **Order state reconciliation (3.5)**: new `services/gateway/reconciliation.go` + `OrderStateMachine.Restore` rehydrate the in-memory order state machine from the durable SQLite `orders` table after restart or divergence; reports matched / rehydrated / orphaned orders via `GET /api/orders/reconcile` (admin).
+  - **Circuit breaker integration (3.6)**: new `services/gateway/circuit_breaker.go` mirrors the risk engine's daily-drawdown breaker — trips from local peak/current equity against `max_drawdown_limit`, polls the risk engine's Prometheus endpoint for `robin_risk_circuit_breaker_trips_total`, and provides manual admin trip/reset. Tripped breaker blocks `/order` and `/api/orders/bulk` entry with `CIRCUIT_BREAKER_TRIPPED`. WebSocket broadcast, `kill_switch_log` persistence, and `robin_gateway_circuit_breaker_active` gauge included.
+  - **Bulk order API (3.7)**: `POST /api/orders/bulk` submits up to 500 orders with up-front validation (atomic rejection of an invalid batch), single-transaction DB persistence, and per-order engine results; covered by tests in `bulk_order_test.go`.
+  - **Per-account P&L (3.6)**: `PositionManager.RecordAccountFill` / `GetAccountPnL` and `GET /api/positions/accounts`.
+  - **Hot-reload atomic rollback (3.3)**: `atomicWriteFile` (temp file + fsync + atomic rename + dir sync) used by `persistConfig`; `HotReloadConfig` rolls back in-memory state on persistence failure.
+  - **Symbol map from DB (3.4)**: `loadSymbolsFromDB` / `persistSymbolToDB` backed by the new `instruments` reference table so symbol→id mappings survive restarts.
+
 ## [1.3.0] - 2026-08-03
 
 ### Added

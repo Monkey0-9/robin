@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -359,20 +360,66 @@ func getInstrumentID(symbol string) uint64 {
 }
 
 // registerSymbol adds or updates a symbol→id mapping at runtime. Returns false
-// if the id is already bound to a different symbol.
+// if the id is already bound to a different symbol. Persists the mapping to the
+// instruments reference table when a database is configured (Phase 3.4) so
+// runtime registrations survive restarts.
 func registerSymbol(symbol string, id uint64) bool {
 	symbolMapMu.Lock()
-	defer symbolMapMu.Unlock()
 	if existing, ok := symbolMap[symbol]; ok && existing == id {
+		symbolMapMu.Unlock()
 		return true
 	}
 	for sym, sid := range symbolMap {
 		if sid == id && sym != symbol {
+			symbolMapMu.Unlock()
 			return false
 		}
 	}
 	symbolMap[symbol] = id
+	symbolMapMu.Unlock()
 	return true
+}
+
+// loadSymbolsFromDB seeds the in-memory symbol map from the instruments
+// reference table at startup, so symbol→id mappings survive restarts and new
+// symbols can be added without recompilation. Returns the count loaded.
+func loadSymbolsFromDB(db *sql.DB) int {
+	if db == nil {
+		return 0
+	}
+	rows, err := db.Query(`SELECT symbol, instrument_id FROM instruments WHERE status = 'ACTIVE'`)
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
+	loaded := 0
+	for rows.Next() {
+		var symbol string
+		var id uint64
+		if err := rows.Scan(&symbol, &id); err != nil {
+			continue
+		}
+		if registerSymbol(symbol, id) {
+			loaded++
+		}
+	}
+	return loaded
+}
+
+// persistSymbolToDB writes a symbol→id mapping to the instruments reference
+// table. Best-effort: a persistence failure is logged but does not make the
+// in-memory registration fail (the mapping still works for the process).
+func persistSymbolToDB(db *sql.DB, symbol string, id uint64) {
+	if db == nil {
+		return
+	}
+	now := time.Now().UnixNano()
+	db.Exec(`
+		INSERT INTO instruments (symbol, instrument_id, status, created_at_ns, updated_at_ns)
+		VALUES ($1, $2, 'ACTIVE', $3, $3)
+		ON CONFLICT(symbol) DO UPDATE SET instrument_id = $2, updated_at_ns = $3`,
+		symbol, id, now,
+	)
 }
 
 type Orchestrator struct {
@@ -397,21 +444,24 @@ type Orchestrator struct {
 	matchClient *MatchingEngineClient
 
 	// Institutional compliance modules (Gap closure Wave 1-6)
-	killSwitch    *KillSwitchManager
-	surveillance  *SurveillanceEngine
-	timeSync      *TimeSyncMonitor
-	bestExecution *BestExecutionMonitor
-	encryption    *EncryptionService
-	hsmClient     HSMClient
-	failover      *FailoverManager
-	// aiRateLimit tracks AI signal rate for feedback-loop prevention
-	aiOrderCount  atomic.Uint64
-	aiLastResetNs atomic.Int64
+	killSwitch     *KillSwitchManager
+	circuitBreaker *CircuitBreakerManager
+	surveillance   *SurveillanceEngine
+	timeSync       *TimeSyncMonitor
+	bestExecution  *BestExecutionMonitor
+	encryption     *EncryptionService
+	hsmClient      HSMClient
+	failover       *FailoverManager
 
 	// Risk analytics data (updated from Rust risk engine)
 	riskData      RiskData
 	peakEquity    atomic.Uint64
 	currentEquity atomic.Uint64
+
+	// FINRA 3110 principal-approval holds awaiting /api/supervisory/* decision.
+	// Immutable after creation + on the request path; guarded for approve/reject.
+	approvalMu      sync.Mutex
+	pendingApproval map[int64]heldApproval
 }
 
 func NewOrchestrator() *Orchestrator {
@@ -435,14 +485,15 @@ func NewOrchestrator() *Orchestrator {
 			MaxCancelRate:    5000,
 			MaxPositionLimit: PositionLimit,
 		},
-		shutdownCh:  make(chan struct{}),
-		logger:      logger,
-		wsHub:       wsHub,
+		shutdownCh: make(chan struct{}),
+		logger:     logger,
+		wsHub:      wsHub,
 		matchClient: NewMatchingEngineClient(
 			engineHost(),
 			enginePort(),
 		),
-		encryption:  enc,
+		encryption: enc,
+		pendingApproval: make(map[int64]heldApproval),
 	}
 	orch.loadConfig()
 	orch.initDB()
@@ -452,6 +503,7 @@ func NewOrchestrator() *Orchestrator {
 
 	// Initialize institutional compliance modules after DB is ready
 	orch.killSwitch = NewKillSwitchManager(orch.db, logger, wsHub)
+	orch.circuitBreaker = InitCircuitBreaker(orch.db, logger, wsHub)
 	orch.surveillance = NewSurveillanceEngine(orch.db, logger)
 	orch.bestExecution = NewBestExecutionMonitor(orch.db, logger)
 	orch.hsmClient = NewCloudHSMClient(enc)
@@ -563,6 +615,12 @@ func (o *Orchestrator) initDB() {
 	}
 
 	o.logger.Info("SQLite database initialized successfully (WAL mode, FULL sync)")
+
+	// Phase 3.4: seed the in-memory symbol map from the instruments reference
+	// table so symbol→id mappings survive restarts without recompilation.
+	if n := loadSymbolsFromDB(o.db); n > 0 {
+		o.logger.Info("loaded symbols from instruments reference table", "count", n)
+	}
 }
 
 func (o *Orchestrator) RegisterService(name string, addr string) {
@@ -624,6 +682,15 @@ func (o *Orchestrator) StartHealthProbes(ctx context.Context, interval time.Dura
 					peak := float64(peakEquity)
 					current := float64(currentEquity)
 					drawdown = (peak - current) / peak * 100
+				}
+
+				// Gateway-side circuit breaker: trip when daily drawdown crosses
+				// the configured limit (Phase 3.6). Evaluated every second.
+				if o.circuitBreaker != nil {
+					o.circuitBreaker.CheckDrawdown(
+						float64(peakEquity), float64(currentEquity),
+						o.GetConfig().MaxDrawdownLimit,
+					)
 				}
 
 				o.wsHub.BroadcastJSON(map[string]interface{}{
@@ -780,7 +847,43 @@ func (o *Orchestrator) persistConfig() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile("config_state.json", data, 0600)
+	return atomicWriteFile("config_state.json", data, 0600)
+}
+
+// atomicWriteFile writes data to path atomically: the payload is written to a
+// temp file in the same directory, synced to disk, then renamed over the target.
+// A crash mid-write leaves either the old or the new file — never a truncated
+// one — which protects the persisted runtime config (and any future state files).
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	_, werr := tmp.Write(data)
+	if werr == nil {
+		werr = tmp.Sync()
+	}
+	if cerr := tmp.Close(); cerr != nil && werr == nil {
+		werr = cerr
+	}
+	if err := os.Chmod(tmpName, perm); err != nil && werr == nil {
+		werr = err
+	}
+	if werr != nil {
+		os.Remove(tmpName)
+		return werr
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if d, derr := os.Open(dir); derr == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }
 
 func (o *Orchestrator) GetConfig() HotReloadConfig {
@@ -803,6 +906,26 @@ func (o *Orchestrator) RecordOrder()            { o.orderCount.Add(1) }
 func (o *Orchestrator) RecordReject()           { o.rejectCount.Add(1) }
 func (o *Orchestrator) RecordTrade()            { o.tradeCount.Add(1) }
 func (o *Orchestrator) RecordLatency(ns uint64) { o.latencySum.Add(ns) }
+
+// submitSurveillanceEvent feeds a single trade event to the post-trade
+// surveillance engine (Phase 4). It is a no-op when the engine is not
+// initialized, and Submit is non-blocking so surveillance never slows the
+// critical order path.
+func (o *Orchestrator) submitSurveillanceEvent(eventType string, orderID int64, symbol, side string, price, qty float64) {
+	if o.surveillance == nil {
+		return
+	}
+	o.surveillance.Submit(TradeEvent{
+		EventType:   eventType,
+		OrderID:     orderID,
+		ClientID:    1,
+		Symbol:      symbol,
+		Side:        side,
+		Price:       price,
+		Qty:         qty,
+		TimestampNs: time.Now().UnixNano(),
+	})
+}
 
 func (o *Orchestrator) RecordOrderHistogram(symbol, side, status string, latencyNs float64) {
 	OrderLatency.WithLabelValues(symbol, side, status).Observe(latencyNs)
@@ -854,6 +977,16 @@ func newTokenBucket(ratePerSec float64) *tokenBucket {
 		refillRate: ratePerSec / 1e9,
 		lastRefill: time.Now(),
 	}
+}
+
+// cancelRateLimit wraps a cancel handler with the configured MaxCancelRate.
+// A configured rate of 0 means unlimited (rate limits are disabled).
+func (o *Orchestrator) cancelRateLimit(next http.Handler) http.Handler {
+	rate := float64(o.GetConfig().MaxCancelRate)
+	if rate <= 0 {
+		return next
+	}
+	return rateLimitMiddleware(rate, next)
 }
 
 func (tb *tokenBucket) Allow() bool {
@@ -1056,6 +1189,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			http.Error(w, `{"error":"id already bound to a different symbol"}`, http.StatusConflict)
 			return
 		}
+		persistSymbolToDB(o.db, body.Symbol, body.ID)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status": "registered",
@@ -1086,8 +1220,9 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		globalOrderSM = NewOrderStateMachine(o.wsHub)
 	}
 
-	// DELETE /order/:id — cancel a working order
-	r.Handle("/order/{cl_ord_id}", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	// DELETE /order/:id — cancel a working order.
+	// Rate-limited by the configured MaxCancelRate (0 = unlimited).
+	r.Handle("/order/{cl_ord_id}", o.cancelRateLimit(jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		vars := mux.Vars(req)
 		clOrdID := vars["cl_ord_id"]
 		if clOrdID == "" {
@@ -1119,6 +1254,10 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			o.db.Exec("UPDATE orders SET status = 'CANCELED', updated_at_ns = $1 WHERE cl_order_id = $2",
 				time.Now().UnixNano(), clOrdID)
 		}
+		// Feed the post-trade surveillance engine the CANCEL event so spoofing
+		// detection sees cancelled interest (Phase 4).
+		o.submitSurveillanceEvent("CANCEL", int64(order.OrderID), order.Symbol, order.Side,
+			order.Price, order.Qty)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":     "CANCELED",
@@ -1126,10 +1265,11 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"message":    "Cancel confirmed by matching engine",
 			"engine_ack": ack,
 		})
-	})))).Methods("DELETE", "OPTIONS")
+	}))))).Methods("DELETE", "OPTIONS")
 
-	// POST /api/order/cancel — cancel order via REST POST
-	r.Handle("/api/order/cancel", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	// POST /api/order/cancel — cancel order via REST POST.
+	// Rate-limited by the configured MaxCancelRate (0 = unlimited).
+	r.Handle("/api/order/cancel", o.cancelRateLimit(jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		var reqBody struct {
 			ClOrdID string `json:"cl_ord_id"`
 		}
@@ -1162,6 +1302,10 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			o.db.Exec("UPDATE orders SET status = 'CANCELED', updated_at_ns = $1 WHERE cl_order_id = $2",
 				time.Now().UnixNano(), reqBody.ClOrdID)
 		}
+		// Feed the post-trade surveillance engine the CANCEL event so spoofing
+		// detection sees cancelled interest (Phase 4).
+		o.submitSurveillanceEvent("CANCEL", int64(order.OrderID), order.Symbol, order.Side,
+			order.Price, order.Qty)
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":     "CANCELED",
@@ -1169,9 +1313,11 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"message":    "Cancel confirmed by matching engine",
 			"engine_ack": ack,
 		})
-	})))).Methods("POST", "OPTIONS")
+	}))))).Methods("POST", "OPTIONS")
 
-	// POST /api/order/modify — modify order price/quantity via REST POST
+	// POST /api/order/modify — modify order price/quantity via REST POST.
+	// Phase 3: a REPLACE is forwarded to the matching engine and only confirmed
+	// once the engine acknowledges, mirroring the cancel path.
 	r.Handle("/api/order/modify", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		var reqBody struct {
 			ClOrdID string  `json:"cl_ord_id"`
@@ -1182,12 +1328,52 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			http.Error(w, `{"error":"cl_ord_id required"}`, http.StatusBadRequest)
 			return
 		}
+		if reqBody.Price <= 0 || reqBody.Qty <= 0 {
+			http.Error(w, `{"error":"price and qty must be positive"}`, http.StatusBadRequest)
+			return
+		}
+		order, ok := globalOrderSM.GetOrder(reqBody.ClOrdID)
+		if !ok {
+			http.Error(w, `{"error":"order not found"}`, http.StatusNotFound)
+			return
+		}
+		// Only live orders may be replaced.
+		switch order.State {
+		case OrderStateNew, OrderStatePending, OrderStateWorking, OrderStatePartialFill:
+		default:
+			http.Error(w, fmt.Sprintf(`{"error":"order not modifiable in state %s"}`, order.State), http.StatusConflict)
+			return
+		}
+
 		w.Header().Set("Content-Type", "application/json")
+		// Propagate the REPLACE to the matching engine first.
+		ack, modifyErr := o.propagateModify(order, reqBody.Price, reqBody.Qty)
+		if modifyErr != nil {
+			o.logger.Error("modify not acknowledged by engine", "cl_ord_id", reqBody.ClOrdID, "error", modifyErr)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"status":    string(order.State),
+				"cl_ord_id": reqBody.ClOrdID,
+				"error":     modifyErr.Error(),
+				"message":   "modify rejected; matching engine did not acknowledge",
+			})
+			return
+		}
+		// Only mutate local state after the engine accepted the replace.
+		if _, upErr := globalOrderSM.ApplyReplace(reqBody.ClOrdID, reqBody.Price, reqBody.Qty); upErr == nil {
+			if o.db != nil {
+				o.db.Exec("UPDATE orders SET price = $1, qty = $2, updated_at_ns = $3 WHERE cl_order_id = $4",
+					int64(reqBody.Price*100000000), int64(reqBody.Qty*100000000), time.Now().UnixNano(), reqBody.ClOrdID)
+			}
+			o.logger.Info("order replaced", "cl_ord_id", reqBody.ClOrdID,
+				"new_price", reqBody.Price, "new_qty", reqBody.Qty)
+		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":    "MODIFIED",
-			"cl_ord_id": reqBody.ClOrdID,
-			"new_price": reqBody.Price,
-			"new_qty":   reqBody.Qty,
+			"status":     "MODIFIED",
+			"cl_ord_id":  reqBody.ClOrdID,
+			"new_price":  reqBody.Price,
+			"new_qty":    reqBody.Qty,
+			"engine_ack": ack,
 		})
 	})))).Methods("POST", "OPTIONS")
 
@@ -1197,6 +1383,11 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(orders)
 	}))).Methods("GET", "OPTIONS")
+
+	// POST /api/orders/reconcile — operator-triggered order state reconciliation
+	// (Phase 3.5): rehydrates the in-memory state machine from the durable orders
+	// table and reports what was repaired. Admin only.
+	r.Handle("/api/orders/reconcile", jwtAuthMiddleware(rbacMiddleware("admin")(handleOrderReconcile(o.db, globalOrderSM, o.logger)))).Methods("GET", "POST", "OPTIONS")
 
 	// POST /order — submit a new order (JWT Trader required)
 	// Forwards to the matching engine TCP server, or falls back to simulated fill.
@@ -1218,6 +1409,50 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 
 		start := time.Now()
 		o.RecordOrder()
+
+		// Circuit breaker gate (Phase 3.6): block order entry while the gateway
+		// or risk-engine circuit breaker is tripped (daily drawdown limit).
+		if o.circuitBreaker != nil && o.circuitBreaker.IsTripped() {
+			o.RecordReject()
+			status := o.circuitBreaker.GetStatus()
+			o.logger.Warn("order blocked by circuit breaker",
+				"symbol", orderReq.Symbol, "reason", status["reason"])
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status":  "REJECTED",
+				"reason":  "CIRCUIT_BREAKER_TRIPPED",
+				"message": fmt.Sprintf("circuit breaker tripped: %v", status["reason"]),
+			})
+			return
+		}
+
+		// Institutional pre-trade position limit gate (Phase 3.2): block the
+		// order before it reaches the engine or the state machine when the
+		// symbol's net position (long + short) after this order would exceed
+		// the configured MaxPositionLimit.
+		if globalPositionManager != nil {
+			maxPos := o.GetConfig().MaxPositionLimit
+			if err := globalPositionManager.checkPositionLimit(
+				orderReq.Symbol,
+				orderReq.Side,
+				float64(orderReq.Qty)/100000000.0,
+				float64(maxPos),
+			); err != nil {
+				o.RecordReject()
+				o.logger.Warn("order blocked by position limit",
+					"symbol", orderReq.Symbol, "side", orderReq.Side,
+					"qty", orderReq.Qty, "limit", maxPos)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				json.NewEncoder(w).Encode(map[string]string{
+					"status":  "REJECTED",
+					"reason":  "POSITION_LIMIT",
+					"message": err.Error(),
+				})
+				return
+			}
+		}
 
 		orderID := uint64(time.Now().UnixNano())
 		execID := fmt.Sprintf("EXEC-%d", orderID)
@@ -1246,8 +1481,13 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		if prefExchange == "" {
 			prefExchange = "AUTO"
 		}
-		routing := RouteOrder(orderReq.Symbol, orderReq.Side, float64(orderReq.Price)/100000000.0, prefExchange)
+		routing, ok := RouteOrder(orderReq.Symbol, orderReq.Side, float64(orderReq.Price)/100000000.0, prefExchange)
+		if !ok {
+			http.Error(w, `{"error":"No live quotes available for routing"}`, http.StatusServiceUnavailable)
+			return
+		}
 
+		// Removed invalid ExecutionRoute assignment
 		fillPrice := routing.FillPrice
 		fillQty := 0.0
 		reportedFillPrice := 0.0
@@ -1273,13 +1513,19 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 				Price:          float64(orderReq.Price) / 100000000.0,
 				RoutedExchange: routedExchange,
 			}
-			if regErr := globalOrderSM.Register(managed); regErr == nil {
+if regErr := globalOrderSM.Register(managed); regErr == nil {
 				globalOrderSM.Transition(orderReq.ClientOrdID, OrderStatePending, "submitted_to_gateway")
 				globalOrderSM.Transition(orderReq.ClientOrdID, OrderStateWorking, "acked_by_gateway")
 			}
 		}
 
+		// Feed the post-trade surveillance engine the NEW event so layering /
+		// momentum-ignition detectors see every incoming order (Phase 4).
+		o.submitSurveillanceEvent("NEW", int64(orderID), orderReq.Symbol, orderReq.Side,
+			float64(orderReq.Price)/100000000.0, float64(orderReq.Qty)/100000000.0)
+
 		// Synchronous database persistence (Institutional fix: no fire-and-forget)
+		var orderDBID int64
 		if o.db != nil {
 			sideInt := 0
 			if orderReq.Side == "SELL" {
@@ -1315,6 +1561,57 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 				tx.Rollback()
 				o.logger.Error("failed to commit order transaction", "error", err)
 				http.Error(w, `{"error":"DATABASE_ERROR"}`, http.StatusInternalServerError)
+				return
+			}
+		}
+
+		// Supervisory approval gate (FINRA 3110, Phase 4): when the order's
+		// notional exceeds the configured threshold, the order is held for
+		// principal approval instead of being routed to the engine. Fail-closed:
+		// if the decision cannot be persisted the order is rejected outright.
+		if o.db != nil {
+			notional := fillPrice * (float64(orderReq.Qty) / 100000000.0)
+			needsApproval, approvalID, holdErr := checkSupervisoryApproval(o.db, int64(orderID), orderReq.Symbol, notional, supervisoryThresholdUSD())
+			if holdErr != nil {
+				o.logger.Error("supervisory approval check failed (fail-closed)",
+					"cl_ord_id", orderReq.ClientOrdID, "error", holdErr)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]string{
+					"status": "REJECTED",
+					"reason": "SUPERVISORY_CHECK_FAILED",
+				})
+				return
+			}
+			if needsApproval {
+				o.approvalMu.Lock()
+				o.pendingApproval[approvalID] = heldApproval{
+					approvalID: approvalID,
+					clOrdID:    orderReq.ClientOrdID,
+					orderID:    int64(orderID),
+					symbol:     orderReq.Symbol,
+					side:       side,
+					orderType:  orderType,
+					price:      int64(fillPrice * 100000000),
+					qty:        orderReq.Qty,
+				}
+				o.approvalMu.Unlock()
+				if _, err := o.db.Exec("UPDATE orders SET status = 'PENDING_APPROVAL', updated_at_ns = $1 WHERE cl_order_id = $2",
+					time.Now().UnixNano(), orderReq.ClientOrdID); err != nil {
+					o.logger.Warn("failed to mark order PENDING_APPROVAL", "cl_ord_id", orderReq.ClientOrdID, "error", err)
+				}
+				o.logger.Warn("order held for principal approval (FINRA 3110)",
+					"cl_ord_id", orderReq.ClientOrdID, "approval_id", approvalID, "notional", notional)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusAccepted)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"status":      "SUPERVISORY_APPROVAL_REQUIRED",
+					"cl_ord_id":   orderReq.ClientOrdID,
+					"reason":      "FINRA 3110 principal approval required before routing",
+					"approval_id": approvalID,
+					"notional":    notional,
+					"threshold":   supervisoryThresholdUSD(),
+				})
 				return
 			}
 		}
@@ -1396,7 +1693,28 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 								execID, orderReq.Symbol, orderReq.Side,
 								float64(meResp.FillQty)/100000000.0, float64(meResp.FillPrice)/100000000.0,
 							)
+							globalPositionManager.RecordAccountFill(
+								1, orderReq.Symbol, orderReq.Side,
+								float64(meResp.FillQty)/100000000.0, float64(meResp.FillPrice)/100000000.0,
+							)
 						}
+						// Regulatory reporting (Phase 4.2): record the CAT order
+						// lifecycle event and the MiFID II RTS 22 transaction so
+						// the export endpoints produce evidence for submission.
+						if o.db != nil {
+							if orderDBID > 0 {
+								if err := recordCATEvent(o.db, orderDBID, CATEventFill, routedExchange); err != nil {
+									o.logger.Error("failed to record CAT event", "error", err)
+								}
+								if err := recordMiFIDReport(o.db, orderDBID, "ALGO-1", "AI", routedExchange); err != nil {
+									o.logger.Error("failed to record MiFID report", "error", err)
+								}
+							}
+						}
+						// Feed the post-trade surveillance engine the FILL event so
+						// wash-trade detection sees completed executions (Phase 4).
+						o.submitSurveillanceEvent("FILL", int64(orderID), orderReq.Symbol, orderReq.Side,
+							float64(meResp.FillPrice)/100000000.0, float64(meResp.FillQty)/100000000.0)
 					}
 				} else {
 					engineError = "invalid matching engine response"
@@ -1452,6 +1770,231 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			respPayload["alpaca_status"] = alpacaStatus
 		}
 		json.NewEncoder(w).Encode(respPayload)
+	}))))).Methods("POST", "OPTIONS")
+
+	// POST /api/orders/bulk — submit a batch of orders in a single request
+	// (Phase 3.7). Every order is validated up-front; any invalid order rejects
+	// the whole batch (atomic rejection). Valid orders are then persisted to
+	// the database in one transaction and forwarded to the matching engine
+	// sequentially. Each result carries its own cl_ord_id / status so the
+	// caller can reconcile partial successes.
+	r.Handle("/api/orders/bulk", rateLimitMiddleware(float64(o.GetConfig().MaxOrderRate), jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var batch []OrderRequest
+		if err := json.NewDecoder(req.Body).Decode(&batch); err != nil {
+			http.Error(w, `{"error":"invalid bulk order JSON (expected array)"}`, http.StatusBadRequest)
+			return
+		}
+		if len(batch) == 0 {
+			http.Error(w, `{"error":"empty order batch"}`, http.StatusBadRequest)
+			return
+		}
+		if len(batch) > 500 {
+			http.Error(w, `{"error":"batch too large (max 500)"}`, http.StatusBadRequest)
+			return
+		}
+
+		// Circuit breaker gate (Phase 3.6): block the entire batch while the
+		// gateway or risk-engine circuit breaker is tripped.
+		if o.circuitBreaker != nil && o.circuitBreaker.IsTripped() {
+			status := o.circuitBreaker.GetStatus()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status":  "REJECTED",
+				"reason":  "CIRCUIT_BREAKER_TRIPPED",
+				"message": fmt.Sprintf("circuit breaker tripped: %v", status["reason"]),
+			})
+			return
+		}
+
+		// Phase 1: validate everything before touching the engine or DB.
+		type staged struct {
+			order OrderRequest
+			id    uint64
+			inst  uint64
+			side  string
+			otype string
+		}
+		stagedOrders := make([]staged, 0, len(batch))
+		for i := range batch {
+			or := batch[i]
+			if or.Symbol == "" || or.Qty <= 0 || or.Price < 0 {
+				http.Error(w, fmt.Sprintf(`{"error":"order %d invalid: symbol, qty, price required"}`, i), http.StatusBadRequest)
+				return
+			}
+			if or.Side != "BUY" && or.Side != "SELL" {
+				http.Error(w, fmt.Sprintf(`{"error":"order %d invalid: side must be BUY or SELL"}`, i), http.StatusBadRequest)
+				return
+			}
+			instID := getInstrumentID(or.Symbol)
+			if instID == 0 {
+				http.Error(w, fmt.Sprintf(`{"error":"order %d invalid: unknown symbol %s"}`, i, or.Symbol), http.StatusBadRequest)
+				return
+			}
+			side := "BID"
+			if or.Side == "SELL" {
+				side = "ASK"
+			}
+			otype := "LIMIT"
+			if or.OrderType == "MARKET" {
+				otype = "MARKET"
+			}
+			if globalPositionManager != nil {
+				maxPos := o.GetConfig().MaxPositionLimit
+				if err := globalPositionManager.checkPositionLimit(or.Symbol, or.Side, float64(or.Qty)/100000000.0, float64(maxPos)); err != nil {
+					http.Error(w, fmt.Sprintf(`{"error":"order %d rejected: POSITION_LIMIT"}`, i), http.StatusConflict)
+					return
+				}
+			}
+			orderID := uint64(time.Now().UnixNano()) + uint64(i)
+			if or.ClientOrdID == "" {
+				or.ClientOrdID = fmt.Sprintf("ORD-%d", orderID)
+			}
+			stagedOrders = append(stagedOrders, staged{order: or, id: orderID, inst: instID, side: side, otype: otype})
+		}
+
+		// Phase 2: persist all orders in one transaction (atomic visibility).
+		if o.db != nil {
+			tx, err := o.db.Begin()
+			if err != nil {
+				http.Error(w, `{"error":"DATABASE_ERROR"}`, http.StatusInternalServerError)
+				return
+			}
+			now := time.Now().UnixNano()
+			commit := true
+			for _, s := range stagedOrders {
+				sideInt := 0
+				if s.order.Side == "SELL" {
+					sideInt = 1
+				}
+				if _, err := tx.Exec(`
+					INSERT INTO orders (cl_order_id, instrument_id, price, qty, side, status, account_id, client_id, strategy_id, created_at_ns, updated_at_ns)
+					VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+					s.order.ClientOrdID, s.inst, s.order.Price, s.order.Qty, sideInt, "WORKING", 1, 1, 1, now, now,
+				); err != nil {
+					tx.Rollback()
+					http.Error(w, `{"error":"DATABASE_ERROR"}`, http.StatusInternalServerError)
+					return
+				}
+			}
+			if err := tx.Commit(); err != nil {
+				tx.Rollback()
+				http.Error(w, `{"error":"DATABASE_ERROR"}`, http.StatusInternalServerError)
+				return
+			}
+			_ = commit
+		}
+
+		// Phase 3: submit each to the engine and collect results.
+		results := make([]map[string]interface{}, 0, len(stagedOrders))
+		accepted := 0
+		for _, s := range stagedOrders {
+			or := s.order
+			routing, ok := RouteOrder(or.Symbol, or.Side, float64(or.Price)/100000000.0, "AUTO")
+			if !ok {
+				http.Error(w, `{"error":"No live quotes available for routing in bulk order"}`, http.StatusServiceUnavailable)
+				return
+			}
+			status := "WORKING"
+			var errMsg string
+			// Feed the post-trade surveillance engine the NEW event (Phase 4).
+			o.submitSurveillanceEvent("NEW", int64(s.id), or.Symbol, or.Side,
+				float64(or.Price)/100000000.0, float64(or.Qty)/100000000.0)
+			if globalOrderSM != nil {
+				managed := &ManagedOrder{
+					ClOrdID:        or.ClientOrdID,
+					OrderID:        s.id,
+					Symbol:         or.Symbol,
+					Side:           or.Side,
+					OrderType:      s.otype,
+					Qty:            float64(or.Qty) / 100000000.0,
+					Price:          float64(or.Price) / 100000000.0,
+					RoutedExchange: routing.RoutedExchange,
+				}
+				if regErr := globalOrderSM.Register(managed); regErr == nil {
+					globalOrderSM.Transition(or.ClientOrdID, OrderStatePending, "submitted_to_gateway")
+				}
+			}
+
+			// Supervisory approval gate (FINRA 3110, Phase 4): bulk orders whose
+			// notional exceeds the threshold are held rather than routed.
+			held := false
+			if o.db != nil {
+				notional := routing.FillPrice * (float64(or.Qty) / 100000000.0)
+				needsApproval, holdID, holdErr := checkSupervisoryApproval(o.db, int64(s.id), or.Symbol, notional, supervisoryThresholdUSD())
+				if holdErr != nil {
+					status = "REJECTED"
+					errMsg = "SUPERVISORY_CHECK_FAILED"
+					o.RecordReject()
+				} else if needsApproval {
+					o.approvalMu.Lock()
+					o.pendingApproval[holdID] = heldApproval{
+						approvalID: holdID,
+						clOrdID:    or.ClientOrdID,
+						orderID:    int64(s.id),
+						symbol:     or.Symbol,
+						side:       s.side,
+						orderType:  s.otype,
+						price:      or.Price,
+						qty:        or.Qty,
+					}
+					o.approvalMu.Unlock()
+					status = "PENDING_APPROVAL"
+					errMsg = "FINRA 3110 principal approval required before routing"
+					held = true
+				}
+			}
+			o.RecordOrder()
+			if !held && o.matchClient != nil && o.matchClient.IsEnabled() {
+				matchJSON := fmt.Sprintf(
+					`{"cl_ord_id":"%s","id":%d,"instrument_id":%d,"price":%d,"qty":%d,"side":"%s","type":"%s"}`,
+					or.ClientOrdID, s.id, s.inst, or.Price, or.Qty, s.side, s.otype,
+				)
+				resp, err := o.matchClient.SendOrderJSON(matchJSON)
+				if err != nil {
+					errMsg = err.Error()
+					o.RecordReject()
+				} else {
+					var meResp MatchingEngineResponse
+					if json.Unmarshal([]byte(resp), &meResp) == nil && meResp.Success {
+						status = meResp.Status
+						if status == "" {
+							status = "FILLED"
+						}
+						accepted++
+					} else {
+						o.RecordReject()
+					}
+				}
+			} else {
+				errMsg = "MATCHING_ENGINE_UNAVAILABLE"
+				o.RecordReject()
+			}
+			if o.db != nil {
+				o.db.Exec(`UPDATE orders SET status = $1, updated_at_ns = $2 WHERE cl_order_id = $3`, status, time.Now().UnixNano(), or.ClientOrdID)
+			}
+			results = append(results, map[string]interface{}{
+				"cl_ord_id":    or.ClientOrdID,
+				"symbol":       or.Symbol,
+				"side":         or.Side,
+				"qty":          float64(or.Qty) / 100000000.0,
+				"status":       status,
+				"error":        errMsg,
+				"routed_to":    routing.RoutedExchange,
+				"fill_price":   routing.FillPrice,
+				"exec_id":      fmt.Sprintf("EXEC-%d", s.id),
+				"submitted_ok": errMsg == "",
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"batch_size":   len(stagedOrders),
+			"accepted":     accepted,
+			"rejected":     len(stagedOrders) - accepted,
+			"results":      results,
+			"submitted_at": time.Now().UnixNano(),
+		})
 	}))))).Methods("POST", "OPTIONS")
 
 	// Internal endpoint for Risk Engine to push state transitions.
@@ -1524,6 +2067,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 
 	// ── Position & Portfolio endpoints ─────────────────────────────────────
 	r.Handle("/api/positions", jwtAuthMiddleware(http.HandlerFunc(handleGetPositions))).Methods("GET", "OPTIONS")
+	r.Handle("/api/positions/accounts", jwtAuthMiddleware(http.HandlerFunc(handleGetAccountPnL))).Methods("GET", "OPTIONS")
 	r.Handle("/api/positions/{symbol}", jwtAuthMiddleware(http.HandlerFunc(handleGetPosition))).Methods("GET", "OPTIONS")
 	r.Handle("/api/portfolio", jwtAuthMiddleware(http.HandlerFunc(handleGetPortfolioSummary))).Methods("GET", "OPTIONS")
 
@@ -1698,16 +2242,18 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			return
 		}
 
-		quotes := GenerateQuotes(symbol, basePrice)
-		displayExchanges := []string{"NYSE", "NASDAQ", "LSE", "Xetra", "Tradegate"}
+		quotes := globalNBBO.Venues(symbol)
+
 		var result []ExchangeQuote
-		for _, name := range displayExchanges {
-			for _, q := range quotes {
-				if q.Exchange == name {
-					result = append(result, q)
-					break
-				}
-			}
+		for _, q := range quotes {
+			result = append(result, ExchangeQuote{
+				Exchange:    q.Exchange,
+				Bid:         q.Bid,
+				Ask:         q.Ask,
+				BidSize:     1.0,
+				AskSize:     1.0,
+				IsSimulated: false,
+			})
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -1932,6 +2478,12 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	r.Handle("/api/killswitch/trader/{id}/reset", adminOnly(killSwitchResetTraderHandler(o.killSwitch))).Methods("POST", "OPTIONS")
 	r.Handle("/api/killswitch/log", adminOnly(killSwitchLogHandler(o.db))).Methods("GET", "OPTIONS")
 
+	// Circuit breaker endpoints (Phase 3.6): status for ops, manual trip/reset
+	// for admins. The breaker also auto-trips from drawdown / risk-engine state.
+	r.Handle("/api/circuitbreaker/status", adminOnly(circuitBreakerStatusHandler(o.circuitBreaker))).Methods("GET", "OPTIONS")
+	r.Handle("/api/circuitbreaker/trip", adminOnly(circuitBreakerTripHandler(o.circuitBreaker))).Methods("POST", "OPTIONS")
+	r.Handle("/api/circuitbreaker/reset", adminOnly(circuitBreakerResetHandler(o.circuitBreaker))).Methods("POST", "OPTIONS")
+
 	// --- CEO Certification (SEC 15c3-5 §(e)(2)) ---
 	r.Handle("/api/compliance/certify", adminOnly(handleCEOCertify(o.db, o.logger))).Methods("POST", "OPTIONS")
 	r.Handle("/api/compliance/certification/status", adminOnly(handleCertificationStatus(o.db))).Methods("GET", "OPTIONS")
@@ -1941,8 +2493,8 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 
 	// --- Supervisory Workflow (FINRA Rule 3110) ---
 	r.Handle("/api/supervisory/pending", adminOnly(handleSupervisoryPending(o.db))).Methods("GET", "OPTIONS")
-	r.Handle("/api/supervisory/approve/{id}", adminOnly(handleSupervisoryApprove(o.db, o.logger))).Methods("POST", "OPTIONS")
-	r.Handle("/api/supervisory/reject/{id}", adminOnly(handleSupervisoryReject(o.db, o.logger))).Methods("POST", "OPTIONS")
+	r.Handle("/api/supervisory/approve/{id}", adminOnly(http.HandlerFunc(o.handleSupervisoryApprove))).Methods("POST", "OPTIONS")
+	r.Handle("/api/supervisory/reject/{id}", adminOnly(http.HandlerFunc(o.handleSupervisoryReject))).Methods("POST", "OPTIONS")
 	r.Handle("/api/supervisory/history", adminOnly(handleSupervisoryHistory(o.db))).Methods("GET", "OPTIONS")
 
 	// --- CAT / MiFID II Transaction Reporting ---
@@ -2078,6 +2630,12 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 
 	// Apply middleware chain: requestID → rateLimit → router
 
+	// Mount the KDB bridge routes (Phase 7 wiring). RegisterKDBRoutes takes a
+	// stdlib ServeMux; route any /kdb/* requests through it.
+	kdbMux := http.NewServeMux()
+	RegisterKDBRoutes(kdbMux)
+	r.PathPrefix("/kdb").Handler(kdbMux)
+
 	handler := requestIDMiddleware(rateLimitMiddleware(1000, r))
 
 	// Apply CORS — allow localhost:3000 in dev, restrict to explicit origin in production
@@ -2152,6 +2710,37 @@ func (o *Orchestrator) propagateCancel(order *ManagedOrder) (string, error) {
 	}
 	if !meResp.Success && meResp.Status != "CANCELED" {
 		return resp, fmt.Errorf("engine rejected cancel: %s", meResp.Error)
+	}
+	return resp, nil
+}
+
+// propagateModify forwards a price/qty replacement to the C++ matching engine
+// and waits for its acknowledgment. Modifications must not be confirmed unless
+// the engine accepts them, so partial pricing corrections cannot silently
+// diverge from the exchange state.
+func (o *Orchestrator) propagateModify(order *ManagedOrder, newPrice, newQty float64) (string, error) {
+	if o.matchClient == nil || !o.matchClient.IsEnabled() {
+		return "", fmt.Errorf("matching engine unavailable")
+	}
+	instID := getInstrumentID(order.Symbol)
+	sideStr := "BID"
+	if order.Side == "SELL" || order.Side == "ASK" {
+		sideStr = "ASK"
+	}
+	matchJSON := fmt.Sprintf(
+		`{"cl_ord_id":"%s","id":%d,"instrument_id":%d,"price":%d,"qty":%d,"side":"%s","type":"REPLACE"}`,
+		order.ClOrdID, order.OrderID, instID, int64(newPrice*100000000), int64(newQty*100000000), sideStr,
+	)
+	resp, err := o.matchClient.SendOrderJSON(matchJSON)
+	if err != nil {
+		return "", err
+	}
+	var meResp MatchingEngineResponse
+	if err := json.Unmarshal([]byte(resp), &meResp); err != nil {
+		return "", fmt.Errorf("malformed engine response: %w", err)
+	}
+	if !meResp.Success {
+		return resp, fmt.Errorf("engine rejected modify: %s", meResp.Error)
 	}
 	return resp, nil
 }

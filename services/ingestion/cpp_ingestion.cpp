@@ -49,6 +49,15 @@ struct ITCHMessageHeader {
     uint64_t timestamp_ns;
 };
 
+// Standard NASDAQ ITCH stream: every message carries a monotonically
+// increasing 4-byte sequence number assigned by the feed. Tracking it lets us
+// detect gaps (lost UDP datagrams) and report them to Prometheus. The on-wire
+// field lives right after the message header in real ITCH frames; we keep a
+// copy here so the parser can check continuity without re-scanning.
+struct ITCHSeqHeader {
+    uint32_t msg_sequence;
+};
+
 struct ITCHAddOrder {
     ITCHMessageHeader hdr;
     uint64_t order_ref;
@@ -114,7 +123,12 @@ struct alignas(CACHE_LINE_SIZE) IngestionStats {
     uint64_t total_latency_ns;
     uint64_t max_latency_ns;
     uint64_t min_latency_ns;
-    char pad_[40];
+    // Market Data Gap Detection (Phase 1.4): per-stream sequence tracking.
+    uint64_t last_seq;
+uint64_t gaps_detected;
+    uint64_t max_gap_duration_ns;
+    uint64_t last_msg_timestamp_ns;
+    char pad_[24];
 };
 
 static_assert(sizeof(IngestionStats) == 128, "IngestionStats must be 128 bytes");
@@ -299,6 +313,40 @@ private:
         const uint64_t now = rdtscp_p();
         const uint64_t latency = now - hdr->timestamp_ns;
 
+        // --- Market Data Gap Detection (Phase 1.4) --------------------------
+        // The ITCH feed assigns contiguous sequence numbers. If the incoming
+        // sequence is not (last + 1), UDP packets were lost in transit. We
+        // count the gap and accumulate the missing span for Prometheus so a
+        // degraded feed path is visible before downstream models go stale.
+        {
+            uint64_t in_seq = 0;
+            if (len >= sizeof(ITCHMessageHeader) + sizeof(ITCHSeqHeader)) {
+                const ITCHSeqHeader* seq =
+                    reinterpret_cast<const ITCHSeqHeader*>(
+                        data + sizeof(ITCHMessageHeader));
+                in_seq = seq->msg_sequence;
+                if (in_seq == 0) {
+                    // Sequence field absent/zero: treat as untrackable stream.
+                    stats_.gaps_detected++; // avoid silent wall; flagged
+                } else if (stats_.last_msg_timestamp_ns == 0) {
+                    stats_.last_seq = in_seq; // first message seeds the counter
+                } else {
+                    uint64_t expected = stats_.last_seq + 1;
+                    if (in_seq > expected) {
+                        stats_.gaps_detected += in_seq - expected;
+                        if (hdr->timestamp_ns > stats_.last_msg_timestamp_ns) {
+                            stats_.max_gap_duration_ns =
+                                hdr->timestamp_ns - stats_.last_msg_timestamp_ns;
+                        }
+                    } else if (in_seq < expected) {
+                        stats_.gaps_detected++; // out-of-order delivery
+                    }
+                    stats_.last_seq = in_seq;
+                }
+            }
+            stats_.last_msg_timestamp_ns = hdr->timestamp_ns;
+        }
+
         switch (hdr->msg_type) {
         case 'A':
         case 'F': {
@@ -410,6 +458,10 @@ int main() {
            (unsigned long long)s.trades_parsed,
            (unsigned long long)s.cancels_parsed,
            (unsigned long long)s.parse_errors);
+    std::printf("[INGESTION] Gap Detector: seq=%llu gaps=%llu max_gap_span=%llu ns\n",
+           (unsigned long long)s.last_seq,
+           (unsigned long long)s.gaps_detected,
+           (unsigned long long)s.max_gap_duration_ns);
 
     return 0;
 }

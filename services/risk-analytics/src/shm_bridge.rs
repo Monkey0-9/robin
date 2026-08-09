@@ -114,7 +114,7 @@ impl ShmBridge {
     pub fn push(&mut self, msg: &ShmMessage) -> bool {
         let header = unsafe { &*self.header };
         let write_idx = header.write_idx.load(Ordering::Relaxed);
-        let read_idx = header.read_idx.load(Ordering::Acquire);
+        let read_idx = header.read_idx.load(Ordering::SeqCst);
 
         if write_idx - read_idx >= SHM_CAPACITY as u64 {
             return false;
@@ -123,7 +123,8 @@ impl ShmBridge {
         let slot = (write_idx & (SHM_CAPACITY as u64 - 1)) as usize;
         unsafe {
             std::ptr::copy_nonoverlapping(msg as *const ShmMessage, self.ring.add(slot), 1);
-            header.write_idx.store(write_idx + 1, Ordering::Release);
+            std::sync::atomic::fence(Ordering::SeqCst);
+            header.write_idx.store(write_idx + 1, Ordering::SeqCst);
             header.last_heartbeat_ns.store(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -139,7 +140,7 @@ impl ShmBridge {
     pub fn pop(&mut self, msg: &mut ShmMessage) -> bool {
         let header = unsafe { &*self.header };
         let read_idx = header.read_idx.load(Ordering::Relaxed);
-        let write_idx = header.write_idx.load(Ordering::Acquire);
+        let write_idx = header.write_idx.load(Ordering::SeqCst);
 
         if read_idx == write_idx {
             return false;
@@ -148,7 +149,8 @@ impl ShmBridge {
         let slot = (read_idx & (SHM_CAPACITY as u64 - 1)) as usize;
         unsafe {
             std::ptr::copy_nonoverlapping(self.ring.add(slot), msg as *mut ShmMessage, 1);
-            header.read_idx.store(read_idx + 1, Ordering::Release);
+            std::sync::atomic::fence(Ordering::SeqCst);
+            header.read_idx.store(read_idx + 1, Ordering::SeqCst);
         }
         true
     }
@@ -174,7 +176,7 @@ impl ShmBridge {
     #[inline(always)]
     pub fn available(&self) -> u64 {
         let header = unsafe { &*self.header };
-        header.write_idx.load(Ordering::Acquire) - header.read_idx.load(Ordering::Acquire)
+        header.write_idx.load(Ordering::SeqCst) - header.read_idx.load(Ordering::SeqCst)
     }
 
     pub fn writer_alive(&self, timeout_ns: u64) -> bool {
@@ -195,12 +197,11 @@ impl ShmBridge {
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests {
     use super::{ShmBridge, ShmMessage};
 
     #[test]
-    #[cfg(target_os = "linux")]
     fn test_shm_bridge() {
         let path = "robin_risk_test.shm";
         let mut bridge = ShmBridge::new(path, true).unwrap();

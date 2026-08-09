@@ -5,6 +5,9 @@ on:
     branches: [ main, develop ]
   pull_request:
     branches: [ main ]
+  schedule:
+    # Weekly dependency & supply-chain re-scan (Phase 5.6 / 5.7)
+    - cron: '0 3 * * 1'
 
 env:
   CARGO_TERM_COLOR: always
@@ -24,6 +27,92 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ============================================================================
+  # SBOM Generation (Phase 5.6)
+  # SPDX + CycloneDX bills-of-materials are produced from the checked-out
+  # workspace on every push/PR and the artifact is retained for audit.
+  # ============================================================================
+  sbom:
+    name: SBOM Generation (SPDX / CycloneDX)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: anchore/sbom-action@v0
+        with:
+          path: ./
+          format: spdx-json
+          artifact-name: robin-sbom-spdx
+      - uses: anchore/sbom-action@v0
+        with:
+          path: ./
+          format: cyclonedx-json
+          artifact-name: robin-sbom-cyclonedx
+
+  # ============================================================================
+  # Dependency Vulnerability Scan (Phase 5.6)
+  # Trivy scans the filesystem (Cargo.lock, go.sum, package-lock.json,
+  # requirements.txt) for known-CVE advisories. Fails on critical/high.
+  # ============================================================================
+  dependency-scan:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+
+  # ============================================================================
+  # Penetration Testing (Phase 5.7)
+  # Automated black-box security validation against a live gateway instance.
+  # `scripts/security_pentest.py` performs OWASP Top-10 oriented probes and
+  # fails the job on any HIGH/CRITICAL finding.
+  # ============================================================================
+  pentest:
+    name: Automated Penetration Test
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Build gateway binary
+        run: |
+          cd services/gateway
+          go build -o /tmp/robin-gateway .
+      - name: Launch gateway under test
+        run: |
+          /tmp/robin-gateway > /tmp/gateway-pentest.log 2>&1 &
+          echo "ROBIN_GATEWAY_PID=$!" >> $GITHUB_ENV
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8080/health > /dev/null; then
+              echo "gateway ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "gateway failed to become ready"
+          cat /tmp/gateway-pentest.log
+          exit 1
+      - name: Run security pentest suite
+        run: |
+          python scripts/security_pentest.py --base-url http://localhost:8080
+      - name: Upload pentest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-pentest-log
+          path: /tmp/gateway-pentest.log
 
   # ============================================================================
   # Frontend: Next.js + TypeScript
@@ -129,6 +218,38 @@ jobs:
         run: |
           cd services/execution-core/build
           ctest --output-on-failure 2>/dev/null || echo "No CTest targets yet"
+
+  # ============================================================================
+  # C++: Execution Core Fuzzing
+  # ============================================================================
+  cpp-execution-fuzz:
+    name: C++ — Execution Core Fuzzing
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake clang libnuma-dev
+      - name: CMake configure with clang and fuzzing flags
+        run: |
+          # Use clang++ for libFuzzer support
+          cmake -S services/execution-core \
+                -B services/execution-core/build-fuzz \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DCMAKE_CXX_COMPILER=clang++ \
+                -DCMAKE_CXX_FLAGS="-fsanitize=fuzzer,address -g -O1"
+      - name: Build fuzzer
+        run: cmake --build services/execution-core/build-fuzz --target order_book_fuzzer -j$(nproc)
+      - name: Prepare corpus
+        run: |
+          mkdir -p services/execution-core/corpus
+          # Generate a seed file for the corpus (if possible, or just an empty corpus for it to learn)
+          echo -n "{\"type\":\"NEW\",\"id\":1,\"price\":100000000,\"qty\":100,\"side\":\"BID\"}" > services/execution-core/corpus/seed1.json
+      - name: Run Fuzzer (1 Hour)
+        run: |
+          # Run for 3600 seconds = 1 hour
+          services/execution-core/build-fuzz/order_book_fuzzer services/execution-core/corpus -max_total_time=3600
 
   # ============================================================================
   # C++: Pricing

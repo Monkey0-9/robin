@@ -1,14 +1,34 @@
 use opentelemetry::trace::TracerProvider as _;
 use robin_risk::config::PORT_RISK_METRICS;
-use robin_risk::gate::{Order, OrderSide, RiskGate};
+use robin_risk::gate::{Order, OrderSide, RiskError, RiskGate};
 use robin_risk::metrics;
 use robin_risk::shm_bridge::{ShmBridge, ShmMessage};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tracing_subscriber::prelude::*;
+
+/// Map a risk rejection reason onto the metric label used by
+/// `robin_risk_rejections_by_type`.
+fn rejection_reason(e: &RiskError) -> &'static str {
+    match e {
+        RiskError::KillSwitchActive => "kill_switch",
+        RiskError::CircuitBreakerTripped => "circuit_breaker",
+        RiskError::FatFinger => "fat_finger",
+        RiskError::PriceCollar => "price_collar",
+        RiskError::DuplicateOrder => "duplicate",
+        RiskError::PositionLimit => "position",
+        RiskError::VelocityLimit => "velocity",
+        RiskError::SymbolRestricted => "symbol_restricted",
+        RiskError::RegShoRestriction => "reg_sho",
+        RiskError::CreditLimit => "credit",
+        RiskError::ConcentrationLimit => "concentration",
+        RiskError::CorrelationRisk => "correlation",
+        RiskError::StressMarginLimit => "stress_margin",
+    }
+}
 
 fn main() {
     println!("[RISK] Starting Risk Analytics Daemon on port 9092...");
@@ -121,6 +141,51 @@ fn main() {
         }
     });
 
+    // Periodic portfolio analytics: VaR / CVaR / stress / Sharpe / positions
+    // published to the Prometheus endpoint so the gateway circuit breaker and
+    // monitoring stack observe live risk posture without touching the hot path.
+    {
+        let gate_analytics = gate.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            if let Ok(g) = gate_analytics.lock() {
+                let mut portfolio_value = 0.0f64;
+                let mut positions_tracked = 0u64;
+                for i in 0..4096u32 {
+                    let pos = g.get_position(i);
+                    if pos != 0 {
+                        let last = g.last_trade_price(i);
+                        if last > 0 {
+                            portfolio_value += (pos as f64).abs() * (last as f64 / 100_000_000.0);
+                            positions_tracked += 1;
+                        }
+                    }
+                }
+                let vol = 0.20; // portfolio annualized vol proxy (20%)
+                let var_p = g.calculate_var_parametric(portfolio_value.max(1.0), vol, 1.0);
+                let var_mc = g.calculate_var_monte_carlo(portfolio_value.max(1.0), vol, 1.0);
+                let var_95 = var_p.var_95.max(var_mc.var_95);
+                let var_99 = var_p.var_99.max(var_mc.var_99);
+                let cvar_95 = var_p.cvar_95.max(var_mc.cvar_95);
+                let stress = g.stress_test(portfolio_value.max(1.0), 1.0);
+                let worst_loss = stress
+                    .iter()
+                    .map(|(_, _, impact)| impact.abs())
+                    .fold(0.0f64, f64::max);
+                let sharpe = g.compute_sharpe(0);
+                metrics::record_analytics(
+                    portfolio_value,
+                    var_95,
+                    var_99,
+                    cvar_95,
+                    worst_loss,
+                    sharpe,
+                    positions_tracked,
+                );
+            }
+        });
+    }
+
     // Setup Ctrl-C handler for snapshot saving and graceful shutdown
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
@@ -218,6 +283,12 @@ fn handle_client(
             // Parse JSON
             let parsed: Result<Value, _> = serde_json::from_str(&line);
             if let Ok(v) = parsed {
+                // Command routing (analytics / market data / Reg SHO seeding)
+                if let Some(cmd) = v.get("cmd").and_then(|c| c.as_str()) {
+                    handle_command(&mut client_stream, &gate, &v, cmd);
+                    continue;
+                }
+
                 let price = v["price"].as_u64().unwrap_or(0);
                 let qty = v["qty"].as_u64().unwrap_or(0);
                 let side_str = v["side"].as_str().unwrap_or("BUY");
@@ -273,6 +344,7 @@ fn handle_client(
                 let _enter = span.enter();
 
                 if let Err(e) = approved {
+                    metrics::record_rejection(rejection_reason(&e));
                     let resp = format!(
                         "{{\"order_id\":0,\"instrument_id\":1,\"fill_price\":0,\"fill_qty\":0,\"status\":\"REJECTED\",\"success\":false,\"error\":\"{:?}\"}}\n",
                         e
@@ -305,4 +377,159 @@ fn handle_client(
             }
         }
     }
+}
+
+fn now_ns() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos() as u64
+}
+
+/// Handle control-plane commands on the same TCP port as order submission:
+///  - quote            feed a last-trade price tick (Reg SHO / P&L / correlation)
+///  - previous_close   seed the Reg SHO Rule 201 reference price
+///  - analytics        full risk snapshot (P&L, VaR, stress, correlation, Reg SHO)
+///  - pnl              per-strategy P&L detail
+///  - var              Monte Carlo Value-at-Risk on demand
+fn handle_command(
+    client_stream: &mut TcpStream,
+    gate: &Arc<Mutex<RiskGate>>,
+    v: &Value,
+    cmd: &str,
+) {
+    let instrument_id = v["instrument_id"].as_u64().unwrap_or(0) as u32;
+    let response = match cmd {
+        "quote" => {
+            let price = v["price"].as_u64().unwrap_or(0);
+            if price == 0 {
+                json!({"status":"error","error":"price required"})
+            } else if let Ok(mut g) = gate.lock() {
+                g.set_market_data(instrument_id, price);
+                json!({
+                    "status": "ok",
+                    "instrument_id": instrument_id,
+                    "last_trade_price": price,
+                    "reg_sho_active": g.short_sale_cb_active(instrument_id, now_ns())
+                })
+            } else {
+                json!({"status":"error","error":"gate busy"})
+            }
+        }
+        "previous_close" => {
+            let price = v["price"].as_u64().unwrap_or(0);
+            if price == 0 {
+                json!({"status":"error","error":"price required"})
+            } else if let Ok(mut g) = gate.lock() {
+                g.set_previous_close(instrument_id, price);
+                json!({"status":"ok","instrument_id":instrument_id,"previous_close":price})
+            } else {
+                json!({"status":"error","error":"gate busy"})
+            }
+        }
+        "analytics" => {
+            if let Ok(g) = gate.lock() {
+                analytics_snapshot(&g)
+            } else {
+                json!({"status":"error","error":"gate busy"})
+            }
+        }
+        "pnl" => {
+            let account_id = v["account_id"].as_u64().unwrap_or(0) as u32;
+            if let Ok(g) = gate.lock() {
+                let pnl = g.get_pnl(account_id);
+                json!({
+                    "status": "ok",
+                    "account_id": account_id,
+                    "realized_pnl": pnl.realized_pnl,
+                    "unrealized_pnl": pnl.unrealized_pnl,
+                    "total_pnl": pnl.total_pnl,
+                    "trades": pnl.trades_count,
+                    "win_count": pnl.win_count,
+                    "loss_count": pnl.loss_count,
+                    "max_drawdown": pnl.max_drawdown,
+                    "sharpe_ratio": pnl.sharpe_ratio
+                })
+            } else {
+                json!({"status":"error","error":"gate busy"})
+            }
+        }
+        "var" => {
+            let pv = v["portfolio_value"].as_f64().unwrap_or(0.0);
+            let vol = v["volatility"].as_f64().unwrap_or(0.20);
+            let days = v["days"].as_f64().unwrap_or(1.0);
+            if let Ok(g) = gate.lock() {
+                let r = g.calculate_var_monte_carlo(pv.max(1.0), vol, days);
+                json!({
+                    "status": "ok",
+                    "var_95": r.var_95,
+                    "var_99": r.var_99,
+                    "cvar_95": r.cvar_95,
+                    "portfolio_value": r.portfolio_value,
+                    "volatility_annual": r.volatility_annual,
+                    "method": r.method
+                })
+            } else {
+                json!({"status":"error","error":"gate busy"})
+            }
+        }
+        _ => json!({"status":"error","error":format!("unknown command: {cmd}")}),
+    };
+    let mut out = response.to_string();
+    out.push('\n');
+    let _ = client_stream.write_all(out.as_bytes());
+}
+
+/// Build a live analytics snapshot from the gate state.
+fn analytics_snapshot(g: &RiskGate) -> Value {
+    let mut portfolio_value = 0.0f64;
+    let mut positions: Vec<Value> = Vec::new();
+    for i in 0..4096u32 {
+        let pos = g.get_position(i);
+        if pos != 0 {
+            let last = g.last_trade_price(i);
+            if last > 0 {
+                portfolio_value += (pos as f64).abs() * (last as f64 / 100_000_000.0);
+            }
+            positions.push(json!({"instrument_id": i, "qty": pos}));
+        }
+    }
+    let vol = 0.20;
+    let var_p = g.calculate_var_parametric(portfolio_value.max(1.0), vol, 1.0);
+    let var_mc = g.calculate_var_monte_carlo(portfolio_value.max(1.0), vol, 1.0);
+    let stress = g.stress_test(portfolio_value.max(1.0), 1.0);
+    let stress_vec: Vec<Value> = stress
+        .into_iter()
+        .map(|(name, value, impact)| {
+            json!({"scenario": name, "stressed_value": value, "pnl_impact": impact})
+        })
+        .collect();
+    let now = now_ns();
+    let reg_sho: Vec<Value> = positions
+        .iter()
+        .filter_map(|p| {
+            let id = p["instrument_id"].as_u64().unwrap_or(0) as u32;
+            let prev_close = g.previous_close(id);
+            if prev_close == 0 {
+                return None;
+            }
+            Some(json!({
+                "instrument_id": id,
+                "previous_close": prev_close,
+                "short_sale_breaker_active": g.short_sale_cb_active(id, now),
+            }))
+        })
+        .collect();
+    json!({
+        "status": "ok",
+        "portfolio_value": portfolio_value,
+        "positions": positions,
+        "var_95": var_mc.var_95.max(var_p.var_95),
+        "var_99": var_mc.var_99.max(var_p.var_99),
+        "cvar_95": var_mc.cvar_95.max(var_p.cvar_95),
+        "volatility_annual": var_p.volatility_annual,
+        "stress_test": stress_vec,
+        "reg_sho": reg_sho,
+        "sharpe_ratio": g.compute_sharpe(0)
+    })
 }

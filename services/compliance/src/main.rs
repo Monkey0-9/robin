@@ -131,6 +131,28 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
     let mut detector = SpoofingDetector::new(5_000_000_000); // 5-second window
     let mut logger = AuditLogger::new(audit_log_path);
 
+    // Periodic tamper-evidence check (Phase 4.3): recompute the whole chain on
+    // disk every minute. If any link is forged/truncated the daemon logs a
+    // hard alert — an operator then knows evidence integrity has been lost,
+    // rather than only discovering it at shutdown.
+    {
+        let log_path = audit_log_path.to_string();
+        thread::spawn(move || loop {
+            thread::sleep(Duration::from_secs(60));
+            match AuditLogger::verify_chain(&log_path) {
+                Ok(true) => eprintln!("[COMPLIANCE] audit chain verified OK"),
+                Ok(false) => eprintln!(
+                    "[COMPLIANCE][CRITICAL] audit chain TAMPER DETECTED in {}",
+                    log_path
+                ),
+                Err(e) => eprintln!(
+                    "[COMPLIANCE] audit chain verify error (file may be mid-append): {}",
+                    e
+                ),
+            }
+        });
+    }
+
     eprintln!("[COMPLIANCE] Starting compliance daemon");
     eprintln!("[COMPLIANCE]   SHM path:   {shm_path}");
     eprintln!("[COMPLIANCE]   Audit log:  {audit_log_path}");
@@ -140,6 +162,13 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
 
     let require_shm = std::env::var("ROBIN_REQUIRE_SHM").map(|v| v == "1" || v == "true").unwrap_or(false)
         || std::env::args().any(|arg| arg == "--require-shm");
+
+    // Synthetic/demo order generation is opt-in only (ROBIN_ALLOW_DEMO_MODE=1
+    // or --allow-demo). By default the daemon runs fail-closed: without a real
+    // shared-memory feed it records heartbeats but never fabricates orders or
+    // spoofing alerts, so demo data cannot pollute the tamper-evident chain.
+    let allow_demo = std::env::var("ROBIN_ALLOW_DEMO_MODE").map(|v| v == "1" || v == "true").unwrap_or(false)
+        || std::env::args().any(|arg| arg == "--allow-demo");
 
     match ShmBridge::new(shm_path, false) {
         Ok(reader) => {
@@ -263,8 +292,10 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
                 last_heartbeat = now;
             }
 
-            // Synthetic NEW order every 100ms in demo mode
-            if shm_reader.is_none() {
+            // Synthetic NEW order every 100ms ONLY when demo mode is explicitly
+            // enabled (ROBIN_ALLOW_DEMO_MODE=1 / --allow-demo). Fail-closed by
+            // default: no SHM feed means no fabricated trading activity.
+            if shm_reader.is_none() && allow_demo {
                 let event = OrderEvent {
                     order_id: synthetic_order_id,
                     symbol: "DEMO".to_string(),

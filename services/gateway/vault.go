@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -98,4 +100,101 @@ func (v *VaultClient) GetSecret(path, key string) (string, error) {
 type cacheEntry struct {
 	value   string
 	fetched time.Time
+}
+
+// vaultTransitRequest represents a transit engine request body
+type vaultTransitRequest struct {
+	Input string `json:"input"`
+	Hmac  string `json:"hmac,omitempty"`
+}
+
+// vaultTransitResponse represents a transit engine response envelope
+type vaultTransitResponse struct {
+	Data struct {
+		Hmac  string `json:"hmac"`
+		Valid bool   `json:"valid"`
+	} `json:"data"`
+}
+
+// SignData uses the Vault Transit engine to generate an HMAC for the given data.
+func (v *VaultClient) SignData(keyID string, data []byte) ([]byte, error) {
+	if v.addr == "" {
+		return nil, fmt.Errorf("Vault disabled, cannot sign data")
+	}
+
+	reqBody := vaultTransitRequest{
+		Input: base64.StdEncoding.EncodeToString(data),
+	}
+	b, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	u := fmt.Sprintf("%s/v1/transit/hmac/%s", strings.TrimRight(v.addr, "/"), keyID)
+	req, err := http.NewRequest("POST", u, bytes.NewBuffer(b))
+	if err != nil {
+		return nil, fmt.Errorf("Vault transit hmac request create: %w", err)
+	}
+	req.Header.Set("X-Vault-Token", v.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := v.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("Vault transit hmac request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("Vault returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var vresp vaultTransitResponse
+	if err := json.NewDecoder(resp.Body).Decode(&vresp); err != nil {
+		return nil, fmt.Errorf("Vault transit response decode: %w", err)
+	}
+
+	return []byte(vresp.Data.Hmac), nil
+}
+
+// VerifySignature uses the Vault Transit engine to verify an HMAC.
+func (v *VaultClient) VerifySignature(keyID string, data []byte, hmacBytes []byte) (bool, error) {
+	if v.addr == "" {
+		return false, fmt.Errorf("Vault disabled, cannot verify signature")
+	}
+
+	reqBody := vaultTransitRequest{
+		Input: base64.StdEncoding.EncodeToString(data),
+		Hmac:  string(hmacBytes), // Vault returns string like "vault:v1:..."
+	}
+	b, err := json.Marshal(reqBody)
+	if err != nil {
+		return false, err
+	}
+
+	u := fmt.Sprintf("%s/v1/transit/verify/%s", strings.TrimRight(v.addr, "/"), keyID)
+	req, err := http.NewRequest("POST", u, bytes.NewBuffer(b))
+	if err != nil {
+		return false, fmt.Errorf("Vault transit verify request create: %w", err)
+	}
+	req.Header.Set("X-Vault-Token", v.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := v.client.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("Vault transit verify request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return false, fmt.Errorf("Vault returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var vresp vaultTransitResponse
+	if err := json.NewDecoder(resp.Body).Decode(&vresp); err != nil {
+		return false, fmt.Errorf("Vault transit response decode: %w", err)
+	}
+
+	return vresp.Data.Valid, nil
 }

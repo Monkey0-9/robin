@@ -2,101 +2,14 @@ package main
 
 import (
 	"testing"
+	"time"
 )
 
-func TestGenerateQuotes(t *testing.T) {
-	quotes := GenerateQuotes("BTC/USD", 64500.0)
-	if len(quotes) != len(Exchanges) {
-		t.Fatalf("expected %d quotes, got %d", len(Exchanges), len(quotes))
-	}
-
-	for _, q := range quotes {
-		if q.Exchange == "" {
-			t.Error("expected non-empty exchange name")
-		}
-		if q.Bid <= 0 || q.Ask <= 0 {
-			t.Errorf("expected positive bid/ask prices, got Bid=%f, Ask=%f", q.Bid, q.Ask)
-		}
-		if q.Ask <= q.Bid {
-			t.Errorf("expected ask to be greater than bid, got Bid=%f, Ask=%f", q.Bid, q.Ask)
-		}
-		if q.BidSize <= 0 || q.AskSize <= 0 {
-			t.Errorf("expected positive sizes, got BidSize=%f, AskSize=%f", q.BidSize, q.AskSize)
-		}
-	}
-}
-
-func TestRouteOrder_AutoBuy(t *testing.T) {
-	midPrice := 64500.0
-	symbol := "BTC/USD"
-
-	quotes := GenerateQuotes(symbol, midPrice)
-	// Find absolute lowest ask in quotes
-	lowestAsk := quotes[0].Ask
-	for _, q := range quotes {
-		if q.Ask < lowestAsk {
-			lowestAsk = q.Ask
-		}
-	}
-
-	res := RouteOrder(symbol, "BUY", midPrice, "AUTO")
-	if res.ExchangesSearched != len(Exchanges) {
-		t.Errorf("expected to search %d exchanges, searched %d", len(Exchanges), res.ExchangesSearched)
-	}
-	if res.FillPrice != lowestAsk {
-		t.Errorf("expected fill price to be the lowest ask %f, got %f", lowestAsk, res.FillPrice)
-	}
-	if res.PriceImprovementBps < 0 {
-		t.Errorf("expected non-negative price improvement, got %f", res.PriceImprovementBps)
-	}
-}
-
-func TestRouteOrder_AutoSell(t *testing.T) {
-	midPrice := 64500.0
-	symbol := "BTC/USD"
-
-	quotes := GenerateQuotes(symbol, midPrice)
-	// Find absolute highest bid in quotes
-	highestBid := quotes[0].Bid
-	for _, q := range quotes {
-		if q.Bid > highestBid {
-			highestBid = q.Bid
-		}
-	}
-
-	res := RouteOrder(symbol, "SELL", midPrice, "AUTO")
-	if res.ExchangesSearched != len(Exchanges) {
-		t.Errorf("expected to search %d exchanges, searched %d", len(Exchanges), res.ExchangesSearched)
-	}
-	if res.FillPrice != highestBid {
-		t.Errorf("expected fill price to be the highest bid %f, got %f", highestBid, res.FillPrice)
-	}
-}
-
-func TestRouteOrder_DirectRouting(t *testing.T) {
-	midPrice := 64500.0
-	symbol := "BTC/USD"
-
-	res := RouteOrder(symbol, "BUY", midPrice, "NYSE")
-	if res.RoutedExchange != "NYSE" {
-		t.Errorf("expected routed exchange to be NYSE, got %s", res.RoutedExchange)
-	}
-	if res.ExchangesSearched != 1 {
-		t.Errorf("expected exchanges searched to be 1 for direct routing, got %d", res.ExchangesSearched)
-	}
-
-	// Verify case insensitivity and space ignoring
-	res2 := RouteOrder(symbol, "BUY", midPrice, "EuronextParis")
-	if res2.RoutedExchange != "Euronext Paris" {
-		t.Errorf("expected routed exchange to be Euronext Paris, got %s", res2.RoutedExchange)
-	}
-}
-
-func TestNbbo(t *testing.T) {
+func TestNbbo_ComputesNationalBestBidAsk(t *testing.T) {
 	quotes := []ExchangeQuote{
-		{Exchange: "A", Bid: 100.0, Ask: 101.0},
-		{Exchange: "B", Bid: 99.5, Ask: 100.5},
-		{Exchange: "C", Bid: 100.5, Ask: 102.0},
+		{Exchange: "Coinbase", Bid: 100.0, Ask: 101.0},
+		{Exchange: "Binance", Bid: 99.5, Ask: 100.5},
+		{Exchange: "Kraken", Bid: 100.5, Ask: 102.0},
 	}
 	bid, ask := nbbo(quotes)
 	if bid != 100.5 {
@@ -114,26 +27,88 @@ func TestNbbo_EmptyQuotes(t *testing.T) {
 	}
 }
 
-func TestRouteOrder_Nbbo(t *testing.T) {
-	midPrice := 64500.0
+func freshNBBO(t *testing.T) {
+	t.Helper()
+	globalNBBO = &NBBOCache{
+		quotes: make(map[string]map[string]VenueQuote),
+		lastUp: make(map[string]int64),
+	}
+}
 
-	buy := RouteOrder("BTC/USD", "BUY", midPrice, "AUTO")
-	if buy.FillPrice != buy.NbboAsk {
-		t.Errorf("expected fill to equal NBBO ask %f, got %f", buy.NbboAsk, buy.FillPrice)
-	}
-	if buy.PriceImprovementBps != 0 {
-		t.Errorf("expected 0 price improvement when fill == NBBO, got %f", buy.PriceImprovementBps)
-	}
+func publish(symbol, venue string, bid, ask float64) {
+	globalNBBO.Publish(symbol, venue, bid, ask, 1.0, 1.0)
+}
 
-	sell := RouteOrder("BTC/USD", "SELL", midPrice, "AUTO")
-	if sell.FillPrice != sell.NbboBid {
-		t.Errorf("expected fill to equal NBBO bid %f, got %f", sell.NbboBid, sell.FillPrice)
-	}
+func TestRouteOrder_UsesLiveNBBOWhenAvailable(t *testing.T) {
+	freshNBBO(t)
+	publish("BTC/USD", "Coinbase", 64495.0, 64505.0)
+	publish("BTC/USD", "Binance", 64490.0, 64510.0)
 
-	if buy.NbboBid <= 0 || buy.NbboAsk <= 0 {
-		t.Errorf("expected positive NBBO, got bid=%f ask=%f", buy.NbboBid, buy.NbboAsk)
+	res, ok := RouteOrder("BTC/USD", "BUY", 64500.0, "AUTO")
+	if !ok {
+		t.Error("expected true ok status")
 	}
-	if buy.NbboAsk <= buy.NbboBid {
-		t.Errorf("expected NBBO ask to exceed NBBO bid, got bid=%f ask=%f", buy.NbboBid, buy.NbboAsk)
+	if res.FillPrice != 64505.0 {
+		t.Errorf("expected fill price to match live NBBO ask 64505.0, got %f", res.FillPrice)
+	}
+	if res.RoutedExchange != "Coinbase" {
+		t.Errorf("expected RoutedExchange Coinbase (best ask venue), got %s", res.RoutedExchange)
+	}
+	if res.IsSimulated {
+		t.Error("expected IsSimulated to be false when routing on live quotes")
+	}
+}
+
+func TestRouteOrder_SellUsesBestBidVenue(t *testing.T) {
+	freshNBBO(t)
+	publish("ETH/USD", "Binance", 3400.0, 3402.0)
+	publish("ETH/USD", "Kraken", 3399.0, 3401.0)
+
+	res, ok := RouteOrder("ETH/USD", "SELL", 3400.0, "AUTO")
+	if !ok {
+		t.Fatal("expected true ok status")
+	}
+	if res.FillPrice != 3400.0 {
+		t.Errorf("expected fill price to match live NBBO bid 3400.0, got %f", res.FillPrice)
+	}
+	if res.RoutedExchange != "Binance" {
+		t.Errorf("expected RoutedExchange Binance (best bid venue), got %s", res.RoutedExchange)
+	}
+}
+
+func TestRouteOrder_PreferredExchangeHonoredAtNBBO(t *testing.T) {
+	freshNBBO(t)
+	publish("BTC/USD", "Coinbase", 64495.0, 64505.0)
+	publish("BTC/USD", "NYSE", 64495.0, 64505.0) // quotes at the NBBO
+	publish("BTC/USD", "KRK", 64490.0, 64520.0)
+
+	res, ok := RouteOrder("BTC/USD", "BUY", 64500.0, "NYSE")
+	if !ok {
+		t.Fatal("expected true ok status")
+	}
+	if res.RoutedExchange != "NYSE" {
+		t.Errorf("expected preferred NYSE to be used, got %s", res.RoutedExchange)
+	}
+}
+
+func TestRouteOrder_ReturnsFalseWhenNoLiveQuotes(t *testing.T) {
+	freshNBBO(t)
+	_, ok := RouteOrder("BTC/USD", "BUY", 64500.0, "AUTO")
+	if ok {
+		t.Error("expected false ok status when no live quotes available")
+	}
+}
+
+func TestRouteOrder_IgnoresStaleQuotes(t *testing.T) {
+	freshNBBO(t)
+	publish("BTC/USD", "Coinbase", 64000.0, 64010.0)
+	// Artificially age the cache entry beyond the 10s live window.
+	globalNBBO.mu.Lock()
+	globalNBBO.lastUp["BTC/USD"] = time.Now().UnixMilli() - 30_000
+	globalNBBO.mu.Unlock()
+
+	_, ok := RouteOrder("BTC/USD", "BUY", 64000.0, "AUTO")
+	if ok {
+		t.Error("expected stale quotes to be treated as no live market data")
 	}
 }

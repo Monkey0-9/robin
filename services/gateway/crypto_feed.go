@@ -248,6 +248,16 @@ func (c *CoinbaseFeed) connectAndListen() {
 					flatAsks = flatAsks[:20]
 				}
 
+				// Publish real best bid/ask into the SOR NBBO cache so routing
+				// decisions use live market data (Phase 3.1), not synthetic quotes
+				// alone.
+				if len(flatBids) > 0 && len(flatAsks) > 0 {
+					globalNBBO.Publish(normalizedID, "Coinbase",
+						flatBids[0][0], flatAsks[0][0],
+						flatBids[0][1], flatAsks[0][1])
+				}
+				globalMarketData.UpdatePrice(normalizedID, (flatBids[0][0]+flatAsks[0][0])/2)
+
 				c.wsHub.BroadcastOrderBook(normalizedID, flatBids, flatAsks)
 			}
 		}
@@ -362,6 +372,12 @@ func (b *BinanceFeed) connectAndListen() {
 					flatAsks = append(flatAsks, [2]float64{price, size})
 				}
 				if len(flatBids) > 0 && len(flatAsks) > 0 {
+					// Publish real best bid/ask into the SOR NBBO cache so routing
+					// decisions use live market data (Phase 3.1), not synthetic quotes.
+					globalNBBO.Publish(normalizedID, "Binance",
+						flatBids[0][0], flatAsks[0][0],
+						flatBids[0][1], flatAsks[0][1])
+					globalMarketData.UpdatePrice(normalizedID, (flatBids[0][0]+flatAsks[0][0])/2)
 					b.wsHub.BroadcastOrderBook(normalizedID, flatBids, flatAsks)
 				}
 			}
@@ -514,6 +530,11 @@ func (k *KrakenFeed) connectAndListen() {
 				k.wsHub.BroadcastOrderBook(normalizedID, flatBids, flatAsks)
 				// Update best bid/ask as mid price
 				if len(flatBids) > 0 && len(flatAsks) > 0 {
+					// Publish real best bid/ask into the SOR NBBO cache so routing
+					// decisions use live market data (Phase 3.1), not synthetic quotes.
+					globalNBBO.Publish(normalizedID, "Kraken",
+						flatBids[0][0], flatAsks[0][0],
+						flatBids[0][1], flatAsks[0][1])
 					mid := (flatBids[0][0] + flatAsks[0][0]) / 2
 					globalMarketData.UpdatePrice(normalizedID, mid)
 				}
