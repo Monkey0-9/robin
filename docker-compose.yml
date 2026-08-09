@@ -7,9 +7,9 @@ services:
       context: ./services/execution-core
       dockerfile: Dockerfile
     ports:
-      - 8000:8000
       - 9091:9091
     environment:
+      - ENGINE_PORT=9091
       - LATENCY_PROFILE=ultra-low
     deploy:
       resources:
@@ -30,7 +30,8 @@ services:
     ports:
       - 8080:8080
     environment:
-      - MATCHING_ENGINE_URL=http://matching_engine:8000
+      - MATCHING_ENGINE_HOST=risk-analytics
+      - MATCHING_ENGINE_PORT=9092
       - JWT_SECRET=${JWT_SECRET?Error: JWT_SECRET environment variable is required}
       - LIVE_FEED_ENABLED=true
     deploy:

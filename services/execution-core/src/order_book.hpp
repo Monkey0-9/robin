@@ -7,6 +7,7 @@
 #include <cassert>
 #include <chrono>
 #include <vector>
+#include "robin_hood.h"
 
 namespace quantum {
 namespace execution {
@@ -114,33 +115,13 @@ inline uint64_t rdtscp_local() {
 }
 #endif
 
-// Full-avalanche hash (MurmurHash3 fmix64) applied to the price before masking
-// to the power-of-2 table. Combined with explicit slot states (EMPTY/LIVE/
-// TOMBSTONE) this removes both the weak hashing and the 0/-1 sentinel-collision
-// paths that previously caused legitimate orders to be dropped or rejected.
-inline uint64_t mix64(uint64_t val) noexcept {
-    val ^= val >> 33;
-    val *= 0xff51afd7ed558ccdULL;
-    val ^= val >> 33;
-    val *= 0xc4ceb9fe1a85ec53ULL;
-    val ^= val >> 33;
-    return val;
-}
-
 class OrderBook {
 public:
     static constexpr size_t MAX_LEVELS = 131072;
 
-    enum class SlotState : uint8_t {
-        EMPTY = 0,
-        LIVE = 1,
-        TOMBSTONE = 2
-    };
-
     struct Level {
         int64_t price = 0;
         OrderQueue<256>* q = nullptr;
-        SlotState state = SlotState::EMPTY;
     };
 
     OrderBook() noexcept : instrument_id_(0), overflow_drops_(0), luld_band_bps_(500), luld_halted_(false), luld_ref_price_(0) {}
@@ -245,9 +226,10 @@ public:
 
     bool cancel_order(uint64_t order_id, int64_t price, Side side) noexcept {
         if (price != 0) {
-            size_t idx = (side == Side::BID) ? find_bid_idx(price) : find_ask_idx(price);
-            if (idx != (size_t)-1) {
-                auto* q = (side == Side::BID) ? bids_levels_[idx].q : asks_levels_[idx].q;
+            auto& map = (side == Side::BID) ? bids_levels_map_ : asks_levels_map_;
+            auto it = map.find(price);
+            if (it != map.end()) {
+                auto* q = it->second.q;
                 if (q) {
                     Order* e = q->find(order_id);
                     if (e) {
@@ -263,9 +245,10 @@ public:
         auto& active = (side == Side::BID) ? active_bids_ : active_asks_;
         for (size_t i = 0; i < active.size(); ++i) {
             int64_t level_price = active[i];
-            size_t idx = (side == Side::BID) ? find_bid_idx(level_price) : find_ask_idx(level_price);
-            if (idx == (size_t)-1) continue;
-            auto* q = (side == Side::BID) ? bids_levels_[idx].q : asks_levels_[idx].q;
+            auto& map = (side == Side::BID) ? bids_levels_map_ : asks_levels_map_;
+            auto it = map.find(level_price);
+            if (it == map.end()) continue;
+            auto* q = it->second.q;
             if (!q) continue;
             Order* e = q->find(order_id);
             if (e) {
@@ -283,13 +266,13 @@ public:
     // ------------------------------------------------------------------ //
 
     OrderQueue<256>* get_bid_queue(int64_t price) const noexcept {
-        size_t idx = find_bid_idx(price);
-        return (idx != (size_t)-1) ? bids_levels_[idx].q : nullptr;
+        auto it = bids_levels_map_.find(price);
+        return (it != bids_levels_map_.end()) ? it->second.q : nullptr;
     }
 
     OrderQueue<256>* get_ask_queue(int64_t price) const noexcept {
-        size_t idx = find_ask_idx(price);
-        return (idx != (size_t)-1) ? asks_levels_[idx].q : nullptr;
+        auto it = asks_levels_map_.find(price);
+        return (it != asks_levels_map_.end()) ? it->second.q : nullptr;
     }
 
     int64_t best_bid() const noexcept { return active_bids_.empty() ? 0 : active_bids_[0]; }
@@ -308,8 +291,8 @@ public:
 
     const FixedVector<int64_t, 1024>& get_active_bids() const { return active_bids_; }
     const FixedVector<int64_t, 1024>& get_active_asks() const { return active_asks_; }
-    const Level* get_bids_levels() const { return bids_levels_; }
-    const Level* get_asks_levels() const { return asks_levels_; }
+    const robin_hood::unordered_flat_map<int64_t, Level>& get_bids_levels() const { return bids_levels_map_; }
+    const robin_hood::unordered_flat_map<int64_t, Level>& get_asks_levels() const { return asks_levels_map_; }
 
     void set_instrument_id(uint32_t id) { instrument_id_ = id; }
 
@@ -318,8 +301,8 @@ public:
     void reset() noexcept {
         for (auto* q : allocated_queues_) delete q;
         allocated_queues_.clear();
-        for (auto& l : bids_levels_) { l = Level(); }
-        for (auto& l : asks_levels_) { l = Level(); }
+        bids_levels_map_.clear();
+        asks_levels_map_.clear();
         active_bids_.clear();
         active_asks_.clear();
         overflow_drops_ = 0;
@@ -334,100 +317,28 @@ public:
     void resume_luld() noexcept { luld_halted_ = false; }
 
     void add_bid_level(int64_t price, const OrderQueue<256>& q) {
-        size_t idx = find_or_create_bid_idx(price);
-        if (idx == (size_t)-1) return;
-        bids_levels_[idx].price = price;
-        if (!bids_levels_[idx].q) {
-            bids_levels_[idx].q = new OrderQueue<256>();
-            allocated_queues_.push_back(bids_levels_[idx].q);
+        auto& lvl = bids_levels_map_[price];
+        lvl.price = price;
+        if (!lvl.q) {
+            lvl.q = new OrderQueue<256>();
+            allocated_queues_.push_back(lvl.q);
         }
-        *bids_levels_[idx].q = q;
-        bids_levels_[idx].state = SlotState::LIVE;
+        *lvl.q = q;
         insert_active_bid(price);
     }
     void add_ask_level(int64_t price, const OrderQueue<256>& q) {
-        size_t idx = find_or_create_ask_idx(price);
-        if (idx == (size_t)-1) return;
-        asks_levels_[idx].price = price;
-        if (!asks_levels_[idx].q) {
-            asks_levels_[idx].q = new OrderQueue<256>();
-            allocated_queues_.push_back(asks_levels_[idx].q);
+        auto& lvl = asks_levels_map_[price];
+        lvl.price = price;
+        if (!lvl.q) {
+            lvl.q = new OrderQueue<256>();
+            allocated_queues_.push_back(lvl.q);
         }
-        *asks_levels_[idx].q = q;
-        asks_levels_[idx].state = SlotState::LIVE;
+        *lvl.q = q;
         insert_active_ask(price);
     }
 
 private:
-    // ------------------------------------------------------------------ //
-    // Hash table (open addressing, linear probing, tombstones)            //
-    // ------------------------------------------------------------------ //
-
-    static inline size_t hash_price(int64_t price) noexcept {
-        return static_cast<size_t>(mix64(static_cast<uint64_t>(price))) & (MAX_LEVELS - 1);
-    }
-
-    size_t find_or_create_bid_idx(int64_t price) noexcept {
-        size_t idx = hash_price(price);
-        size_t start = idx;
-        size_t first_tombstone = (size_t)-1;
-        for (;;) {
-            SlotState st = bids_levels_[idx].state;
-            if (st == SlotState::EMPTY) {
-                return (first_tombstone != (size_t)-1) ? first_tombstone : idx;
-            }
-            if (st == SlotState::TOMBSTONE) {
-                if (first_tombstone == (size_t)-1) first_tombstone = idx;
-            } else if (bids_levels_[idx].price == price) {
-                return idx;
-            }
-            idx = (idx + 1) & (MAX_LEVELS - 1);
-            if (idx == start) break;
-        }
-        return first_tombstone; // table full: reuse tombstone or fail
-    }
-
-    size_t find_or_create_ask_idx(int64_t price) noexcept {
-        size_t idx = hash_price(price);
-        size_t start = idx;
-        size_t first_tombstone = (size_t)-1;
-        for (;;) {
-            SlotState st = asks_levels_[idx].state;
-            if (st == SlotState::EMPTY) {
-                return (first_tombstone != (size_t)-1) ? first_tombstone : idx;
-            }
-            if (st == SlotState::TOMBSTONE) {
-                if (first_tombstone == (size_t)-1) first_tombstone = idx;
-            } else if (asks_levels_[idx].price == price) {
-                return idx;
-            }
-            idx = (idx + 1) & (MAX_LEVELS - 1);
-            if (idx == start) break;
-        }
-        return first_tombstone;
-    }
-
-    size_t find_bid_idx(int64_t price) const noexcept {
-        size_t idx = hash_price(price);
-        size_t start = idx;
-        while (bids_levels_[idx].state != SlotState::EMPTY) {
-            if (bids_levels_[idx].state == SlotState::LIVE && bids_levels_[idx].price == price) return idx;
-            idx = (idx + 1) & (MAX_LEVELS - 1);
-            if (idx == start) break;
-        }
-        return (size_t)-1;
-    }
-
-    size_t find_ask_idx(int64_t price) const noexcept {
-        size_t idx = hash_price(price);
-        size_t start = idx;
-        while (asks_levels_[idx].state != SlotState::EMPTY) {
-            if (asks_levels_[idx].state == SlotState::LIVE && asks_levels_[idx].price == price) return idx;
-            idx = (idx + 1) & (MAX_LEVELS - 1);
-            if (idx == start) break;
-        }
-        return (size_t)-1;
-    }
+    
 
     // ------------------------------------------------------------------ //
     // Level management                                                    //
@@ -452,45 +363,39 @@ private:
     }
 
     bool push_bid(const Order& order) noexcept {
-        size_t idx = find_or_create_bid_idx(order.price);
-        if (idx == (size_t)-1) return false;
-        bids_levels_[idx].price = order.price;
-        if (!bids_levels_[idx].q) bids_levels_[idx].q = allocate_queue();
-        bids_levels_[idx].state = SlotState::LIVE;
-        if (!bids_levels_[idx].q->push(order)) return false;
+        auto& lvl = bids_levels_map_[order.price];
+        lvl.price = order.price;
+        if (!lvl.q) lvl.q = allocate_queue();
+        if (!lvl.q->push(order)) return false;
         insert_active_bid(order.price);
         return true;
     }
     bool push_ask(const Order& order) noexcept {
-        size_t idx = find_or_create_ask_idx(order.price);
-        if (idx == (size_t)-1) return false;
-        asks_levels_[idx].price = order.price;
-        if (!asks_levels_[idx].q) asks_levels_[idx].q = allocate_queue();
-        asks_levels_[idx].state = SlotState::LIVE;
-        if (!asks_levels_[idx].q->push(order)) return false;
+        auto& lvl = asks_levels_map_[order.price];
+        lvl.price = order.price;
+        if (!lvl.q) lvl.q = allocate_queue();
+        if (!lvl.q->push(order)) return false;
         insert_active_ask(order.price);
         return true;
     }
 
-    // Remove the level (queue deleted, slot tombstoned, active list updated)
+    // Remove the level (queue deleted, active list updated)
     // if it no longer contains any live order.
     void purge_level_if_empty(Side side) noexcept {
         auto& active = (side == Side::BID) ? active_bids_ : active_asks_;
         for (size_t i = 0; i < active.size(); ++i) {
             int64_t level_price = active[i];
-            size_t idx = (side == Side::BID) ? find_bid_idx(level_price) : find_ask_idx(level_price);
-            if (idx == (size_t)-1) continue;
-            auto* q = (side == Side::BID) ? bids_levels_[idx].q : asks_levels_[idx].q;
+            auto& map = (side == Side::BID) ? bids_levels_map_ : asks_levels_map_;
+            auto it = map.find(level_price);
+            if (it == map.end()) continue;
+            auto* q = it->second.q;
             if (!q) continue;
             if (q->live_count() > 0) continue;
             release_queue(q);
+            map.erase(it);
             if (side == Side::BID) {
-                bids_levels_[idx].q = nullptr;
-                bids_levels_[idx].state = SlotState::TOMBSTONE;
                 remove_active_bid(level_price);
             } else {
-                asks_levels_[idx].q = nullptr;
-                asks_levels_[idx].state = SlotState::TOMBSTONE;
                 remove_active_ask(level_price);
             }
             return;
@@ -502,9 +407,11 @@ private:
             if (active_bids_[i] == price) return;
             if (active_bids_[i] < price) {
                 if (active_bids_.full()) return;
-                std::memmove(&active_bids_[i + 1], &active_bids_[i], (active_bids_.size() - i) * sizeof(int64_t));
-                active_bids_[i] = price;
                 active_bids_.sz++;
+                for (size_t k = active_bids_.sz - 1; k > i; --k) {
+                    active_bids_[k] = active_bids_[k - 1];
+                }
+                active_bids_[i] = price;
                 return;
             }
         }
@@ -515,9 +422,11 @@ private:
             if (active_asks_[i] == price) return;
             if (active_asks_[i] > price) {
                 if (active_asks_.full()) return;
-                std::memmove(&active_asks_[i + 1], &active_asks_[i], (active_asks_.size() - i) * sizeof(int64_t));
-                active_asks_[i] = price;
                 active_asks_.sz++;
+                for (size_t k = active_asks_.sz - 1; k > i; --k) {
+                    active_asks_[k] = active_asks_[k - 1];
+                }
+                active_asks_[i] = price;
                 return;
             }
         }
@@ -526,7 +435,9 @@ private:
     void remove_active_bid(int64_t price) noexcept {
         for (size_t i = 0; i < active_bids_.size(); ++i) {
             if (active_bids_[i] == price) {
-                std::memmove(&active_bids_[i], &active_bids_[i + 1], (active_bids_.size() - i - 1) * sizeof(int64_t));
+                for (size_t k = i; k + 1 < active_bids_.size(); ++k) {
+                    active_bids_[k] = active_bids_[k + 1];
+                }
                 active_bids_.sz--;
                 return;
             }
@@ -535,7 +446,9 @@ private:
     void remove_active_ask(int64_t price) noexcept {
         for (size_t i = 0; i < active_asks_.size(); ++i) {
             if (active_asks_[i] == price) {
-                std::memmove(&active_asks_[i], &active_asks_[i + 1], (active_asks_.size() - i - 1) * sizeof(int64_t));
+                for (size_t k = i; k + 1 < active_asks_.size(); ++k) {
+                    active_asks_[k] = active_asks_[k + 1];
+                }
                 active_asks_.sz--;
                 return;
             }
@@ -543,10 +456,11 @@ private:
     }
 
     Order* find_order(uint64_t order_id, int64_t price, Side side) noexcept {
+        auto& map = (side == Side::BID) ? bids_levels_map_ : asks_levels_map_;
         if (price != 0) {
-            size_t idx = (side == Side::BID) ? find_bid_idx(price) : find_ask_idx(price);
-            if (idx != (size_t)-1) {
-                auto* q = (side == Side::BID) ? bids_levels_[idx].q : asks_levels_[idx].q;
+            auto it = map.find(price);
+            if (it != map.end()) {
+                auto* q = it->second.q;
                 if (q) {
                     if (Order* e = q->find(order_id)) return e;
                 }
@@ -554,9 +468,9 @@ private:
         }
         auto& active = (side == Side::BID) ? active_bids_ : active_asks_;
         for (size_t i = 0; i < active.size(); ++i) {
-            size_t idx = (side == Side::BID) ? find_bid_idx(active[i]) : find_ask_idx(active[i]);
-            if (idx == (size_t)-1) continue;
-            auto* q = (side == Side::BID) ? bids_levels_[idx].q : asks_levels_[idx].q;
+            auto it = map.find(active[i]);
+            if (it == map.end()) continue;
+            auto* q = it->second.q;
             if (!q) continue;
             if (Order* e = q->find(order_id)) return e;
         }
@@ -610,8 +524,9 @@ private:
     template <bool RestingIsBid>
     int64_t level_liquidity(int64_t price, const Order& aggressor) const noexcept {
         int64_t sum = 0;
-        size_t idx = RestingIsBid ? find_bid_idx(price) : find_ask_idx(price);
-        auto* q = (idx != (size_t)-1) ? (RestingIsBid ? bids_levels_[idx].q : asks_levels_[idx].q) : nullptr;
+        auto& map = RestingIsBid ? bids_levels_map_ : asks_levels_map_;
+        auto it = map.find(price);
+        auto* q = (it != map.end()) ? it->second.q : nullptr;
         if (!q) return 0;
         for (size_t j = q->head; j < q->tail; ++j) {
             const auto& e = q->entries[j & (256 - 1)];
@@ -625,7 +540,7 @@ private:
     template <bool IsBid>
     bool match_against_side(Order& order, FixedVector<Trade, 64>& trades) noexcept {
         auto& active_levels = IsBid ? active_asks_ : active_bids_;
-        auto& levels = IsBid ? asks_levels_ : bids_levels_;
+        auto& levels = IsBid ? asks_levels_map_ : bids_levels_map_;
 
         for (size_t i = 0; i < active_levels.size() && order.qty > 0;) {
             if (trades.full()) break;
@@ -643,8 +558,8 @@ private:
                 return false;
             }
 
-            size_t idx = IsBid ? find_ask_idx(price) : find_bid_idx(price);
-            auto* q = (idx != (size_t)-1) ? levels[idx].q : nullptr;
+            auto it = levels.find(price);
+            auto* q = (it != levels.end()) ? it->second.q : nullptr;
             if (!q) {
                 if (IsBid) remove_active_ask(price); else remove_active_bid(price);
                 continue;
@@ -710,8 +625,8 @@ private:
     }
 
     uint32_t   instrument_id_;
-    Level      bids_levels_[MAX_LEVELS];
-    Level      asks_levels_[MAX_LEVELS];
+    robin_hood::unordered_flat_map<int64_t, Level> bids_levels_map_;
+    robin_hood::unordered_flat_map<int64_t, Level> asks_levels_map_;
     std::vector<OrderQueue<256>*> allocated_queues_;
     FixedVector<int64_t, 1024> active_bids_;
     FixedVector<int64_t, 1024> active_asks_;

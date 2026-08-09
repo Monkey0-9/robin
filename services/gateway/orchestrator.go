@@ -163,6 +163,28 @@ func (c *MatchingEngineClient) HealthCheck() bool {
 func (c *MatchingEngineClient) IsEnabled() bool   { c.mu.Lock(); defer c.mu.Unlock(); return c.enabled }
 func (c *MatchingEngineClient) LastError() string { c.mu.Lock(); defer c.mu.Unlock(); return c.lastErr }
 
+// engineHost returns the host the gateway uses to reach the C++ matching
+// engine's risk-gate/entry port, which can be overridden for containerized
+// deployments (docker-compose passes the risk-analytics service name).
+func engineHost() string {
+	if h := os.Getenv("MATCHING_ENGINE_HOST"); h != "" {
+		return h
+	}
+	return "127.0.0.1"
+}
+
+// enginePort returns the TCP port orders are submitted to. The C++ matching
+// engine's risk-gate entry defaults to 9092 (PortRiskHealth) unless overridden
+// via env; the risk daemon validates then forwards to the engine on 9091.
+func enginePort() int {
+	if p := os.Getenv("MATCHING_ENGINE_PORT"); p != "" {
+		if n, err := strconv.Atoi(p); err == nil && n > 0 && n < 65536 {
+			return n
+		}
+	}
+	return PortRiskHealth
+}
+
 // OrderResponse from the matching engine
 type MatchingEngineResponse struct {
 	OrderID      uint64 `json:"order_id"`
@@ -416,7 +438,10 @@ func NewOrchestrator() *Orchestrator {
 		shutdownCh:  make(chan struct{}),
 		logger:      logger,
 		wsHub:       wsHub,
-		matchClient: NewMatchingEngineClient("127.0.0.1", PortRiskHealth),
+		matchClient: NewMatchingEngineClient(
+			engineHost(),
+			enginePort(),
+		),
 		encryption:  enc,
 	}
 	orch.loadConfig()

@@ -4,7 +4,9 @@ import time
 import os
 
 class ShmBridge:
-    def __init__(self, filename="robin_ai_oms.shm", capacity=1024):
+    def __init__(self, filename=None, capacity=1024):
+        if filename is None:
+            filename = os.getenv("SHM_INGEST_PATH", "robin_ingest_risk.shm")
         self.filename = filename
         self.capacity = capacity
         # 192 bytes for header, 64 bytes per message
