@@ -78,7 +78,17 @@ public:
         for (auto& book : books_) book = nullptr;
     }
 
-    ~MatchingEngine() noexcept { stop(); }
+    ~MatchingEngine() noexcept {
+        stop();
+        // Destroy placement-new'd OrderBooks so their internal allocations
+        // (tracked queues, std::vector) are released.
+        for (auto& book : books_) {
+            if (book) {
+                book->~OrderBook();
+                book = nullptr;
+            }
+        }
+    }
 
     bool init(uint32_t numa_node = 0, int cpu_core = 2) noexcept {
         numa_node_ = numa_node;
@@ -152,6 +162,18 @@ private:
                 if (unlikely(incoming.type == OrderType::CANCEL)) {
                     if (book->cancel_order(incoming.id, incoming.price, incoming.side)) {
                         stats_.orders_cancelled++;
+                    }
+                    continue;
+                }
+                if (unlikely(incoming.type == OrderType::REPLACE)) {
+                    FixedVector<Trade, 64> repl_trades;
+                    if (book->replace_order(incoming, repl_trades)) {
+                        stats_.orders_submitted++;
+                        stats_.trades_executed += repl_trades.size();
+                        for (size_t i = 0; i < repl_trades.size(); ++i)
+                            outbound_queue_.push(repl_trades[i]);
+                    } else {
+                        stats_.orders_rejected++;
                     }
                     continue;
                 }

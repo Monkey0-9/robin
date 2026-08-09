@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -59,8 +60,14 @@ func main() {
 	initPositionManager()
 
 	// Initialize tick logger for flat-file persistence
-	if err := InitTickLogger("c:\\Robin\\kdb_storage"); err != nil {
-		logger.Error("Failed to initialize tick logger", "error", err)
+	kdbDir := os.Getenv("ROBIN_DATA_DIR")
+	if kdbDir == "" {
+		kdbDir = filepath.Join(".", "kdb_storage")
+	} else {
+		kdbDir = filepath.Join(kdbDir, "kdb_storage")
+	}
+	if err := InitTickLogger(kdbDir); err != nil {
+		logger.Error("Failed to initialize tick logger", "error", err, "path", kdbDir)
 	}
 
 	orch.StartHealthProbes(ctx, 5*time.Second)

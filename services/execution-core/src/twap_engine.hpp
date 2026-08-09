@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <vector>
+#include "order_state.hpp"
 #include "order_book.hpp"
 
 namespace quantum {
@@ -32,7 +33,6 @@ public:
 
 private:
     std::vector<TWAPOrder> active_twaps_;
-    uint64_t order_id_counter_;
 };
 
 } // namespace execution

@@ -48,3 +48,4 @@ config/keys/
 data/
 backtest_output.txt
 kdb_storage/
+build_win2/

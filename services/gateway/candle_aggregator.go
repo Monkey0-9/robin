@@ -67,8 +67,19 @@ func (a *candleAccumulator) AddTick(symbol string, price, volume float64, ts tim
 
 		cur := a.current[k]
 		if cur == nil || cur.Time != barStart {
-			// Close out the previous bar
+			// Close out the previous bar, gap-filling any missing periods
+			// between it and the new bar with empty candles so the series has
+			// no time holes (charts rely on contiguous bars).
 			if cur != nil {
+				for t := cur.Time + periodSec; t < barStart; t += periodSec {
+					empty := &CandleBar{Time: t, Open: cur.Close, High: cur.Close, Low: cur.Close, Close: cur.Close, Volume: 0}
+					bars := a.bars[k]
+					bars = append(bars, empty)
+					if len(bars) > a.maxBars {
+						bars = bars[len(bars)-a.maxBars:]
+					}
+					a.bars[k] = bars
+				}
 				bars := a.bars[k]
 				bars = append(bars, cur)
 				if len(bars) > a.maxBars {
@@ -133,7 +144,7 @@ func (a *candleAccumulator) GetCandles(symbol, resolution string, count int) []C
 	}
 	result = deduped
 
-	if len(result) > count {
+	if count > 0 && len(result) > count {
 		result = result[len(result)-count:]
 	}
 	return result

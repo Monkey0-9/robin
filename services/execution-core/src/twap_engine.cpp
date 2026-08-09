@@ -4,7 +4,7 @@
 namespace quantum {
 namespace execution {
 
-TWAPEngine::TWAPEngine() : order_id_counter_(1000000) {}
+TWAPEngine::TWAPEngine() = default;
 
 void TWAPEngine::add_twap_order(const TWAPOrder& order) {
     active_twaps_.push_back(order);
@@ -24,7 +24,7 @@ std::vector<Order> TWAPEngine::tick(uint64_t current_time_ns) {
             uint64_t slice = std::min(it->slice_qty, remaining_qty);
             
             Order child_order;
-            child_order.id = ++order_id_counter_;
+            child_order.id = OrderIDGenerator::next();
             child_order.instrument_id = it->instrument_id;
             child_order.price = 0; // Market order for TWAP slice
             child_order.qty = slice;

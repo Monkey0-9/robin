@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -78,7 +78,9 @@ func (c *MatchingEngineClient) Connect() error {
 
 // ioLoop is a dedicated goroutine that handles all I/O on the connection.
 // This prevents head-of-line blocking by keeping send/receive off the caller's goroutine.
+// Deadlines bound the read/write so a hung or silent engine cannot block callers forever.
 func (c *MatchingEngineClient) ioLoop() {
+	const ioTimeout = 2 * time.Second
 	for cmd := range c.cmdCh {
 		c.mu.Lock()
 		if c.conn == nil {
@@ -87,6 +89,7 @@ func (c *MatchingEngineClient) ioLoop() {
 			continue
 		}
 
+		c.conn.SetWriteDeadline(time.Now().Add(ioTimeout))
 		if _, err := fmt.Fprint(c.conn, cmd.orderJSON+"\n"); err != nil {
 			c.enabled = false
 			c.lastErr = err.Error()
@@ -96,6 +99,7 @@ func (c *MatchingEngineClient) ioLoop() {
 			cmd.resp <- engineResp{err: err}
 			continue
 		}
+		c.conn.SetReadDeadline(time.Now().Add(ioTimeout))
 		resp, err := c.reader.ReadString('\n')
 		if err != nil {
 			c.enabled = false
@@ -106,23 +110,54 @@ func (c *MatchingEngineClient) ioLoop() {
 			cmd.resp <- engineResp{err: err}
 			continue
 		}
+		c.conn.SetReadDeadline(time.Time{})
 		c.mu.Unlock()
 		cmd.resp <- engineResp{data: resp}
 	}
 }
 
 func (c *MatchingEngineClient) SendOrderJSON(orderJSON string) (string, error) {
+	// Fail fast instead of queueing a command that no ioLoop will ever drain.
+	c.mu.Lock()
+	if !c.enabled || c.conn == nil {
+		c.mu.Unlock()
+		return "", fmt.Errorf("matching engine not connected")
+	}
+	c.mu.Unlock()
+
 	respCh := make(chan engineResp, 1)
-	c.cmdCh <- engineCmd{orderJSON: orderJSON, resp: respCh}
-	r := <-respCh
-	return r.data, r.err
+	select {
+	case c.cmdCh <- engineCmd{orderJSON: orderJSON, resp: respCh}:
+	case <-time.After(500 * time.Millisecond):
+		return "", fmt.Errorf("matching engine command queue full")
+	}
+	select {
+	case r := <-respCh:
+		return r.data, r.err
+	case <-time.After(5 * time.Second):
+		return "", fmt.Errorf("matching engine response timeout")
+	}
 }
 
 func (c *MatchingEngineClient) HealthCheck() bool {
 	respCh := make(chan engineResp, 1)
-	c.cmdCh <- engineCmd{orderJSON: "health", resp: respCh}
-	r := <-respCh
-	return r.err == nil && strings.Contains(r.data, "ok")
+	c.mu.Lock()
+	if !c.enabled || c.conn == nil {
+		c.mu.Unlock()
+		return false
+	}
+	c.mu.Unlock()
+	select {
+	case c.cmdCh <- engineCmd{orderJSON: "health", resp: respCh}:
+	case <-time.After(500 * time.Millisecond):
+		return false
+	}
+	select {
+	case r := <-respCh:
+		return r.err == nil && strings.Contains(r.data, "ok")
+	case <-time.After(5 * time.Second):
+		return false
+	}
 }
 
 func (c *MatchingEngineClient) IsEnabled() bool   { c.mu.Lock(); defer c.mu.Unlock(); return c.enabled }
@@ -228,42 +263,94 @@ func (o *OrderRequest) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	parseVal := func(v interface{}) int64 {
-		if v == nil {
-			return 0
-		}
+	// Parse a fixed-point (1e8) value from an integer or dollar-denominated
+	// decimal without float rounding error.
+	//
+	// Contract: a numeric value written as an integer ("150", 150) is already
+	// fixed-point; a value written with a decimal point or exponent ("150.0",
+	// "1.5e2") is dollars and is scaled by 1e8. Both forms are converted via
+	// exact decimal arithmetic so "150" and "150.0" resolve to the SAME price
+	// instead of silently differing by 1e8.
+	parseVal := func(v interface{}) (int64, error) {
+		var str string
 		switch val := v.(type) {
 		case json.Number:
-			str := val.String()
-			if strings.Contains(str, ".") || strings.Contains(str, "e") || strings.Contains(str, "E") {
-				f, _ := val.Float64()
-				return int64(math.Round(f * 1e8))
-			}
-			i, _ := val.Int64()
-			return i
+			str = val.String()
 		case string:
-			if strings.Contains(val, ".") || strings.Contains(val, "e") || strings.Contains(val, "E") {
-				f, _ := strconv.ParseFloat(val, 64)
-				return int64(math.Round(f * 1e8))
+			str = strings.TrimSpace(val)
+		default:
+			if v == nil {
+				return 0, nil
 			}
-			i, _ := strconv.ParseInt(val, 10, 64)
-			return i
+			return 0, fmt.Errorf("price/qty must be a number or numeric string")
 		}
-		return 0
+		if str == "" {
+			return 0, nil
+		}
+		if !strings.ContainsAny(str, ".eE") {
+			return strconv.ParseInt(str, 10, 64)
+		}
+		rat, ok := new(big.Rat).SetString(str)
+		if !ok {
+			return 0, fmt.Errorf("invalid numeric value %q", str)
+		}
+		scaled := rat.Mul(rat, big.NewRat(1e8, 1))
+		if !scaled.IsInt() {
+			// More than 8 decimal places would be truncated.
+			return 0, fmt.Errorf("price/qty %q has more than 8 decimal places", str)
+		}
+		num := scaled.Num()
+		if !num.IsInt64() {
+			return 0, fmt.Errorf("price/qty %q out of range", str)
+		}
+		return num.Int64(), nil
 	}
 
-	o.Price = parseVal(aux.Price)
-	o.Qty = parseVal(aux.Qty)
+	var err error
+	if o.Price, err = parseVal(aux.Price); err != nil {
+		return fmt.Errorf("price: %w", err)
+	}
+	if o.Qty, err = parseVal(aux.Qty); err != nil {
+		return fmt.Errorf("qty: %w", err)
+	}
 	return nil
 }
 
-func getInstrumentID(symbol string) uint64 {
-	symbolMap := map[string]uint64{
+// symbolMap is a runtime-updatable symbol → instrument id mapping. The map is
+// consulted on every order intake, so it is guarded by an RWMutex and never
+// rebuilt per call. New instruments can be registered at runtime without a
+// code change or restart.
+var (
+	symbolMapMu sync.RWMutex
+	symbolMap   = map[string]uint64{
 		"BTC/USD": 1, "ETH/USD": 2, "AAPL": 3, "EUR/USD": 4, "SOL/USD": 5,
 		"MSFT": 6, "TSLA": 7, "NVDA": 8, "GOOGL": 9, "AMZN": 10,
 		"SPY": 11, "QQQ": 12, "IWM": 13,
 	}
+)
+
+// getInstrumentID returns the instrument id for a symbol, or 0 if unknown.
+func getInstrumentID(symbol string) uint64 {
+	symbolMapMu.RLock()
+	defer symbolMapMu.RUnlock()
 	return symbolMap[symbol]
+}
+
+// registerSymbol adds or updates a symbol→id mapping at runtime. Returns false
+// if the id is already bound to a different symbol.
+func registerSymbol(symbol string, id uint64) bool {
+	symbolMapMu.Lock()
+	defer symbolMapMu.Unlock()
+	if existing, ok := symbolMap[symbol]; ok && existing == id {
+		return true
+	}
+	for sym, sid := range symbolMap {
+		if sid == id && sym != symbol {
+			return false
+		}
+	}
+	symbolMap[symbol] = id
+	return true
 }
 
 type Orchestrator struct {
@@ -621,13 +708,20 @@ func (o *Orchestrator) HotReloadConfig(jsonConfig []byte) error {
 		return fmt.Errorf("invalid max_position_limit: %d (must be >= 0)", newConfig.MaxPositionLimit)
 	}
 
+	// Apply new config to memory, then persist to disk. persistConfig takes an
+	// RLock, so it must NOT be called while holding the write lock (sync.RWMutex
+	// is not reentrant — calling it inside the lock self-deadlocks).
 	o.configMutex.Lock()
 	old := o.config
 	o.config = newConfig
 	o.configMutex.Unlock()
 
 	if err := o.persistConfig(); err != nil {
-		o.logger.Error("failed to persist config", "error", err)
+		o.configMutex.Lock()
+		o.config = old // Roll back in-memory state on persistence failure
+		o.configMutex.Unlock()
+		o.logger.Error("failed to persist config, rolled back in-memory state", "error", err)
+		return fmt.Errorf("failed to persist config: %w", err)
 	}
 
 	o.logger.Info("config hot-reloaded",
@@ -785,6 +879,18 @@ func requestIDMiddleware(next http.Handler) http.Handler {
 // jwtAuthMiddleware validates incoming JWT tokens in the Authorization header or httpOnly cookie.
 func jwtAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Defensive guard: if JWT auth was never initialized, fail closed with a
+		// 503 rather than panic on a nil key inside verify (audit Bug #3).
+		jwtAuth.mu.RLock()
+		configured := jwtAuth.PublicKey != nil
+		jwtAuth.mu.RUnlock()
+		if !configured {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]string{"error": "auth not configured"})
+			return
+		}
+
 		var tokenStr string
 		authHeader := r.Header.Get("Authorization")
 		if authHeader != "" && strings.HasPrefix(authHeader, "Bearer ") {
@@ -911,6 +1017,28 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		json.NewEncoder(w).Encode(map[string]string{"status": "reloaded"})
 	}))))).Methods("POST", "OPTIONS")
 
+	// POST /api/instruments — register a symbol→instrument-id mapping at runtime
+	r.Handle("/api/instruments", jwtAuthMiddleware(rbacMiddleware("admin")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			Symbol string `json:"symbol"`
+			ID     uint64 `json:"id"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil || body.Symbol == "" || body.ID == 0 {
+			http.Error(w, `{"error":"symbol and id are required"}`, http.StatusBadRequest)
+			return
+		}
+		if !registerSymbol(body.Symbol, body.ID) {
+			http.Error(w, `{"error":"id already bound to a different symbol"}`, http.StatusConflict)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "registered",
+			"symbol": body.Symbol,
+			"id":     body.ID,
+		})
+	})))).Methods("POST", "OPTIONS")
+
 	r.Handle("/api/historical", jwtAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		symbol := req.URL.Query().Get("symbol")
 		if symbol == "" {
@@ -946,32 +1074,32 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 			return
 		}
-		// Immediately confirm cancel (in production this would wait for exchange ack)
-		go func() {
-			if o.matchClient != nil && o.matchClient.IsEnabled() {
-				instID := getInstrumentID(order.Symbol)
-				sideStr := "BID"
-				if order.Side == "SELL" || order.Side == "ASK" {
-					sideStr = "ASK"
-				}
-				matchJSON := fmt.Sprintf(
-					`{"cl_ord_id":"%s","id":%d,"instrument_id":%d,"price":%d,"qty":%d,"side":"%s","type":"CANCEL"}`,
-					clOrdID, order.OrderID, instID, int64(order.Price*100000000), int64(order.LeavesQty*100000000), sideStr,
-				)
-				o.matchClient.SendOrderJSON(matchJSON)
-			}
-			time.Sleep(200 * time.Millisecond)
-			globalOrderSM.ConfirmCancel(clOrdID)
-			if o.db != nil {
-				o.db.Exec("UPDATE orders SET status = 'CANCELED', updated_at_ns = $1 WHERE cl_order_id = $2",
-					time.Now().UnixNano(), clOrdID)
-			}
-		}()
+		// Propagate the cancel to the matching engine and only confirm it once
+		// the engine acknowledges. Never fake a cancellation with a blind delay.
+		ack, cancelErr := o.propagateCancel(order)
+		if cancelErr != nil {
+			o.logger.Error("cancel not acknowledged by engine", "cl_ord_id", clOrdID, "error", cancelErr)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status":    string(order.State),
+				"cl_ord_id": clOrdID,
+				"error":     cancelErr.Error(),
+				"message":   "cancel pending; matching engine did not acknowledge",
+			})
+			return
+		}
+		globalOrderSM.ConfirmCancel(clOrdID)
+		if o.db != nil {
+			o.db.Exec("UPDATE orders SET status = 'CANCELED', updated_at_ns = $1 WHERE cl_order_id = $2",
+				time.Now().UnixNano(), clOrdID)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":    string(order.State),
-			"cl_ord_id": clOrdID,
-			"message":   "Cancel submitted",
+			"status":     "CANCELED",
+			"cl_ord_id":  clOrdID,
+			"message":    "Cancel confirmed by matching engine",
+			"engine_ack": ack,
 		})
 	})))).Methods("DELETE", "OPTIONS")
 
@@ -989,27 +1117,32 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 			return
 		}
-		go func() {
-			if o.matchClient != nil && o.matchClient.IsEnabled() {
-				instID := getInstrumentID(order.Symbol)
-				sideStr := "BID"
-				if order.Side == "SELL" || order.Side == "ASK" {
-					sideStr = "ASK"
-				}
-				matchJSON := fmt.Sprintf(
-					`{"cl_ord_id":"%s","id":%d,"instrument_id":%d,"price":%d,"qty":%d,"side":"%s","type":"CANCEL"}`,
-					reqBody.ClOrdID, order.OrderID, instID, int64(order.Price*100000000), int64(order.LeavesQty*100000000), sideStr,
-				)
-				o.matchClient.SendOrderJSON(matchJSON)
-			}
-			time.Sleep(200 * time.Millisecond)
-			globalOrderSM.ConfirmCancel(reqBody.ClOrdID)
-		}()
+		// Propagate the cancel to the matching engine and only confirm once the
+		// engine acknowledges.
+		ack, cancelErr := o.propagateCancel(order)
+		if cancelErr != nil {
+			o.logger.Error("cancel not acknowledged by engine", "cl_ord_id", reqBody.ClOrdID, "error", cancelErr)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status":    string(order.State),
+				"cl_ord_id": reqBody.ClOrdID,
+				"error":     cancelErr.Error(),
+				"message":   "cancel pending; matching engine did not acknowledge",
+			})
+			return
+		}
+		globalOrderSM.ConfirmCancel(reqBody.ClOrdID)
+		if o.db != nil {
+			o.db.Exec("UPDATE orders SET status = 'CANCELED', updated_at_ns = $1 WHERE cl_order_id = $2",
+				time.Now().UnixNano(), reqBody.ClOrdID)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":    string(order.State),
-			"cl_ord_id": reqBody.ClOrdID,
-			"message":   "Cancel submitted",
+			"status":     "CANCELED",
+			"cl_ord_id":  reqBody.ClOrdID,
+			"message":    "Cancel confirmed by matching engine",
+			"engine_ack": ack,
 		})
 	})))).Methods("POST", "OPTIONS")
 
@@ -1091,6 +1224,9 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		routing := RouteOrder(orderReq.Symbol, orderReq.Side, float64(orderReq.Price)/100000000.0, prefExchange)
 
 		fillPrice := routing.FillPrice
+		fillQty := 0.0
+		reportedFillPrice := 0.0
+		reportedFillQty := 0.0
 		routedExchange := routing.RoutedExchange
 		priceImprovement := routing.PriceImprovementBps
 		exchangesSearched := routing.ExchangesSearched
@@ -1119,7 +1255,6 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		}
 
 		// Synchronous database persistence (Institutional fix: no fire-and-forget)
-		var orderDBID int64
 		if o.db != nil {
 			sideInt := 0
 			if orderReq.Side == "SELL" {
@@ -1145,9 +1280,18 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 				http.Error(w, `{"error":"DATABASE_ERROR"}`, http.StatusInternalServerError)
 				return
 			}
-			orderDBID, _ = res.LastInsertId()
-			_ = orderDBID // Keep for future use
-			tx.Commit()
+			orderDBID, idErr := res.LastInsertId()
+			if idErr != nil {
+				o.logger.Warn("order insert had no row id", "cl_ord_id", orderReq.ClientOrdID, "error", idErr)
+			} else if orderDBID <= 0 {
+				o.logger.Warn("order insert returned non-positive row id", "cl_ord_id", orderReq.ClientOrdID)
+			}
+			if err := tx.Commit(); err != nil {
+				tx.Rollback()
+				o.logger.Error("failed to commit order transaction", "error", err)
+				http.Error(w, `{"error":"DATABASE_ERROR"}`, http.StatusInternalServerError)
+				return
+			}
 		}
 
 		if o.matchClient == nil || !o.matchClient.IsEnabled() {
@@ -1161,67 +1305,80 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			return
 		}
 
-		// Asynchronous routing to matching engine / risk
-		go func() {
-			if o.matchClient != nil && o.matchClient.IsEnabled() {
-				matchJSON := fmt.Sprintf(
-					`{"cl_ord_id":"%s","id":%d,"instrument_id":%d,"price":%d,"qty":%d,"side":"%s","type":"%s"}`,
-					orderReq.ClientOrdID, orderID, instID, int64(fillPrice*100000000), orderReq.Qty, side, orderType,
-				)
-				resp, err := o.matchClient.SendOrderJSON(matchJSON)
-				if err == nil {
-					var meResp MatchingEngineResponse
-					if json.Unmarshal([]byte(resp), &meResp) == nil {
-						finalStatus := "REJECTED"
-						if meResp.Success {
-							finalStatus = meResp.Status
-							if finalStatus == "" {
-								finalStatus = "FILLED"
-							}
-						} else if meResp.Error == "engine offline" {
-							finalStatus = "REJECTED"
+		// Synchronous submission to the matching engine: a 200 response must
+		// never precede the order actually reaching the engine (audit Bug #7).
+		// The client only sees a success once the engine has acknowledged the
+		// order, matching the cancel-propagation semantics.
+		if o.matchClient != nil && o.matchClient.IsEnabled() {
+			matchJSON := fmt.Sprintf(
+				`{"cl_ord_id":"%s","id":%d,"instrument_id":%d,"price":%d,"qty":%d,"side":"%s","type":"%s"}`,
+				orderReq.ClientOrdID, orderID, instID, int64(fillPrice*100000000), orderReq.Qty, side, orderType,
+			)
+			resp, err := o.matchClient.SendOrderJSON(matchJSON)
+			if err != nil {
+				o.logger.Error("failed to submit order to matching engine", "cl_ord_id", orderReq.ClientOrdID, "error", err)
+				engineError = err.Error()
+			} else {
+				var meResp MatchingEngineResponse
+				if json.Unmarshal([]byte(resp), &meResp) == nil {
+					finalStatus := "REJECTED"
+					if meResp.Success {
+						finalStatus = meResp.Status
+						if finalStatus == "" {
+							finalStatus = "FILLED"
 						}
+					} else if meResp.Error == "engine offline" {
+						finalStatus = "REJECTED"
+					}
+					status = finalStatus
 
-						// Update state
-						if o.db != nil {
-							now := time.Now().UnixNano()
-							o.db.Exec(`UPDATE orders SET status = $1, updated_at_ns = $2 WHERE cl_order_id = $3`, finalStatus, now, orderReq.ClientOrdID)
-						}
+					if finalStatus == "FILLED" && meResp.FillPrice > 0 {
+						fillPrice = float64(meResp.FillPrice) / 100000000.0
+						fillQty = float64(meResp.FillQty) / 100000000.0
+						reportedFillPrice = fillPrice
+						reportedFillQty = fillQty
+					}
 
-						// Broadcast update
-						o.wsHub.BroadcastJSON(map[string]interface{}{
-							"type": "order_update",
-							"data": map[string]interface{}{
-								"cl_ord_id":  orderReq.ClientOrdID,
-								"status":     finalStatus,
-								"fill_price": float64(meResp.FillPrice) / 100000000.0,
-								"fill_qty":   float64(meResp.FillQty) / 100000000.0,
-							},
+					// Update state
+					if o.db != nil {
+						now := time.Now().UnixNano()
+						o.db.Exec(`UPDATE orders SET status = $1, updated_at_ns = $2 WHERE cl_order_id = $3`, finalStatus, now, orderReq.ClientOrdID)
+					}
+
+					// Broadcast update
+					o.wsHub.BroadcastJSON(map[string]interface{}{
+						"type": "order_update",
+						"data": map[string]interface{}{
+							"cl_ord_id":  orderReq.ClientOrdID,
+							"status":     finalStatus,
+							"fill_price": float64(meResp.FillPrice) / 100000000.0,
+							"fill_qty":   float64(meResp.FillQty) / 100000000.0,
+						},
+					})
+
+					if finalStatus == "FILLED" {
+						o.RecordTrade()
+						o.wsHub.BroadcastTrade(TradePayload{
+							ID:        execID,
+							Symbol:    orderReq.Symbol,
+							Side:      orderReq.Side,
+							Qty:       float64(meResp.FillQty) / 100000000.0,
+							Price:     float64(meResp.FillPrice) / 100000000.0,
+							Timestamp: time.Now().UnixMilli(),
 						})
-
-						if finalStatus == "FILLED" {
-							o.RecordTrade()
-							o.wsHub.BroadcastTrade(TradePayload{
-								ID:        execID,
-								Symbol:    orderReq.Symbol,
-								Side:      orderReq.Side,
-								Qty:       float64(meResp.FillQty) / 100000000.0,
-								Price:     float64(meResp.FillPrice) / 100000000.0,
-								Timestamp: time.Now().UnixMilli(),
-							})
-							if globalPositionManager != nil {
-								globalPositionManager.OnFill(
-									execID, orderReq.Symbol, orderReq.Side,
-									float64(meResp.FillQty)/100000000.0, float64(meResp.FillPrice)/100000000.0,
-								)
-							}
+						if globalPositionManager != nil {
+							globalPositionManager.OnFill(
+								execID, orderReq.Symbol, orderReq.Side,
+								float64(meResp.FillQty)/100000000.0, float64(meResp.FillPrice)/100000000.0,
+							)
 						}
 					}
+				} else {
+					engineError = "invalid matching engine response"
+					o.logger.Error("unparseable matching engine response", "resp", resp)
 				}
-			} else {
-				o.logger.Warn("Matching engine disabled but order routed asynchronously")
 			}
-		}()
+		}
 
 		var alpacaOrderID string
 		var alpacaStatus string
@@ -1244,6 +1401,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		latencyNs = uint64(time.Since(start).Nanoseconds())
 		w.WriteHeader(http.StatusOK)
 		respPayload := map[string]interface{}{
 			"status":                status,
@@ -1252,7 +1410,8 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 			"symbol":                orderReq.Symbol,
 			"side":                  orderReq.Side,
 			"qty":                   float64(orderReq.Qty) / 100000000.0,
-			"fill_price":            0.0,
+			"fill_price":            reportedFillPrice,
+			"fill_qty":              reportedFillQty,
 			"latency_ns":            latencyNs,
 			"engine":                true,
 			"routed_exchange":       routedExchange,
@@ -1941,6 +2100,37 @@ func securityHeadersMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// propagateCancel forwards a cancel request to the C++ matching engine and
+// waits for its acknowledgment. It returns an error if the engine is
+// unavailable, does not respond, or rejects the cancel — callers must NOT
+// confirm the cancellation in those cases.
+func (o *Orchestrator) propagateCancel(order *ManagedOrder) (string, error) {
+	if o.matchClient == nil || !o.matchClient.IsEnabled() {
+		return "", fmt.Errorf("matching engine unavailable")
+	}
+	instID := getInstrumentID(order.Symbol)
+	sideStr := "BID"
+	if order.Side == "SELL" || order.Side == "ASK" {
+		sideStr = "ASK"
+	}
+	matchJSON := fmt.Sprintf(
+		`{"cl_ord_id":"%s","id":%d,"instrument_id":%d,"price":%d,"qty":%d,"side":"%s","type":"CANCEL"}`,
+		order.ClOrdID, order.OrderID, instID, int64(order.Price*100000000), int64(order.LeavesQty*100000000), sideStr,
+	)
+	resp, err := o.matchClient.SendOrderJSON(matchJSON)
+	if err != nil {
+		return "", err
+	}
+	var meResp MatchingEngineResponse
+	if err := json.Unmarshal([]byte(resp), &meResp); err != nil {
+		return "", fmt.Errorf("malformed engine response: %w", err)
+	}
+	if !meResp.Success && meResp.Status != "CANCELED" {
+		return resp, fmt.Errorf("engine rejected cancel: %s", meResp.Error)
+	}
+	return resp, nil
+}
+
 // SendOrderToAlpaca posts a new order to the Alpaca Paper Trading API
 func (o *Orchestrator) SendOrderToAlpaca(symbol string, qty float64, side string, orderType string, price float64) (string, error) {
 	alpacaEndpoint := os.Getenv("ALPACA_API_ENDPOINT")
@@ -2007,6 +2197,24 @@ func (o *Orchestrator) SendOrderToAlpaca(symbol string, qty float64, side string
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		return "", fmt.Errorf("Alpaca API returned status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	// Validate the order was actually accepted, not just that the HTTP call
+	// succeeded. Alpaca can return 202 with an order that was immediately
+	// rejected or suspended (audit Bug #2).
+	var alpacaOrder struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(bodyBytes, &alpacaOrder); err != nil {
+		return "", fmt.Errorf("Alpaca returned invalid JSON: %v: %s", err, string(bodyBytes))
+	}
+	if alpacaOrder.ID == "" {
+		return "", fmt.Errorf("Alpaca order rejected (no order id): %s", string(bodyBytes))
+	}
+	switch alpacaOrder.Status {
+	case "rejected", "suspended", "expired", "canceled":
+		return "", fmt.Errorf("Alpaca order not accepted, status=%q: %s", alpacaOrder.Status, string(bodyBytes))
 	}
 
 	return string(bodyBytes), nil

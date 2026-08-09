@@ -2,30 +2,198 @@
 @tailwind components;
 @tailwind utilities;
 
+
 @layer base {
   :root {
     --background: #0a0a0c;
     --foreground: #e0e0e0;
-    --bg-void: #050506;
-    --bg-base: #0a0a0c;
-    --bg-panel: #121216;
-    --bg-card: #18181c;
-    --bg-hover: #1e1e24;
-    --border: #26262c;
-    --border-light: #32323a;
-    --text-primary: #e0e0e0;
-    --text-secondary: #a0a0a5;
-    --text-dim: #606066;
+    --bg-void: #050507;
+    --bg-base: #0a0a0d;
+    --bg-panel: #111115;
+    --bg-card: #16161b;
+    --bg-hover: #1c1c23;
+    --bg-hover-light: #232330;
+    --border: #24242c;
+    --border-light: #2e2e3a;
+    --text-primary: #e2e2e8;
+    --text-secondary: #9a9aa5;
+    --text-dim: #5a5a66;
     --accent-blue: #3b82f6;
-    --accent-blue-dim: rgba(59, 130, 246, 0.15);
+    --accent-blue-dim: rgba(59, 130, 246, 0.12);
     --accent-green: #10b981;
-    --accent-green-dim: rgba(16, 185, 129, 0.15);
+    --accent-green-dim: rgba(16, 185, 129, 0.12);
     --accent-red: #ef4444;
-    --accent-red-dim: rgba(239, 68, 68, 0.15);
+    --accent-red-dim: rgba(239, 68, 68, 0.12);
     --accent-amber: #f59e0b;
+    --accent-amber-dim: rgba(245, 158, 11, 0.12);
     --accent-purple: #8b5cf6;
+    --accent-purple-dim: rgba(139, 92, 246, 0.12);
+    --accent-cyan: #06b6d4;
+    --glow-blue: 0 0 20px rgba(59,130,246,0.15);
+    --glow-green: 0 0 20px rgba(16,185,129,0.15);
+    --glow-red: 0 0 20px rgba(239,68,68,0.15);
   }
+
+  html {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
   body {
     @apply bg-void text-primary;
+    font-variant-numeric: tabular-nums;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  /* ── Monospace font for all numeric/data elements ── */
+  .font-mono, code, pre, kbd, samp {
+    font-family: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'SF Mono', monospace;
+    font-feature-settings: 'liga' 0, 'calt' 0;
   }
 }
+
+@layer utilities {
+  /* ── Premium Scrollbar ── */
+  .scrollbar::-webkit-scrollbar { width: 4px; height: 4px; }
+  .scrollbar::-webkit-scrollbar-track { background: var(--bg-panel); }
+  .scrollbar::-webkit-scrollbar-thumb {
+    background: var(--border-light);
+    border-radius: 2px;
+    transition: background 0.2s;
+  }
+  .scrollbar::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+  .scrollbar { scrollbar-width: thin; scrollbar-color: var(--border-light) transparent; }
+
+  /* ── Global scrollbar (subtler than component) ── */
+  ::-webkit-scrollbar { width: 3px; height: 3px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  /* ── Glassmorphism ── */
+  .glass {
+    background: rgba(17, 17, 21, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+
+  /* ── Glow effects ── */
+  .glow-blue  { box-shadow: var(--glow-blue); }
+  .glow-green { box-shadow: var(--glow-green); }
+  .glow-red   { box-shadow: var(--glow-red); }
+
+  /* ── Number flash on update ── */
+  .flash-up   { animation: flashGreen 0.4s ease-out; }
+  .flash-down { animation: flashRed 0.4s ease-out; }
+
+  /* ── ITM/OTM highlight ── */
+  .bg-accent-blue\/8  { background-color: rgba(59,130,246,0.08); }
+  .bg-accent-green\/8 { background-color: rgba(16,185,129,0.08); }
+  .bg-accent-red\/8   { background-color: rgba(239,68,68,0.08); }
+
+  /* ── Panel inner shadow (depth) ── */
+  .panel-inset { box-shadow: inset 0 1px 0 0 rgba(255,255,255,0.04), inset 0 -1px 0 0 rgba(0,0,0,0.2); }
+
+  /* ── Hover-light utility (missing from tailwind config) ── */
+  .hover\:bg-hover-light:hover { background-color: var(--bg-hover-light) !important; }
+}
+
+/* ── Keyframe Animations ─────────────────────────────────────────────── */
+
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes flashGreen {
+  0%   { background-color: rgba(16, 185, 129, 0.25); }
+  100% { background-color: transparent; }
+}
+
+@keyframes flashRed {
+  0%   { background-color: rgba(239, 68, 68, 0.25); }
+  100% { background-color: transparent; }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* ── Animation utility classes ── */
+.animate-toast-in     { animation: toast-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
+.animate-fade-in      { animation: fadeIn 0.2s ease-out forwards; }
+.animate-slide-right  { animation: slideInRight 0.2s ease-out forwards; }
+.animate-pulse-soft   { animation: pulse-soft 2s ease-in-out infinite; }
+.animate-spin-slow    { animation: spin-slow 3s linear infinite; }
+
+/* ── Input and Select Styling ── */
+input[type='number']::-webkit-inner-spin-button,
+input[type='number']::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type='number'] { -moz-appearance: textfield; }
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-light);
+  outline: none;
+}
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent-blue);
+  cursor: pointer;
+  box-shadow: 0 0 4px rgba(59,130,246,0.4);
+  transition: box-shadow 0.2s;
+}
+input[type='range']::-webkit-slider-thumb:hover {
+  box-shadow: 0 0 8px rgba(59,130,246,0.6);
+}
+
+select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23606066' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  padding-right: 24px !important;
+}
+
+/* ── Accessibility ── */
+:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 1px;
+}
+

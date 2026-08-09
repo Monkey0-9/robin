@@ -27,6 +27,7 @@ import Heatmap from './Heatmap';
 import OptionsChain from './OptionsChain';
 import StrategyRoller from './StrategyRoller';
 import GoalsPlanner from './GoalsPlanner';
+import PerformanceAnalytics from './PerformanceAnalytics';
 import {
   Download,
   Activity,
@@ -36,7 +37,8 @@ import {
   LayoutGrid,
   Search,
   ShieldAlert,
-  Layers
+  Layers,
+  BarChart2
 } from 'lucide-react';
 
 export default function Dashboard() {
@@ -52,7 +54,7 @@ export default function Dashboard() {
   const balance = useTerminalStore((state) => state.balance);
   const equity = useTerminalStore((state) => state.equity);
 
-  const [activeTab, setActiveTab] = useState<'execution' | 'portfolio' | 'risk' | 'ai' | 'help' | 'screener' | 'compliance' | 'derivatives'>('execution');
+  const [activeTab, setActiveTab] = useState<'execution' | 'portfolio' | 'risk' | 'ai' | 'help' | 'screener' | 'compliance' | 'derivatives' | 'analytics'>('execution');
   const [rightPanelTab, setRightPanelTab] = useState<'book' | 'sor'>('book');
   const [authChecked, setAuthChecked] = useState(false);
 
@@ -225,6 +227,18 @@ export default function Dashboard() {
             >
               <Layers size={18} />
               <span className="text-[8px] uppercase tracking-wider font-semibold">Options</span>
+            </button>
+
+            {/* Performance Analytics Tab */}
+            <button
+              onClick={() => setActiveTab('analytics')}
+              className={`flex flex-col items-center gap-1 py-2.5 rounded-lg text-text-dim hover:text-text-secondary transition-all w-full ${
+                activeTab === 'analytics' ? 'bg-accent-blue-dim text-accent-blue font-bold border-l-2 border-accent-blue rounded-l-none' : ''
+              }`}
+              title="Performance Analytics"
+            >
+              <BarChart2 size={18} />
+              <span className="text-[8px] uppercase tracking-wider font-semibold">Perf.</span>
             </button>
           </div>
 
@@ -610,6 +624,15 @@ export default function Dashboard() {
                   <StrategyRoller />
                 </ErrorBoundary>
               </div>
+            </div>
+          )}
+
+          {/* TAB 9: PERFORMANCE ANALYTICS */}
+          {activeTab === 'analytics' && (
+            <div className="h-full overflow-hidden">
+              <ErrorBoundary title="Performance Analytics">
+                <PerformanceAnalytics />
+              </ErrorBoundary>
             </div>
           )}
 

@@ -16,6 +16,7 @@ const config: Config = {
         panel: "var(--bg-panel)",
         card: "var(--bg-card)",
         hover: "var(--bg-hover)",
+        "hover-light": "var(--bg-hover-light)",
         border: "var(--border)",
         "border-light": "var(--border-light)",
         primary: "var(--text-primary)",
@@ -28,7 +29,19 @@ const config: Config = {
         "accent-red": "var(--accent-red)",
         "accent-red-dim": "var(--accent-red-dim)",
         "accent-amber": "var(--accent-amber)",
+        "accent-amber-dim": "var(--accent-amber-dim)",
         "accent-purple": "var(--accent-purple)",
+        "accent-purple-dim": "var(--accent-purple-dim)",
+        "accent-cyan": "var(--accent-cyan)",
+      },
+      keyframes: {
+        marquee: {
+          from: { transform: 'translateX(0)' },
+          to: { transform: 'translateX(-50%)' },
+        },
+      },
+      animation: {
+        marquee: 'marquee 50s linear infinite',
       },
     },
   },

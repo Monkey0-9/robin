@@ -91,3 +91,49 @@ func TestRouteOrder_DirectRouting(t *testing.T) {
 		t.Errorf("expected routed exchange to be Euronext Paris, got %s", res2.RoutedExchange)
 	}
 }
+
+func TestNbbo(t *testing.T) {
+	quotes := []ExchangeQuote{
+		{Exchange: "A", Bid: 100.0, Ask: 101.0},
+		{Exchange: "B", Bid: 99.5, Ask: 100.5},
+		{Exchange: "C", Bid: 100.5, Ask: 102.0},
+	}
+	bid, ask := nbbo(quotes)
+	if bid != 100.5 {
+		t.Errorf("expected NBBO bid 100.5, got %f", bid)
+	}
+	if ask != 100.5 {
+		t.Errorf("expected NBBO ask 100.5, got %f", ask)
+	}
+}
+
+func TestNbbo_EmptyQuotes(t *testing.T) {
+	bid, ask := nbbo(nil)
+	if bid != 0 || ask != 0 {
+		t.Errorf("expected zero NBBO for empty quotes, got bid=%f ask=%f", bid, ask)
+	}
+}
+
+func TestRouteOrder_Nbbo(t *testing.T) {
+	midPrice := 64500.0
+
+	buy := RouteOrder("BTC/USD", "BUY", midPrice, "AUTO")
+	if buy.FillPrice != buy.NbboAsk {
+		t.Errorf("expected fill to equal NBBO ask %f, got %f", buy.NbboAsk, buy.FillPrice)
+	}
+	if buy.PriceImprovementBps != 0 {
+		t.Errorf("expected 0 price improvement when fill == NBBO, got %f", buy.PriceImprovementBps)
+	}
+
+	sell := RouteOrder("BTC/USD", "SELL", midPrice, "AUTO")
+	if sell.FillPrice != sell.NbboBid {
+		t.Errorf("expected fill to equal NBBO bid %f, got %f", sell.NbboBid, sell.FillPrice)
+	}
+
+	if buy.NbboBid <= 0 || buy.NbboAsk <= 0 {
+		t.Errorf("expected positive NBBO, got bid=%f ask=%f", buy.NbboBid, buy.NbboAsk)
+	}
+	if buy.NbboAsk <= buy.NbboBid {
+		t.Errorf("expected NBBO ask to exceed NBBO bid, got bid=%f ask=%f", buy.NbboBid, buy.NbboAsk)
+	}
+}

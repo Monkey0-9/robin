@@ -12,11 +12,12 @@ var Exchanges = []string{
 
 // ExchangeQuote represents a simulated quote from a specific exchange
 type ExchangeQuote struct {
-	Exchange string  `json:"exchange"`
-	Bid      float64 `json:"bid"`
-	Ask      float64 `json:"ask"`
-	BidSize  float64 `json:"bid_size"`
-	AskSize  float64 `json:"ask_size"`
+	Exchange    string  `json:"exchange"`
+	Bid         float64 `json:"bid"`
+	Ask         float64 `json:"ask"`
+	BidSize     float64 `json:"bid_size"`
+	AskSize     float64 `json:"ask_size"`
+	IsSimulated bool    `json:"is_simulated"`
 }
 
 // RoutingResult holds execution metadata for the routed order
@@ -26,9 +27,12 @@ type RoutingResult struct {
 	ExchangesSearched   int     `json:"exchanges_searched"`
 	PriceImprovementBps float64 `json:"price_improvement_bps"`
 	AverageMarketPrice  float64 `json:"average_market_price"`
+	NbboBid             float64 `json:"nbbo_bid"`
+	NbboAsk             float64 `json:"nbbo_ask"`
+	IsSimulated         bool    `json:"is_simulated"`
 }
 
-// GenerateQuotes returns the current market price mapped across available exchanges
+// GenerateQuotes returns synthetic market prices across simulated exchanges (SimulatedSOR mode)
 func GenerateQuotes(symbol string, midPrice float64) []ExchangeQuote {
 	quotes := make([]ExchangeQuote, len(Exchanges))
 
@@ -52,19 +56,43 @@ func GenerateQuotes(symbol string, midPrice float64) []ExchangeQuote {
 		}
 
 		quotes[i] = ExchangeQuote{
-			Exchange: ex,
-			Bid:      bid,
-			Ask:      ask,
-			BidSize:  1.0,
-			AskSize:  1.0,
+			Exchange:    ex,
+			Bid:         bid,
+			Ask:         ask,
+			BidSize:     1.0,
+			AskSize:     1.0,
+			IsSimulated: true,
 		}
 	}
 	return quotes
 }
 
+// nbbo computes the National Best Bid/Offer across all quoted exchanges.
+// NBBO bid is the highest bid; NBBO offer is the lowest ask.
+func nbbo(quotes []ExchangeQuote) (bid, ask float64) {
+	bid = math.Inf(-1)
+	ask = math.Inf(1)
+	for _, q := range quotes {
+		if q.Bid > bid {
+			bid = q.Bid
+		}
+		if q.Ask < ask {
+			ask = q.Ask
+		}
+	}
+	if math.IsInf(bid, -1) {
+		bid = 0
+	}
+	if math.IsInf(ask, 1) {
+		ask = 0
+	}
+	return bid, ask
+}
+
 // RouteOrder selects the best price or directly routes an order to a preferred exchange
 func RouteOrder(symbol string, side string, midPrice float64, preferredExchange string) RoutingResult {
 	quotes := GenerateQuotes(symbol, midPrice)
+	nbboBid, nbboAsk := nbbo(quotes)
 	pref := strings.TrimSpace(strings.ToUpper(preferredExchange))
 
 	// Direct routing to a specific exchange
@@ -93,9 +121,12 @@ func RouteOrder(symbol string, side string, midPrice float64, preferredExchange 
 
 				var improvementBps float64
 				if side == "BUY" {
-					improvementBps = ((avgPrice - fill) / avgPrice) * 10000.0
+					improvementBps = ((nbboAsk - fill) / nbboAsk) * 10000.0
 				} else {
-					improvementBps = ((fill - avgPrice) / avgPrice) * 10000.0
+					improvementBps = ((fill - nbboBid) / nbboBid) * 10000.0
+				}
+				if improvementBps < 0 {
+					improvementBps = 0
 				}
 
 				return RoutingResult{
@@ -104,6 +135,8 @@ func RouteOrder(symbol string, side string, midPrice float64, preferredExchange 
 					ExchangesSearched:   1,
 					PriceImprovementBps: math.Round(improvementBps*100) / 100,
 					AverageMarketPrice:  avgPrice,
+					NbboBid:             nbboBid,
+					NbboAsk:             nbboAsk,
 				}
 			}
 		}
@@ -139,9 +172,9 @@ func RouteOrder(symbol string, side string, midPrice float64, preferredExchange 
 
 	var improvementBps float64
 	if side == "BUY" {
-		improvementBps = ((avgPrice - fillPrice) / avgPrice) * 10000.0
+		improvementBps = ((nbboAsk - fillPrice) / nbboAsk) * 10000.0
 	} else {
-		improvementBps = ((fillPrice - avgPrice) / avgPrice) * 10000.0
+		improvementBps = ((fillPrice - nbboBid) / nbboBid) * 10000.0
 	}
 
 	if improvementBps < 0 {
@@ -154,5 +187,7 @@ func RouteOrder(symbol string, side string, midPrice float64, preferredExchange 
 		ExchangesSearched:   len(Exchanges),
 		PriceImprovementBps: math.Round(improvementBps*100) / 100,
 		AverageMarketPrice:  avgPrice,
+		NbboBid:             nbboBid,
+		NbboAsk:             nbboAsk,
 	}
 }

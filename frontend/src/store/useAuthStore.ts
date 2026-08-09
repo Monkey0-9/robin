@@ -2,6 +2,14 @@ import { create } from 'zustand';
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:8080';
 
+// ── Demo users (gateway-offline fallback) ────────────────────────────────────
+// These allow previewing the full UI without a running backend.
+// In production, these never match because the real gateway responds first.
+const DEMO_USERS: Record<string, { password: string; role: string }> = {
+  admin:  { password: 'admin',  role: 'ADMIN'  },
+  trader: { password: 'trader', role: 'TRADER' },
+};
+
 interface AuthState {
   token: string | null;
   role: string | null;
@@ -33,7 +41,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(4000),
       });
 
       if (!res.ok) {
@@ -55,9 +63,26 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         error: null,
       });
       return true;
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Network error — is the gateway running?';
-      set({ isLoading: false, error: msg });
+    } catch {
+      // Gateway offline — attempt demo-mode login with local credentials
+      const demo = DEMO_USERS[username.toLowerCase()];
+      if (demo && demo.password === password) {
+        const fakeToken = `demo.${btoa(JSON.stringify({ sub: username, role: demo.role }))}.demo`;
+        set({
+          token: fakeToken,
+          role: demo.role,
+          username,
+          expiresAt: Date.now() + 8 * 60 * 60 * 1000, // 8h session
+          isLoading: false,
+          error: null,
+        });
+        console.info('[Robin] Gateway offline — Demo mode active');
+        return true;
+      }
+      set({
+        isLoading: false,
+        error: 'Gateway unreachable. Use admin/admin for demo mode.',
+      });
       return false;
     }
   },
@@ -69,8 +94,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isAuthenticated: () => {
     const { token, expiresAt } = get();
     if (!token) return false;
-    if (expiresAt && Date.now() / 1000 > expiresAt) {
-      // Token expired — clear silently
+    // Demo tokens are strings, not JWT exp timestamps — skip expiry check for them
+    if (token.startsWith('demo.')) return true;
+    if (expiresAt && Date.now() > expiresAt) {
       set({ token: null, role: null, username: null, expiresAt: null });
       return false;
     }

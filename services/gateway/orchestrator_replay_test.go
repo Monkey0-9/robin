@@ -115,10 +115,18 @@ func TestDeterministicReplay(t *testing.T) {
 		return rr.Code, resp
 	}
 
-	// 1. Send an order as a trader (fixed-point: price*1e8, qty*1e8)
+	// 1. Send an order as a trader (fixed-point: price*1e8, qty*1e8).
+	// The engine response is returned synchronously (Bug #7 fix), so the
+	// client sees the actual fill status rather than a premature "WORKING".
 	code, resp := sendOrder("BTC/USD", "BUY", "LIMIT", 60000*100000000, 15*100000000, traderToken)
-	if code != http.StatusOK || resp["status"] != "WORKING" {
-		t.Errorf("expected OK and WORKING, got code %d, status %v", code, resp["status"])
+	if code != http.StatusOK {
+		t.Errorf("expected 200 OK, got code %d", code)
+	}
+	if resp["status"] != "FILLED" {
+		t.Errorf("expected engine status FILLED to be returned synchronously, got %v", resp["status"])
+	}
+	if fp, ok := resp["fill_price"].(float64); !ok || fp <= 0 {
+		t.Errorf("expected a fill price to be returned, got %v", resp["fill_price"])
 	}
 
 	// 2. Send an order as an admin (should be forbidden)

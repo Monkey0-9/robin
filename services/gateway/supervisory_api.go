@@ -58,7 +58,10 @@ func checkSupervisoryApproval(db *sql.DB, orderID int64, symbol string, notional
 		if dbErr != nil {
 			return false, 0, dbErr
 		}
-		id, _ := result.LastInsertId()
+		id, idErr := result.LastInsertId()
+		if idErr != nil {
+			return false, 0, idErr
+		}
 		return false, id, nil
 	}
 
@@ -77,7 +80,10 @@ func checkSupervisoryApproval(db *sql.DB, orderID int64, symbol string, notional
 	if err != nil {
 		return true, 0, err
 	}
-	id, _ := result.LastInsertId()
+	id, idErr := result.LastInsertId()
+	if idErr != nil {
+		return true, 0, idErr
+	}
 	return true, id, nil
 }
 

@@ -133,6 +133,7 @@ pub struct RiskGate {
 
     // Position tracking
     positions: Box<[i64]>,
+    pending_positions: Box<[i64]>,
 
     // Velocity
     velocity_ring: Box<[u64]>,
@@ -157,6 +158,12 @@ pub struct RiskGate {
 }
 
 const VELOCITY_RING_SIZE: usize = 512;
+
+// Duplicate-order table: open-addressing hash set of (id, timestamp) pairs.
+// A single slot per hash bucket cannot detect duplicates once a hash collision
+// overwrites the slot with a different order id, so the table probes linearly.
+const DUP_SLOTS: usize = 1 << 13; // 8192
+const DUP_MASK: usize = DUP_SLOTS - 1;
 
 // Known shock scenarios for stress testing
 
@@ -197,9 +204,10 @@ impl RiskGate {
             account_credit_limits: vec![10_000_000_000 * 100_000_000; 4096].into_boxed_slice(),
             account_exposure: vec![0u64; 4096].into_boxed_slice(),
             duplicate_window_ns: 1_000_000,
-            recent_orders: vec![(0u64, 0u64); 4096].into_boxed_slice(),
+            recent_orders: vec![(0u64, 0u64); DUP_SLOTS].into_boxed_slice(),
             recent_orders_head: 0,
             positions: vec![0i64; 4096].into_boxed_slice(),
+            pending_positions: vec![0i64; 4096].into_boxed_slice(),
             velocity_ring: vec![0u64; VELOCITY_RING_SIZE].into_boxed_slice(),
             velocity_head: 0,
             velocity_window_ns: 1_000_000_000,
@@ -282,13 +290,15 @@ impl RiskGate {
             }
         }
 
-        // SOFT BLOCK 1: Position limit (compute but don't write yet — must pass all checks first)
+        // SOFT BLOCK 1: Position limit (incorporating optimistic pending position reservation)
         {
             let slot = (order.instrument_id & 4095) as usize;
             let current = self.positions[slot];
+            let pending = self.pending_positions[slot];
+            let effective = current.saturating_add(pending);
             let next = match order.side {
-                OrderSide::Bid => current.saturating_add(order.qty as i64),
-                OrderSide::Ask => current.saturating_sub(order.qty as i64),
+                OrderSide::Bid => effective.saturating_add(order.qty as i64),
+                OrderSide::Ask => effective.saturating_sub(order.qty as i64),
             };
             if next.abs() > self.position_limit {
                 return Err(RiskError::PositionLimit);
@@ -321,11 +331,19 @@ impl RiskGate {
             }
         }
 
-        // All checks passed — DO NOT commit position optimistically here.
-        // Positions should only be updated in update_pnl upon receiving actual fills.
+        // All checks passed — commit optimistic position reservation
+        {
+            let slot = (order.instrument_id & 4095) as usize;
+            let delta = match order.side {
+                OrderSide::Bid => order.qty as i64,
+                OrderSide::Ask => -(order.qty as i64),
+            };
+            self.pending_positions[slot] = self.pending_positions[slot].saturating_add(delta);
+        }
+
         self.velocity_ring[self.velocity_head] = order.timestamp;
         self.velocity_head = (self.velocity_head + 1) % VELOCITY_RING_SIZE;
-        self.recent_orders[self.recent_orders_head] = (order.id, order.timestamp);
+        self.record_order(order);
         self.recent_orders_head = (self.recent_orders_head + 1) % 4096;
         self.orders_processed.fetch_add(1, Ordering::Relaxed);
 
@@ -354,12 +372,18 @@ impl RiskGate {
         let fill_price_i128 = fill_price as i128;
         let fill_qty_i128 = fill_qty as i128;
 
-        // Apply actual position update
+        // Apply actual position update and adjust pending reservation
         let next_pos = match side {
             OrderSide::Bid => current_pos.saturating_add(fill_qty as i64),
             OrderSide::Ask => current_pos.saturating_sub(fill_qty as i64),
         };
         self.positions[inst_slot] = next_pos;
+
+        let pending_delta = match side {
+            OrderSide::Bid => -(fill_qty as i64),
+            OrderSide::Ask => fill_qty as i64,
+        };
+        self.pending_positions[inst_slot] = self.pending_positions[inst_slot].saturating_add(pending_delta);
 
         // Cost-basis tracking for realized P&L
         match side {
@@ -582,16 +606,18 @@ impl RiskGate {
         self.short_sale_circuit_breakers[slot] = until;
     }
 
+    /// Release the optimistic pending position reservation for an order that
+    /// will not fill (cancel, reject, or forwarding failure). The reservation
+    /// must be unwound or the effective position permanently overstates
+    /// exposure and future orders get falsely blocked.
     pub fn rollback_position(&mut self, order: &Order) {
         let slot = (order.instrument_id & 4095) as usize;
-        match order.side {
-            OrderSide::Bid => {
-                self.positions[slot] = self.positions[slot].saturating_sub(order.qty as i64)
-            }
-            OrderSide::Ask => {
-                self.positions[slot] = self.positions[slot].saturating_add(order.qty as i64)
-            }
-        }
+        let reversal = match order.side {
+            OrderSide::Bid => order.qty as i64,
+            OrderSide::Ask => -(order.qty as i64),
+        };
+        self.pending_positions[slot] = self.pending_positions[slot].saturating_sub(reversal);
+
         let account_slot = (order.account_id & 4095) as usize;
         let order_value = order.price.saturating_mul(order.qty) / 100_000_000;
         self.account_exposure[account_slot] =
@@ -599,13 +625,42 @@ impl RiskGate {
     }
 
     fn check_duplicate(&self, order: &Order) -> bool {
-        // Full OrderID comparison over the ring buffer
-        for &(id, ts) in self.recent_orders.iter() {
+        // Open-addressing probe: the table may hold several ids sharing a hash
+        // bucket, so a collision must not erase an earlier (different) id and
+        // hide a later duplicate of it.
+        let start = (order.id as usize) & DUP_MASK;
+        let mut idx = start;
+        loop {
+            let (id, ts) = self.recent_orders[idx];
+            if id == 0 && ts == 0 {
+                return false; // empty slot ends the probe chain
+            }
             if id == order.id && order.timestamp.wrapping_sub(ts) < self.duplicate_window_ns {
                 return true;
             }
+            idx = (idx + 1) & DUP_MASK;
+            if idx == start {
+                return false; // table full; treat as not a duplicate
+            }
         }
-        false
+    }
+
+    fn record_order(&mut self, order: &Order) {
+        let start = (order.id as usize) & DUP_MASK;
+        let mut idx = start;
+        loop {
+            let (id, _ts) = self.recent_orders[idx];
+            if (id == 0 && _ts == 0) || id == order.id {
+                self.recent_orders[idx] = (order.id, order.timestamp);
+                return;
+            }
+            idx = (idx + 1) & DUP_MASK;
+            if idx == start {
+                // Table full: overwrite the chain head to keep the set usable.
+                self.recent_orders[start] = (order.id, order.timestamp);
+                return;
+            }
+        }
     }
 
     fn check_velocity_limit(&self, now_ns: u64) -> bool {
@@ -615,7 +670,10 @@ impl RiskGate {
         let lookback_idx =
             (self.velocity_head + VELOCITY_RING_SIZE - self.max_velocity) % VELOCITY_RING_SIZE;
         let oldest_ts = self.velocity_ring[lookback_idx];
-        oldest_ts > 0 && now_ns.saturating_sub(oldest_ts) < self.velocity_window_ns
+        // Inclusive window: an order exactly `velocity_window_ns` ago is still
+        // inside the window and must count toward the limit. Using a strict
+        // `<` lets one extra order through at the boundary.
+        oldest_ts > 0 && now_ns.saturating_sub(oldest_ts) <= self.velocity_window_ns
     }
 
     pub fn get_orders_processed(&self) -> u64 {
@@ -887,5 +945,43 @@ mod tests {
         assert_eq!(gate2.get_position(1), 50);
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn test_duplicate_detected_across_hash_collision() {
+        let mut gate = RiskGate::new("/tmp/test_shm_dup_collision");
+        // ids that share the low DUP_MASK bits (same hash bucket)
+        let o1 = make_order(0x2000, 15000, 100, OrderSide::Bid, 1_000_000_000);
+        let o2 = make_order(0x6000, 15000, 100, OrderSide::Bid, 1_000_100_000);
+        let o3 = make_order(0x2000, 15000, 100, OrderSide::Bid, 1_000_200_000); // dup of o1
+        assert!(gate.check_order(&o1).is_ok());
+        assert!(gate.check_order(&o2).is_ok());
+        assert_eq!(gate.check_order(&o3), Err(RiskError::DuplicateOrder));
+    }
+
+    #[test]
+    fn test_pending_reservation_released_on_rollback() {
+        let mut gate = RiskGate::new("/tmp/test_shm_rollback");
+        let o = make_order(7, 15000, 100, OrderSide::Bid, 1_000_000_000);
+        assert!(gate.check_order(&o).is_ok());
+        let slot = (o.instrument_id & 4095) as usize;
+        assert_eq!(gate.pending_positions[slot], 100);
+        // Cancel: reservation must unwind so exposure is not overstated.
+        gate.rollback_position(&o);
+        assert_eq!(gate.pending_positions[slot], 0);
+        assert_eq!(gate.positions[slot], 0); // positions only move on real fills
+    }
+
+    #[test]
+    fn test_velocity_boundary_is_inclusive() {
+        let mut gate = RiskGate::new("/tmp/test_shm_vel");
+        gate.max_velocity = 2;
+        gate.velocity_window_ns = 100;
+        let o1 = make_order(1, 15000, 100, OrderSide::Bid, 1_000_000_000);
+        let o2 = make_order(2, 15000, 100, OrderSide::Bid, 1_000_000_050);
+        let o3 = make_order(3, 15000, 100, OrderSide::Bid, 1_000_000_100); // exactly window edge
+        assert!(gate.check_order(&o1).is_ok());
+        assert!(gate.check_order(&o2).is_ok());
+        assert_eq!(gate.check_order(&o3), Err(RiskError::VelocityLimit));
     }
 }

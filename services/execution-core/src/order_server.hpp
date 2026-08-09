@@ -174,7 +174,9 @@ private:
         Side side = Side::BID;
         OrderType type = OrderType::LIMIT;
         uint64_t timestamp = 0;
-
+        uint64_t account_id = 0;
+        int64_t min_qty = 0, new_price = 0, new_qty = 0;
+        uint8_t flags = 0, stp_mode = STP_BLOCK;
         auto extract_uint64 = [&](const std::string& key, uint64_t& val) -> bool {
             auto pos = json.find("\"" + key + "\"");
             if (pos == std::string::npos) return false;
@@ -184,6 +186,18 @@ private:
             while (sep < json.size() && (json[sep] == ' ' || json[sep] == '\t')) sep++;
             char* end = nullptr;
             val = std::strtoull(json.c_str() + sep, &end, 10);
+            return true;
+        };
+
+        auto extract_int64 = [&](const std::string& key, int64_t& val) -> bool {
+            auto pos = json.find("\"" + key + "\"");
+            if (pos == std::string::npos) return false;
+            auto sep = json.find(':', pos);
+            if (sep == std::string::npos) return false;
+            sep++;
+            while (sep < json.size() && (json[sep] == ' ' || json[sep] == '\t')) sep++;
+            char* end = nullptr;
+            val = std::strtoll(json.c_str() + sep, &end, 10);
             return true;
         };
 
@@ -205,8 +219,14 @@ private:
         uint64_t temp;
         extract_uint64("id", id);
         if (extract_uint64("instrument_id", temp)) instrument_id = temp;
-        if (extract_uint64("price", temp)) price = (int64_t)temp;
-        if (extract_uint64("qty", temp)) qty = (int64_t)temp;
+        extract_int64("price", price);
+        extract_int64("qty", qty);
+        extract_int64("min_qty", min_qty);
+        extract_int64("new_price", new_price);
+        extract_int64("new_qty", new_qty);
+        if (extract_uint64("account_id", temp)) account_id = temp;
+        if (extract_uint64("flags", temp)) flags = (uint8_t)temp;
+        if (extract_uint64("stp_mode", temp)) stp_mode = (uint8_t)temp;
         if (extract_uint64("timestamp", temp)) timestamp = temp;
         std::string side_str, type_str;
         extract_str("side", side_str);
@@ -222,8 +242,10 @@ private:
             type = OrderType::FOK;
         else if (type_str == "CANCEL" || type_str == "cancel")
             type = OrderType::CANCEL;
+        else if (type_str == "REPLACE" || type_str == "replace")
+            type = OrderType::REPLACE;
 
-        if (id == 0) id = static_cast<uint64_t>(std::time(nullptr)) * 1000000ULL;
+        if (id == 0) id = OrderIDGenerator::next();
         if (timestamp == 0) timestamp = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count());
@@ -233,17 +255,17 @@ private:
         order.id = id;
         order.price = price;
         order.qty = qty;
+        order.min_qty = min_qty;
+        order.new_price = new_price;
+        order.new_qty = new_qty;
         order.instrument_id = static_cast<uint32_t>(instrument_id);
+        order.client_id = 0;
+        order.account_id = static_cast<uint32_t>(account_id);
+        order.flags = flags;
+        order.stp_mode = stp_mode;
         order.side = side;
         order.type = type;
         order.state = OrderState::NEW;
-
-        if (!risk_.check_order(order, timestamp, err_msg)) {
-            result.order_id = id;
-            result.instrument_id = order.instrument_id;
-            result.state = OrderState::REJECTED;
-            return result;
-        }
 
         if (type == OrderType::CANCEL) {
             if (engine_->submit_order(order)) {
@@ -254,6 +276,31 @@ private:
                 return result;
             }
             err_msg = "queue_full";
+            result.state = OrderState::REJECTED;
+            return result;
+        }
+
+        if (type == OrderType::REPLACE) {
+            if (new_price == 0 || new_qty == 0) {
+                err_msg = "replace_requires_new_price_and_new_qty";
+                result.state = OrderState::REJECTED;
+                return result;
+            }
+            if (engine_->submit_order(order)) {
+                result.order_id = id;
+                result.instrument_id = order.instrument_id;
+                result.state = OrderState::REPLACED;
+                result.success = true;
+                return result;
+            }
+            err_msg = "queue_full";
+            result.state = OrderState::REJECTED;
+            return result;
+        }
+
+        if (!risk_.check_order(order, timestamp, err_msg)) {
+            result.order_id = id;
+            result.instrument_id = order.instrument_id;
             result.state = OrderState::REJECTED;
             return result;
         }

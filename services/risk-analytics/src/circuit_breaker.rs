@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use coarsetime::Clock;
 
@@ -7,12 +8,23 @@ fn cached_time_ns() -> u64 {
     now.as_secs() * 1_000_000_000 + now.as_nanos() % 1_000_000_000
 }
 
+/// Consistent (peak, current) equity pair.
+///
+/// Both values must be observed and updated atomically together, otherwise a
+/// concurrent reader can see a new peak with a stale equity (exaggerated
+/// drawdown -> spurious trip) or an old peak with a new equity (missed trip).
+#[derive(Clone, Copy, Default)]
+struct DrawdownState {
+    peak_equity: f64,
+    current_equity: f64,
+}
+
 pub struct RiskCircuitBreaker {
     tripped: AtomicBool,
     daily_drawdown_limit: f64,
+    // Guarded by the mutex so peak + current are always updated/read as a pair.
+    state: Mutex<DrawdownState>,
     current_drawdown: AtomicI64,
-    peak_equity: AtomicU64,
-    current_equity: AtomicU64,
     trip_time_ns: AtomicU64,
     reset_count: AtomicU64,
     trip_count: AtomicU64,
@@ -23,33 +35,33 @@ impl RiskCircuitBreaker {
         Self {
             tripped: AtomicBool::new(false),
             daily_drawdown_limit,
+            state: Mutex::new(DrawdownState::default()),
             current_drawdown: AtomicI64::new(0),
-            peak_equity: AtomicU64::new(0),
-            current_equity: AtomicU64::new(0),
             trip_time_ns: AtomicU64::new(0),
             reset_count: AtomicU64::new(0),
             trip_count: AtomicU64::new(0),
         }
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn check_drawdown(&self, peak_equity: f64, current_equity: f64) -> bool {
         if self.tripped.load(Ordering::Acquire) {
             return true;
         }
 
-        let current_peak = self.peak_equity.load(Ordering::Relaxed);
-        if peak_equity > f64::from_bits(current_peak) {
-            self.peak_equity
-                .store(peak_equity.to_bits(), Ordering::Release);
+        let mut st = match self.state.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        if peak_equity > st.peak_equity {
+            st.peak_equity = peak_equity;
         }
+        st.current_equity = current_equity;
 
-        let actual_peak = f64::from_bits(self.peak_equity.load(Ordering::Acquire));
-        self.current_equity
-            .store(current_equity.to_bits(), Ordering::Release);
-
-        if actual_peak > 0.0 {
-            let dd_bps = (((actual_peak - current_equity) / actual_peak) * 10000.0) as i64;
+        let final_peak = st.peak_equity;
+        if final_peak > 0.0 {
+            let dd_bps = (((final_peak - st.current_equity) / final_peak) * 10000.0) as i64;
             self.current_drawdown.store(dd_bps, Ordering::Release);
             if (dd_bps as f64 / 10000.0) >= self.daily_drawdown_limit {
                 self.trip("DAILY_DRAWDOWN_LIMIT_EXCEEDED");
@@ -105,5 +117,16 @@ mod tests {
 
         cb.reset();
         assert!(!cb.is_tripped());
+    }
+
+    #[test]
+    fn test_peak_is_monotonic() {
+        let cb = RiskCircuitBreaker::new(0.10);
+        assert!(!cb.check_drawdown(1000.0, 950.0));
+        // Lower "peak" must not lower the recorded peak (drawdown still from 1000).
+        assert!(!cb.check_drawdown(900.0, 930.0));
+        let (_, _, dd) = cb.get_stats();
+        // Drawdown measured from 1000.0: (1000 - 930)/1000 = 700 bps
+        assert!(dd == 700, "drawdown={} bps, expected 700", dd);
     }
 }

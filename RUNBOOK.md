@@ -13,7 +13,7 @@ start_all.bat
 Start-Process "http://localhost:3000"
 ```
 
-**Default login**: `admin / admin`
+**Default login**: set `SEED_ADMIN_PASSWORD` / `SEED_TRADER_PASSWORD` before first start — no hardcoded credentials.
 
 ---
 
@@ -75,14 +75,23 @@ cd frontend && npm run dev  # Window 3 — Next.js on :3000
 4. Token stored **in-memory only** — cleared on page refresh/logout
 5. All subsequent API calls attach `Authorization: Bearer <token>` header
 
-### Default Users (auto-seeded on first run)
+### User Seeding (env-var enforced, no hardcoded credentials)
 
-| Username | Password | Role | Permissions |
-|---|---|---|---|
-| `admin` | `admin` | admin | All endpoints |
-| `trader` | `trader` | trader | `/order`, `/api/ai/*`, `/api/alpaca/*` |
+> ⚠️ There are **no default `admin / admin` credentials**. Users are seeded on first run
+> **only** when the `SEED_ADMIN_PASSWORD` / `SEED_TRADER_PASSWORD` env vars are set.
+> If neither var is present, no users are created and login is disabled until a user exists.
 
-> ⚠️ **Change default passwords before any production deployment**
+| Env Var | User created | Role |
+|---|---|---|
+| `SEED_ADMIN_PASSWORD` | `admin` | admin |
+| `SEED_TRADER_PASSWORD` | `trader` | trader |
+
+Example (PowerShell):
+```powershell
+$env:SEED_ADMIN_PASSWORD="CHANGE_ME_STRONG"
+$env:SEED_TRADER_PASSWORD="CHANGE_ME_TOO"
+.\start_gateway.bat
+```
 
 ### Create a New User (SQLite)
 ```powershell

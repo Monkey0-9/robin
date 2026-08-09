@@ -2,7 +2,7 @@
   <div class="home-container">
     <!-- ????? -->
     <nav class="navbar">
-      <div class="nav-brand" style="color: white;">ROBIN <span style="color: #C8102E;">SWARM</span></div>
+      <div class="nav-brand" style="color: #000000;">ROBIN <span style="color: #C8102E;">SWARM</span></div>
       <div class="nav-links">
         <LanguageSwitcher />
         <a href="https://github.com/RobinAI/Robin Swarm" target="_blank" class="github-link">
@@ -314,15 +314,15 @@ const startSimulation = () => {
 <style scoped>
 /* ??????? */
 :root {
-  --black: #FFFFFF;
-  --white: #0A0A0A;
+  --black: #000000;
+  --white: #FFFFFF;
   --orange: #C8102E;
   --gray-light: #F5F5F5;
   --gray-text: #666666;
   --border: #E5E5E5;
   /* 
-    ?? Space Grotesk ????????,JetBrains Mono ????/????
-    ???? index.html ???? Google Fonts 
+    使用 Space Grotesk 作为主要英文字体,JetBrains Mono 作为代码/数字
+    如需引入 index.html 中已有 Google Fonts 
   */
   --font-mono: 'JetBrains Mono', monospace;
   --font-sans: 'Space Grotesk', 'Noto Sans SC', system-ui, sans-serif;
@@ -331,16 +331,17 @@ const startSimulation = () => {
 
 .home-container {
   min-height: 100vh;
-  background: #0A0A0A; color: #FFFFFF;
+  background: #FFFFFF;
   font-family: var(--font-sans);
-  color: #FFFFFF;
+  color: #000000;
 }
 
-/* ???? */
+/* 导航栏 */
 .navbar {
   height: 60px;
-  background: var(--black);
-  color: var(--white);
+  background: #FFFFFF;
+  color: #000000;
+  border-bottom: 1px solid var(--border);
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -361,7 +362,7 @@ const startSimulation = () => {
 }
 
 .github-link {
-  color: var(--white);
+  color: #000000;
   text-decoration: none;
   font-family: var(--font-mono);
   font-size: 0.9rem;
@@ -411,7 +412,7 @@ const startSimulation = () => {
 
 .orange-tag {
   background: var(--orange);
-  color: var(--white);
+  color: #FFFFFF;
   padding: 4px 10px;
   font-weight: 700;
   letter-spacing: 1px;
@@ -430,11 +431,11 @@ const startSimulation = () => {
   font-weight: 500;
   margin: 0 0 40px 0;
   letter-spacing: -2px;
-  color: #FFFFFF;
+  color: #000000;
 }
 
 .gradient-text {
-  background: linear-gradient(90deg, #000000 0%, #444444 100%);
+  background: linear-gradient(90deg, #C8102E 0%, #111111 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   display: inline-block;
@@ -455,7 +456,7 @@ const startSimulation = () => {
 }
 
 .highlight-bold {
-  color: #FFFFFF;
+  color: #000000;
   font-weight: 700;
 }
 
@@ -471,14 +472,14 @@ const startSimulation = () => {
   border-radius: 2px;
   font-family: var(--font-mono);
   font-size: 0.9em;
-  color: #FFFFFF;
+  color: #000000;
   font-weight: 600;
 }
 
 .slogan-text {
   font-size: 1.2rem;
   font-weight: 520;
-  color: #FFFFFF;
+  color: #000000;
   letter-spacing: 1px;
   border-left: 3px solid var(--orange);
   padding-left: 15px;
@@ -650,7 +651,7 @@ const startSimulation = () => {
 .step-num {
   font-family: var(--font-mono);
   font-weight: 700;
-  color: #FFFFFF;
+  color: #000000;
   opacity: 0.3;
 }
 
@@ -755,9 +756,9 @@ const startSimulation = () => {
 .file-item {
   display: flex;
   align-items: center;
-  background: #0A0A0A; color: #FFFFFF;
+  background: #F5F5F5; color: #000000;
   padding: 8px 12px;
-  border: 1px solid #EEE;
+  border: 1px solid #DDD;
   font-family: var(--font-mono);
   font-size: 0.85rem;
 }

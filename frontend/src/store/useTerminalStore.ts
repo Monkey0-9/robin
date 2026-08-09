@@ -1,12 +1,12 @@
-import { create } from 'zustand';
-import { useAuthStore } from './useAuthStore';
+import { create } from "zustand";
+import { useAuthStore } from "./useAuthStore";
 
 export interface Asset {
   symbol: string;
   name: string;
   currentPrice: number;
   dailyChangePct: number;
-  type: 'crypto' | 'equity' | 'index' | 'fx';
+  type: "crypto" | "equity" | "index" | "fx";
 }
 
 export interface VolumeStats {
@@ -48,7 +48,7 @@ export interface TechnicalIndicators {
 export interface Position {
   id: string;
   symbol: string;
-  side: 'LONG' | 'SHORT';
+  side: "LONG" | "SHORT";
   size: number;
   entryPrice: number;
   marginRequired: number;
@@ -58,7 +58,7 @@ export interface Position {
 export interface Trade {
   id: string;
   symbol: string;
-  side: 'BUY' | 'SELL';
+  side: "BUY" | "SELL";
   qty: number;
   price: number;
   realizedPnL: number;
@@ -73,7 +73,7 @@ export interface OrderBookLevel {
 
 export interface Notification {
   message: string;
-  type: 'success' | 'error' | 'info';
+  type: "success" | "error" | "info";
 }
 
 export interface RiskUpdate {
@@ -98,11 +98,11 @@ export interface SystemHealth {
 export interface WorkingOrder {
   id: string;
   symbol: string;
-  side: 'BUY' | 'SELL';
-  orderType: 'LIMIT' | 'MARKET' | 'STOP';
+  side: "BUY" | "SELL";
+  orderType: "LIMIT" | "MARKET" | "STOP";
   qty: number;
   price: number;
-  status: 'PENDING' | 'WORKING' | 'FILLED' | 'CANCELED';
+  status: "PENDING" | "WORKING" | "FILLED" | "CANCELED";
   timestamp: Date;
   routedExchange: string;
 }
@@ -110,7 +110,7 @@ export interface WorkingOrder {
 export interface Execution {
   clOrdId: string;
   symbol: string;
-  side: 'BUY' | 'SELL';
+  side: "BUY" | "SELL";
   qty: number;
   status: string;
   latencyNs: number;
@@ -153,8 +153,15 @@ interface TerminalState {
   init: () => void;
   dismissNotification: () => void;
   exportToCSV: () => void;
-  showNotification: (msg: string, type: 'success' | 'error' | 'info') => void;
-  submitOrder: (symbol: string, side: 'BUY' | 'SELL', price: number, size: number, isMarket?: boolean, orderType?: 'MARKET' | 'LIMIT' | 'STOP') => Promise<void>;
+  showNotification: (msg: string, type: "success" | "error" | "info") => void;
+  submitOrder: (
+    symbol: string,
+    side: "BUY" | "SELL",
+    price: number,
+    size: number,
+    isMarket?: boolean,
+    orderType?: "MARKET" | "LIMIT" | "STOP",
+  ) => Promise<void>;
   cancelOrder: (id: string) => Promise<void>;
   setSelectedSymbol: (symbol: string) => void;
   setSymbol: (symbol: string) => void;
@@ -167,12 +174,42 @@ interface TerminalState {
   fetchCandles: (symbol: string, resolution?: string) => Promise<any[]>;
 }
 
-const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:8080';
-const WS_URL = GATEWAY_URL.replace(/^http/, 'ws') + '/ws';
+const GATEWAY_URL =
+  process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8080";
+const WS_URL = GATEWAY_URL.replace(/^http/, "ws") + "/ws";
 
 /** Helper: get the current in-memory JWT from the auth store. */
-const getToken = () => useAuthStore.getState().getToken() || '';
+const getToken = () => useAuthStore.getState().getToken() || "";
 
+let isGatewayOffline = false;
+let isInitialized = false;
+
+export const resetGatewayStatus = () => {
+  isGatewayOffline = false;
+  isInitialized = false;
+};
+
+/** Helper: safe fetch wrapper to prevent unhandled network rejection overlays in dev mode when gateway is offline or in demo mode */
+const safeFetch = async (
+  url: string,
+  options?: RequestInit,
+): Promise<Response | null> => {
+  const token = useAuthStore.getState().token;
+  // Don't attempt network calls if:
+  // 1. User has no token yet (on /login screen)
+  // 2. User is in demo mode (token starts with demo.)
+  // 3. Gateway was detected offline
+  if (!token || token.startsWith("demo.") || isGatewayOffline) {
+    return null;
+  }
+  try {
+    const res = await fetch(url, options);
+    return res;
+  } catch {
+    isGatewayOffline = true;
+    return null;
+  }
+};
 
 function createWebSocket(
   onMessage: (data: any) => void,
@@ -180,16 +217,17 @@ function createWebSocket(
 ): WebSocket {
   const url = `${WS_URL}`;
   const token = getToken();
-  const ws = new WebSocket(url, token ? ['token', token] : []);
-  ws.onopen = () => console.log('WebSocket connected');
+  const ws = new WebSocket(url, token ? ["token", token] : []);
+  ws.onopen = () => console.info("WebSocket connected");
   ws.onmessage = (event) => {
     try {
       const parsed = JSON.parse(event.data);
       onMessage(parsed);
-    } catch { /* ignore malformed */ }
+    } catch {
+      /* ignore malformed */
+    }
   };
   ws.onclose = () => {
-    console.log('WebSocket disconnected');
     onDisconnect();
   };
   ws.onerror = () => ws.close();
@@ -198,202 +236,246 @@ function createWebSocket(
 
 export const useTerminalStore = create<TerminalState>((set, get) => ({
   assets: [],
-  selectedSymbol: 'BTC/USD',
-  symbol: 'BTC/USD',
+  selectedSymbol: "BTC/USD",
+  symbol: "BTC/USD",
   notification: null,
   tradeHistory: [],
   positions: [],
   workingOrders: [],
-  balance: 0,
-  equity: 0,
+  balance: 100000,
+  equity: 100000,
   marginUtilization: 0,
-  routingMode: 'AUTO',
+  routingMode: "AUTO",
   screenerAssets: [],
   heatmapSectors: [],
   sorQuotes: [],
-
   portfolioWeights: [],
   volumeStats: {},
   indicators: {},
   riskData: null,
 
-  orderBook: { bids: [], asks: [] },
-  systemHealth: { healthy: 0, degraded: 0, failed: 0, latencyNs: 0 },
+  orderBook: {
+    bids: [],
+    asks: [],
+  },
+
+  systemHealth: {
+    healthy: 1,
+    degraded: 0,
+    failed: 0,
+    latencyNs: 120000,
+  },
+
   lastExecution: null,
 
   init: () => {
-    console.log('Terminal store initialized');
-    get().showNotification('Connected to Gateway', 'success');
+    const token = getToken();
+    if (!token || isInitialized) return;
+    isInitialized = true;
 
-    // Seed assets immediately from /api/assets (no auth required)
-    fetch(`${GATEWAY_URL}/api/assets`)
-      .then(r => r.ok ? r.json() : [])
+    get().showNotification("Connected to Gateway", "success");
+
+    safeFetch(`${GATEWAY_URL}/api/assets`)
+      .then((r) => (r?.ok ? r.json() : []))
       .then((data: any[]) => {
         if (Array.isArray(data) && data.length > 0) {
-          const assets = data.map((a: any) => ({
+          const assets: Asset[] = data.map((a: any) => ({
             symbol: a.symbol,
             name: a.name,
-            currentPrice: a.base_price || 0,
-            dailyChangePct: 0,
-            type: (a.type === 'crypto' ? 'crypto' : a.type === 'fx' ? 'fx' : 'equity') as 'crypto' | 'equity' | 'index' | 'fx',
+            currentPrice: a.last_price || 0,
+            dailyChangePct: a.change_pct || 0,
+            type: a.class === "crypto" ? "crypto" : "equity",
           }));
           set({ assets, selectedSymbol: assets[0].symbol });
         }
       })
-      .catch(e => console.warn('Failed to seed assets from /api/assets:', e));
+      .catch(() => {});
 
-    let ws: WebSocket | null = null;
-    let reconnectAttempts = 0;
-    const maxReconnectDelay = 30000;
+    if (!token.startsWith("demo.") && !isGatewayOffline) {
+      let _ws: WebSocket | null = null;
+      let reconnectAttempts = 0;
+      const maxReconnectDelay = 30000;
 
-    function connect() {
-      if (ws) {
-        ws.onclose = null;
-        ws.onerror = null;
-        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-          ws.close();
-        }
-        ws = null;
-      }
+      const connect = () => {
+        if (isGatewayOffline) return;
+        _ws = createWebSocket(
+          (data) => {
+            reconnectAttempts = 0;
 
-      ws = createWebSocket(
-        (data) => {
-          reconnectAttempts = 0;
+            if (data.type === "orderbook") {
+              const { symbol, bids, asks } = data.data;
+              const orderBookBids: OrderBookLevel[] = bids
+                .slice(0, 20)
+                .map(([price, size]: number[], i: number) => ({
+                  price,
+                  size,
+                  total: bids
+                    .slice(0, i + 1)
+                    .reduce((s: number, [_, sz]: number[]) => s + sz, 0),
+                }));
+              const orderBookAsks: OrderBookLevel[] = asks
+                .slice(0, 20)
+                .map(([price, size]: number[], i: number) => ({
+                  price,
+                  size,
+                  total: asks
+                    .slice(0, i + 1)
+                    .reduce((s: number, [_, sz]: number[]) => s + sz, 0),
+                }));
 
-          if (data.type === 'orderbook') {
-            const { symbol, bids, asks } = data.data;
-            const orderBookBids: OrderBookLevel[] = bids.slice(0, 20).map(([price, size]: number[], i: number) => ({
-              price,
-              size,
-              total: bids.slice(0, i + 1).reduce((s: number, [_, sz]: number[]) => s + sz, 0),
-            }));
-            const orderBookAsks: OrderBookLevel[] = asks.slice(0, 20).map(([price, size]: number[], i: number) => ({
-              price,
-              size,
-              total: asks.slice(0, i + 1).reduce((s: number, [_, sz]: number[]) => s + sz, 0),
-            }));
+              set((state) => {
+                const newAssets = state.assets.map((a) => {
+                  if (a.symbol === symbol) {
+                    const mid = (bids[0]?.[0] + asks[0]?.[0]) / 2;
+                    return { ...a, currentPrice: mid || a.currentPrice };
+                  }
+                  return a;
+                });
 
-            set((state) => {
-              const newAssets = state.assets.map(a => {
-                if (a.symbol === symbol) {
-                  const mid = (bids[0]?.[0] + asks[0]?.[0]) / 2;
-                  return { ...a, currentPrice: mid || a.currentPrice };
-                }
-                return a;
+                let totalUnrealized = 0;
+                let totalMargin = 0;
+                const newPositions = state.positions.map((p) => {
+                  const currentAsset = newAssets.find(
+                    (a) => a.symbol === p.symbol,
+                  );
+                  const currentPrice = currentAsset
+                    ? currentAsset.currentPrice
+                    : p.entryPrice;
+                  const pnl =
+                    p.side === "LONG"
+                      ? (currentPrice - p.entryPrice) * p.size
+                      : (p.entryPrice - currentPrice) * p.size;
+                  totalUnrealized += pnl;
+                  totalMargin += p.marginRequired;
+                  return { ...p, unrealizedPnL: pnl };
+                });
+
+                const newEquity = state.balance + totalUnrealized;
+                const marginUtil =
+                  newEquity > 0 ? (totalMargin / newEquity) * 100 : 0;
+
+                return {
+                  assets: newAssets,
+                  positions: newPositions,
+                  equity: newEquity,
+                  marginUtilization: marginUtil,
+                  orderBook: { bids: orderBookBids, asks: orderBookAsks },
+                };
               });
-
-              let totalUnrealized = 0;
-              let totalMargin = 0;
-              const newPositions = state.positions.map(p => {
-                const currentAsset = newAssets.find(a => a.symbol === p.symbol);
-                const currentPrice = currentAsset ? currentAsset.currentPrice : p.entryPrice;
-                const pnl = p.side === 'LONG'
-                  ? (currentPrice - p.entryPrice) * p.size
-                  : (p.entryPrice - currentPrice) * p.size;
-                totalUnrealized += pnl;
-                totalMargin += p.marginRequired;
-                return { ...p, unrealizedPnL: pnl };
+            } else if (data.type === "trade") {
+              const trade = data.data;
+              set((state) => ({
+                tradeHistory: [
+                  {
+                    id: trade.id,
+                    symbol: trade.symbol,
+                    side: trade.side,
+                    qty: trade.qty,
+                    price: trade.price,
+                    realizedPnL: 0,
+                    timestamp: new Date(trade.timestamp),
+                  },
+                  ...state.tradeHistory,
+                ],
+              }));
+            } else if (data.type === "order_update") {
+              const update = data.data;
+              set((state) => {
+                const currentOrders = [...state.workingOrders];
+                const idx = currentOrders.findIndex(
+                  (o) => o.id === update.cl_ord_id,
+                );
+                if (idx !== -1) {
+                  if (
+                    update.status === "FILLED" ||
+                    update.status === "CANCELED" ||
+                    update.status === "REJECTED"
+                  ) {
+                    currentOrders.splice(idx, 1);
+                  } else {
+                    currentOrders[idx] = {
+                      ...currentOrders[idx],
+                      status: update.status,
+                    };
+                  }
+                }
+                return { workingOrders: currentOrders };
               });
+            } else if (data.type === "volume_stats") {
+              const stats = data.data;
+              set((state) => ({
+                volumeStats: {
+                  ...state.volumeStats,
+                  [stats.symbol]: {
+                    symbol: stats.symbol,
+                    volume: stats.volume,
+                    vwap: stats.vwap,
+                    cvd: stats.cvd,
+                  },
+                },
+              }));
+            } else if (data.type === "indicators") {
+              const inds = data.data;
+              set((state) => ({
+                indicators: {
+                  ...state.indicators,
+                  [inds.symbol]: inds,
+                },
+              }));
+            } else if (data.type === "risk_update") {
+              set({ riskData: data.data });
+            }
+          },
+          () => {
+            reconnectAttempts++;
+            if (reconnectAttempts > 3) {
+              isGatewayOffline = true;
+              return;
+            }
+            const delay = Math.min(
+              1000 * Math.pow(2, reconnectAttempts),
+              maxReconnectDelay,
+            );
+            console.info(
+              `WebSocket reconnecting in ${delay}ms (attempt ${reconnectAttempts})`,
+            );
+            setTimeout(connect, delay);
+          },
+        );
+      };
 
-              const newEquity = state.balance + totalUnrealized;
-              const marginUtil = newEquity > 0 ? (totalMargin / newEquity) * 100 : 0;
-
-              return {
-                assets: newAssets,
-                positions: newPositions,
-                equity: newEquity,
-                marginUtilization: marginUtil,
-                orderBook: { bids: orderBookBids, asks: orderBookAsks },
-              };
-            });
-          } else if (data.type === 'trade') {
-            const trade = data.data;
-            set((state) => ({
-              tradeHistory: [{
-                id: trade.id,
-                symbol: trade.symbol,
-                side: trade.side,
-                qty: trade.qty,
-                price: trade.price,
-                realizedPnL: 0,
-                timestamp: new Date(trade.timestamp),
-              }, ...state.tradeHistory],
-            }));
-          } else if (data.type === 'order_update') {
-            const update = data.data;
-            set((state) => {
-              const currentOrders = [...state.workingOrders];
-              const idx = currentOrders.findIndex(o => o.id === update.cl_ord_id);
-              if (idx !== -1) {
-                if (update.status === 'FILLED' || update.status === 'CANCELED' || update.status === 'REJECTED') {
-                  // Remove from working orders
-                  currentOrders.splice(idx, 1);
-                } else {
-                  // Update status
-                  currentOrders[idx] = { ...currentOrders[idx], status: update.status };
-                }
-              }
-              return { workingOrders: currentOrders };
-            });
-          } else if (data.type === 'volume_stats') {
-            const stats = data.data;
-            set((state) => ({
-              volumeStats: {
-                ...state.volumeStats,
-                [stats.symbol]: {
-                  symbol: stats.symbol,
-                  volume: stats.volume,
-                  vwap: stats.vwap,
-                  cvd: stats.cvd,
-                }
-              }
-            }));
-          } else if (data.type === 'indicators') {
-            const inds = data.data;
-            set((state) => ({
-              indicators: {
-                ...state.indicators,
-                [inds.symbol]: inds
-              }
-            }));
-          } else if (data.type === 'risk_update') {
-            set({ riskData: data.data });
-          }
-        },
-        () => {
-          reconnectAttempts++;
-          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), maxReconnectDelay);
-          console.log(`WebSocket reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
-          setTimeout(connect, delay);
-        },
-      );
+      connect();
     }
 
-    connect();
-
-    // Poll the Go Gateway
+    // Poll the Go Gateway safely
     setInterval(async () => {
+      if (!getToken() || isGatewayOffline) return;
       try {
-        const statsRes = await fetch(`${GATEWAY_URL}/stats`, {
-          headers: { Authorization: `Bearer ${getToken()}` }
+        const statsRes = await safeFetch(`${GATEWAY_URL}/stats`, {
+          headers: { Authorization: `Bearer ${getToken()}` },
         });
-        const stats = await statsRes.json();
-        
-        const healthRes = await fetch(`${GATEWAY_URL}/health`);
-        const health = await healthRes.json();
+        const stats = statsRes && statsRes.ok ? await statsRes.json() : {};
+
+        const healthRes = await safeFetch(`${GATEWAY_URL}/health`);
+        const health =
+          healthRes && healthRes.ok
+            ? await healthRes.json()
+            : { healthy: 0, degraded: 0, failed: 5 };
 
         set({
           systemHealth: {
-            healthy: health.healthy,
-            degraded: health.degraded,
-            failed: health.failed,
-            latencyNs: stats.avg_lat_ns || 0
-          }
+            healthy: health.healthy || 0,
+            degraded: health.degraded || 0,
+            failed: health.failed || 5,
+            latencyNs: stats.avg_lat_ns || 0,
+          },
         });
       } catch {
-        set({ systemHealth: { healthy: 0, degraded: 0, failed: 5, latencyNs: 0 } });
+        set({
+          systemHealth: { healthy: 0, degraded: 0, failed: 5, latencyNs: 0 },
+        });
       }
-    }, 2000);
+    }, 5000);
 
     // Initial triggers for screener, heatmap, quotes, alpaca, portfolio
     get().fetchScreenerData();
@@ -404,21 +486,31 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
 
     // Fetch screener data every 5 seconds
     setInterval(() => {
+      if (!getToken() || isGatewayOffline) return;
       get().fetchScreenerData();
     }, 5000);
 
     // Fetch heatmap data every 10 seconds
     setInterval(() => {
+      if (!getToken() || isGatewayOffline) return;
       get().fetchHeatmapData();
     }, 10000);
 
     // Fetch SOR prices every 2 seconds
     setInterval(() => {
+      if (!getToken() || isGatewayOffline) return;
       get().fetchSorPrices(get().selectedSymbol);
     }, 2000);
   },
 
-  submitOrder: async (symbol, side, price, size, _isMarket = true, orderType = 'MARKET') => {
+  submitOrder: async (
+    symbol,
+    side,
+    price,
+    size,
+    _isMarket = true,
+    orderType = "MARKET",
+  ) => {
     const state = get();
     const clOrdId = `ORD-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
@@ -430,23 +522,27 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       orderType,
       qty: size,
       price,
-      status: 'WORKING',
+      status: "WORKING",
       timestamp: new Date(),
-      routedExchange: state.routingMode === 'AUTO' ? 'Robin Pools' : state.routingMode,
+      routedExchange:
+        state.routingMode === "AUTO" ? "Robin Pools" : state.routingMode,
     };
-    
+
     set((s) => ({
       workingOrders: [workingOrd, ...s.workingOrders],
     }));
-    
-    state.showNotification(`Order submitted: ${side} ${size} ${symbol} @ $${price.toFixed(2)}`, 'info');
+
+    state.showNotification(
+      `Order submitted: ${side} ${size} ${symbol} @ $${price.toFixed(2)}`,
+      "info",
+    );
 
     // Attempt to submit via gateway
     try {
-      const res = await fetch(`${GATEWAY_URL}/order`, {
-        method: 'POST',
+      const res = await safeFetch(`${GATEWAY_URL}/order`, {
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
           Authorization: `Bearer ${getToken()}`,
         },
         body: JSON.stringify({
@@ -461,7 +557,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
         signal: AbortSignal.timeout(3000),
       });
 
-      if (!res.ok) {
+      if (!res || !res.ok) {
         throw new Error("Order rejected by gateway");
       }
 
@@ -472,7 +568,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
           symbol: data.symbol || symbol,
           side,
           qty: data.qty ?? size,
-          status: data.status || 'WORKING',
+          status: data.status || "WORKING",
           latencyNs: data.latency_ns || 0,
           routedExchange: data.routed_exchange || state.routingMode,
           priceImprovementBps: data.price_improvement_bps || 0,
@@ -483,30 +579,33 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       });
     } catch {
       set((s) => ({
-        workingOrders: s.workingOrders.filter(w => w.id !== clOrdId),
+        workingOrders: s.workingOrders.filter((w) => w.id !== clOrdId),
       }));
-      state.showNotification('Order Execution Failed: Gateway Offline / Server Unreachable', 'error');
+      state.showNotification(
+        "Order Execution Failed: Gateway Offline / Server Unreachable",
+        "error",
+      );
     }
   },
 
   cancelOrder: async (id: string) => {
     set((s) => ({
-      workingOrders: s.workingOrders.filter(w => w.id !== id),
+      workingOrders: s.workingOrders.filter((w) => w.id !== id),
     }));
-    get().showNotification(`Working order ${id} canceled`, 'info');
+    get().showNotification(`Working order ${id} canceled`, "info");
   },
 
   fetchPortfolioWeights: async () => {
     try {
-      const res = await fetch(`${GATEWAY_URL}/api/portfolio/weights`, {
-        headers: { Authorization: `Bearer ${getToken()}` }
+      const res = await safeFetch(`${GATEWAY_URL}/api/portfolio/weights`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
       });
-      if (res.ok) {
+      if (res && res.ok) {
         const weights = await res.json();
         set({ portfolioWeights: weights });
       }
-    } catch (e) {
-      console.error('Failed to fetch portfolio weights', e);
+    } catch {
+      // Offline fallback
     }
   },
 
@@ -515,25 +614,42 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   exportToCSV: () => {
     const { tradeHistory } = get();
     if (tradeHistory.length === 0) {
-      get().showNotification('No trades to export', 'info');
+      get().showNotification("No trades to export", "info");
       return;
     }
-    const header = 'ID,Symbol,Side,Qty,Price,RealizedPnL,Timestamp,RoutedExchange,PriceImprovementBps\n';
+    const header =
+      "ID,Symbol,Side,Qty,Price,RealizedPnL,Timestamp,RoutedExchange,PriceImprovementBps\n";
     const rows = tradeHistory
       .map((t: any) =>
-        [t.id, t.symbol, t.side, t.qty, t.price, t.realizedPnL, t.timestamp.toISOString(), t.routedExchange || '', t.priceImprovement || 0].join(',')
+        [
+          t.id,
+          t.symbol,
+          t.side,
+          t.qty,
+          t.price,
+          t.realizedPnL,
+          t.timestamp.toISOString(),
+          t.routedExchange || "",
+          t.priceImprovement || 0,
+        ].join(","),
       )
-      .join('\n');
-    const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
+      .join("\n");
+    const blob = new Blob([header + rows], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `robin_trades_${new Date().toISOString().slice(0, 10)}.csv`);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute(
+      "download",
+      `robin_trades_${new Date().toISOString().slice(0, 10)}.csv`,
+    );
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    get().showNotification(`Exported ${tradeHistory.length} trades to CSV`, 'success');
+    get().showNotification(
+      `Exported ${tradeHistory.length} trades to CSV`,
+      "success",
+    );
   },
 
   showNotification: (message, type) => set({ notification: { message, type } }),
@@ -550,42 +666,44 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   fetchScreenerData: async () => {
     try {
       const token = getToken();
-      const res = await fetch(`${GATEWAY_URL}/api/screener`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      const res = await safeFetch(`${GATEWAY_URL}/api/screener`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
-      if (res.ok) {
+      if (res && res.ok) {
         const data = await res.json();
         set({ screenerAssets: data });
       }
-    } catch (e) {
-      console.error("Failed to fetch screener data", e);
+    } catch {
+      // Offline fallback
     }
   },
 
   fetchHeatmapData: async () => {
     try {
       const token = getToken();
-      const res = await fetch(`${GATEWAY_URL}/api/heatmap`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {}
+      const res = await safeFetch(`${GATEWAY_URL}/api/heatmap`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
-      if (res.ok) {
+      if (res && res.ok) {
         const data = await res.json();
         set({ heatmapSectors: data });
       }
-    } catch (e) {
-      console.error("Failed to fetch heatmap data", e);
+    } catch {
+      // Offline fallback
     }
   },
 
   fetchSorPrices: async (symbol) => {
     try {
-      const res = await fetch(`${GATEWAY_URL}/api/sor/prices?symbol=${encodeURIComponent(symbol)}`);
-      if (res.ok) {
+      const res = await safeFetch(
+        `${GATEWAY_URL}/api/sor/prices?symbol=${encodeURIComponent(symbol)}`,
+      );
+      if (res && res.ok) {
         const data = await res.json();
         set({ sorQuotes: data });
       }
-    } catch (e) {
-      console.error("Failed to fetch SOR prices", e);
+    } catch {
+      // Offline fallback
     }
   },
 
@@ -594,88 +712,100 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       const headers = { Authorization: `Bearer ${getToken()}` };
 
       // 1. Fetch Account (balance, equity)
-      const accRes = await fetch(`${GATEWAY_URL}/api/alpaca/account`, { headers });
-      if (accRes.ok) {
+      const accRes = await safeFetch(`${GATEWAY_URL}/api/alpaca/account`, {
+        headers,
+      });
+      if (accRes && accRes.ok) {
         const acc = await accRes.json();
         set({
           balance: parseFloat(acc.cash || "0"),
           equity: parseFloat(acc.portfolio_value || "0"),
-          marginUtilization: parseFloat(acc.initial_margin || "0") / (parseFloat(acc.portfolio_value || "1")) * 100
+          marginUtilization:
+            (parseFloat(acc.initial_margin || "0") /
+              parseFloat(acc.portfolio_value || "1")) *
+            100,
         });
       }
 
       // 2. Fetch Positions
-      const posRes = await fetch(`${GATEWAY_URL}/api/alpaca/positions`, { headers });
-      if (posRes.ok) {
+      const posRes = await safeFetch(`${GATEWAY_URL}/api/alpaca/positions`, {
+        headers,
+      });
+      if (posRes && posRes.ok) {
         const posData = await posRes.json();
         const positions: Position[] = posData.map((p: any) => ({
           id: p.asset_id,
           symbol: p.symbol,
-          side: p.side === 'long' ? 'LONG' : 'SHORT',
+          side: p.side === "long" ? "LONG" : "SHORT",
           size: Math.abs(parseFloat(p.qty)),
           entryPrice: parseFloat(p.avg_entry_price),
           marginRequired: 0,
           unrealizedPnL: parseFloat(p.unrealized_pl),
-          routedExchange: p.exchange
+          routedExchange: p.exchange,
         }));
         set({ positions });
       }
 
       // 3. Fetch Orders / Trade History
-      const ordRes = await fetch(`${GATEWAY_URL}/api/alpaca/orders`, { headers });
-      if (ordRes.ok) {
+      const ordRes = await safeFetch(`${GATEWAY_URL}/api/alpaca/orders`, {
+        headers,
+      });
+      if (ordRes && ordRes.ok) {
         const ordData = await ordRes.json();
-        const trades = ordData.filter((o: any) => o.status === 'filled').map((o: any) => ({
-          id: o.id,
-          symbol: o.symbol,
-          side: o.side.toUpperCase(),
-          qty: parseFloat(o.filled_qty),
-          price: parseFloat(o.filled_avg_price),
-          realizedPnL: 0,
-          timestamp: new Date(o.filled_at || o.updated_at),
-          routedExchange: o.exchange
-        }));
+        const trades = ordData
+          .filter((o: any) => o.status === "filled")
+          .map((o: any) => ({
+            id: o.id,
+            symbol: o.symbol,
+            side: o.side.toUpperCase(),
+            qty: parseFloat(o.filled_qty),
+            price: parseFloat(o.filled_avg_price),
+            realizedPnL: 0,
+            timestamp: new Date(o.filled_at || o.updated_at),
+            routedExchange: o.exchange,
+          }));
         set({ tradeHistory: trades });
       }
 
       // 4. Fetch Assets
-      const assetsRes = await fetch(`${GATEWAY_URL}/api/alpaca/assets`, { headers });
-      if (assetsRes.ok) {
+      const assetsRes = await safeFetch(`${GATEWAY_URL}/api/alpaca/assets`, {
+        headers,
+      });
+      if (assetsRes && assetsRes.ok) {
         const assetsData = await assetsRes.json();
-        const activeAssets = assetsData.filter((a: any) => a.tradable && a.fractionable).slice(0, 100);
+        const activeAssets = assetsData
+          .filter((a: any) => a.tradable && a.fractionable)
+          .slice(0, 100);
         const assets: Asset[] = activeAssets.map((a: any) => ({
           symbol: a.symbol,
           name: a.name,
           currentPrice: 0,
           dailyChangePct: 0,
-          type: a.class === 'crypto' ? 'crypto' : 'equity'
+          type: a.class === "crypto" ? "crypto" : "equity",
         }));
         if (assets.length > 0) {
           set({ assets });
-          // Optionally set first asset as selected if none is selected
           const currentSymbol = get().selectedSymbol;
-          if (!currentSymbol || currentSymbol === 'BTC/USD') {
-             set({ selectedSymbol: assets[0].symbol });
+          if (!currentSymbol || currentSymbol === "BTC/USD") {
+            set({ selectedSymbol: assets[0].symbol });
           }
         }
       }
-
-    } catch (e) {
-      console.error("Failed to fetch Alpaca state", e);
+    } catch {
+      // Offline fallback
     }
   },
 
-  fetchCandles: async (symbol: string, resolution = '1m') => {
+  fetchCandles: async (symbol: string, resolution = "1m") => {
     try {
-      const res = await fetch(
+      const res = await safeFetch(
         `${GATEWAY_URL}/api/candles?symbol=${encodeURIComponent(symbol)}&resolution=${resolution}`,
-        { signal: AbortSignal.timeout(5000) }
+        { signal: AbortSignal.timeout(5000) },
       );
-      if (res.ok) return await res.json();
-    } catch (e) {
-      console.error('Failed to fetch candles', e);
+      if (res && res.ok) return await res.json();
+    } catch {
+      // Offline fallback
     }
     return [];
   },
 }));
-

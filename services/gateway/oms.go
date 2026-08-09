@@ -33,6 +33,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -99,12 +100,35 @@ type Order struct {
 	mu            sync.RWMutex
 }
 
-func (o *Order) Transition(next OrderState, note string) {
+func (o *Order) Transition(next OrderState, note string) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
+
+	// Terminal state check
+	if o.State == StateFilled || o.State == StateCancelled || o.State == StateRejected {
+		return fmt.Errorf("invalid transition: order %s is in terminal state %s", o.ClientOrderID, o.State)
+	}
+
+	valid := false
+	switch o.State {
+	case StateNew:
+		valid = (next == StatePendingNew || next == StateRejected || next == StateLive)
+	case StatePendingNew:
+		valid = (next == StateLive || next == StateRejected || next == StateCancelled)
+	case StateLive:
+		valid = (next == StatePartiallyFilled || next == StateFilled || next == StateCancelled || next == StateRejected)
+	case StatePartiallyFilled:
+		valid = (next == StateFilled || next == StateCancelled)
+	}
+
+	if !valid {
+		return fmt.Errorf("invalid transition: %s → %s for order %s", o.State, next, o.ClientOrderID)
+	}
+
 	log.Printf("[OMS] %s: %s → %s (%s)", o.ClientOrderID, o.State, next, note)
 	o.State = next
 	o.UpdatedAt = time.Now().UTC()
+	return nil
 }
 
 func (o *Order) ToJSON() []byte {
@@ -530,10 +554,16 @@ func (a *AlpacaConnector) SubmitOrder(ctx context.Context, o *Order) (string, er
 		return fmt.Sprintf("ALP-PAPER-%d", time.Now().UnixNano()), nil
 	}
 
+	// Alpaca requires lowercase side ("buy"/"sell"); Order.Side is "BUY"/"SELL".
+	alpacaSide := "buy"
+	if strings.EqualFold(o.Side, "SELL") || strings.EqualFold(o.Side, "ASK") {
+		alpacaSide = "sell"
+	}
+
 	body := map[string]any{
 		"symbol":        o.Symbol,
 		"qty":           fmt.Sprintf("%.4f", o.Qty),
-		"side":          o.Side,
+		"side":          alpacaSide,
 		"type":          "market",
 		"time_in_force": "day",
 	}

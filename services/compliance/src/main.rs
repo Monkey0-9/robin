@@ -138,6 +138,9 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
     // Shared memory buffer for reading OrderMessages
     let mut shm_reader: Option<ShmBridge> = None;
 
+    let require_shm = std::env::var("ROBIN_REQUIRE_SHM").map(|v| v == "1" || v == "true").unwrap_or(false)
+        || std::env::args().any(|arg| arg == "--require-shm");
+
     match ShmBridge::new(shm_path, false) {
         Ok(reader) => {
             eprintln!("[COMPLIANCE] Connected to SHM: {shm_path}");
@@ -151,6 +154,10 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
                     shm_reader = Some(reader);
                 }
                 Err(err) => {
+                    if require_shm {
+                        eprintln!("[COMPLIANCE] FATAL: SHM buffer unavailable and ROBIN_REQUIRE_SHM is enabled. Refusing to run in demo mode.");
+                        std::process::exit(1);
+                    }
                     eprintln!("[COMPLIANCE] Fallback SHM open failed ({err}) — running in log-only demo mode");
                 }
             }

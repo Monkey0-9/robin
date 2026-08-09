@@ -6,8 +6,15 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
+)
+
+const (
+	writeWait  = 10 * time.Second
+	pongWait   = 60 * time.Second
+	pingPeriod = (pongWait * 9) / 10
 )
 
 var upgrader = websocket.Upgrader{
@@ -28,17 +35,26 @@ type wsClient struct {
 }
 
 func (c *wsClient) writePump() {
+	ticker := time.NewTicker(pingPeriod)
 	defer func() {
+		ticker.Stop()
 		c.conn.Close()
 	}()
 	for {
 		select {
 		case msg, ok := <-c.send:
+			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
+				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 			if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 				slog.Warn("WebSocket write error", "user", c.userID, "error", err)
+				return
+			}
+		case <-ticker.C:
+			_ = c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
 		case <-c.done:
@@ -145,6 +161,13 @@ func (hub *WebSocketHub) readPump(conn *websocket.Conn, userID string) {
 		})
 		slog.Info("WebSocket client disconnected", "user", userID, "total_clients", count)
 	}()
+
+	conn.SetReadLimit(512 * 1024)
+	_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetPongHandler(func(string) error {
+		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
 
 	for {
 		_, message, err := conn.ReadMessage()
