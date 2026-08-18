@@ -213,52 +213,51 @@ fn process_record(
     audit_counter: &Arc<AtomicU64>,
 ) {
     let msg_type = MsgType::from(record.msg_type);
+    let order_id = record.order_id;
+    let account_id = record.account_id;
+    let instrument_id = record.instrument_id;
+    let price = record.price;
+    let qty = record.qty;
+    let timestamp_ns = record.timestamp_ns;
 
-    // Convert to spoofing-detector event
-    let event = OrderEvent {
-        order_id: record.order_id,
-        instrument_id: record.instrument_id,
-        account_id: record.account_id,
-        price: record.price,
-        qty: record.qty,
-        side: record.side,
-        timestamp_ns: record.timestamp_ns,
+    let (event_type_str, action_str) = match msg_type {
+        MsgType::Order => ("NEW", "NEW_ORDER"),
+        MsgType::Cancel => ("CANCEL", "CANCEL"),
+        MsgType::Fill => ("FILL", "EXECUTION"),
+        MsgType::Reject => ("REJECT", "REJECT"),
+        _ => ("UNKNOWN", "UNKNOWN"),
     };
 
-    match msg_type {
-        MsgType::Order => {
-            detector.on_order_placed(&event);
-        }
-        MsgType::Cancel => {
-            if detector.on_order_cancel(&event) {
-                alerts_counter.fetch_add(1, Ordering::Relaxed);
-                eprintln!(
-                    "[compliance] 🚨 SPOOFING ALERT: account={} instrument={} order={}",
-                    record.account_id, record.instrument_id, record.order_id
-                );
-            }
-        }
-        MsgType::Fill => {
-            detector.on_fill(&event);
-        }
-        _ => {}
+    let event = OrderEvent {
+        order_id,
+        symbol: format!("INST_{}", instrument_id),
+        price,
+        qty,
+        event_type: event_type_str,
+        timestamp_ns,
+    };
+
+    if detector.process_order_event(event) {
+        alerts_counter.fetch_add(1, Ordering::Relaxed);
+        eprintln!(
+            "[compliance] 🚨 SPOOFING ALERT: account={} instrument={} order={}",
+            account_id, instrument_id, order_id
+        );
     }
 
     // Write every event to WORM audit log
     let audit_rec = AuditRecord {
-        timestamp_ns: record.timestamp_ns,
-        event_type: format!("{:?}", msg_type),
-        order_id: record.order_id,
-        account_id: record.account_id,
-        instrument_id: record.instrument_id,
-        price: record.price,
-        qty: record.qty,
-        side: record.side,
-        details: String::new(),
+        timestamp_ns,
+        order_id,
+        action: action_str,
+        price,
+        qty,
+        client_id: account_id,
+        instrument_id,
     };
 
     if let Ok(mut log) = logger.lock() {
-        if let Err(e) = log.write_record(&audit_rec) {
+        if let Err(e) = log.log_transaction(&audit_rec) {
             eprintln!("[compliance] Audit log write failed: {}", e);
         } else {
             audit_counter.fetch_add(1, Ordering::Relaxed);

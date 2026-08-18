@@ -14,12 +14,13 @@ import (
 
 // VenueQuote is a single venue's best bid/ask with sizes (real market data).
 type VenueQuote struct {
-	Symbol   string
-	Exchange string
-	Bid      float64
-	Ask      float64
-	BidSize  float64
-	AskSize  float64
+	Symbol      string  `json:"symbol"`
+	Exchange    string  `json:"exchange"`
+	Bid         float64 `json:"bid"`
+	Ask         float64 `json:"ask"`
+	BidSize     float64 `json:"bid_size"`
+	AskSize     float64 `json:"ask_size"`
+	IsSimulated bool    `json:"is_simulated"`
 }
 
 // NBBOCache is a lock-free-enough, mutex-guarded store of per-symbol NBBO

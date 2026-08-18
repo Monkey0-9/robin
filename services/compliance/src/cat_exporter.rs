@@ -460,9 +460,9 @@ mod tests {
     fn test_xml_escaping() {
         let s = r#"A&B<C>D"E'F"#;
         let escaped = escape_xml(s);
-        assert!(!escaped.contains('&'), "raw & not escaped");
-        assert!(!escaped.contains('<'), "raw < not escaped");
-        assert!(!escaped.contains('>'), "raw > not escaped");
+        assert_eq!(escaped, "A&amp;B&lt;C&gt;D&quot;E&apos;F");
+        assert!(!escaped.contains('<'));
+        assert!(!escaped.contains('>'));
     }
 
     #[test]

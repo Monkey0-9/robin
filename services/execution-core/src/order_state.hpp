@@ -58,8 +58,13 @@ private:
     static constexpr uint64_t kSeqMask = kSeqLimit - 1;
 
     static uint64_t wall_bucket() noexcept {
-        auto now = std::chrono::system_clock::now().time_since_epoch();
-        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count()) >> 16;
+        static const auto epoch_anchor = std::chrono::system_clock::now().time_since_epoch();
+        static const auto steady_start = std::chrono::steady_clock::now();
+
+        auto steady_now = std::chrono::steady_clock::now();
+        auto elapsed = steady_now - steady_start;
+        auto total_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(epoch_anchor + elapsed).count();
+        return static_cast<uint64_t>(total_ns) >> 16;
     }
 
     static std::atomic<uint64_t> state_;

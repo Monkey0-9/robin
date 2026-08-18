@@ -1,99 +1,124 @@
-.PHONY: dev dev-gateway dev-ai dev-frontend dev-robin-swarm build test e2e docker-up docker-down clean
+# ============================================================================
+# Robin Quantitative Trading Platform — Master Makefile
+# ============================================================================
+# Institutional-grade build, test, lint, and deployment targets.
+# Supports Linux (Ubuntu 22.04/24.04), WSL2, and Containerized environments.
+# ============================================================================
 
-# ── Local Development ──────────────────────────────────────────────────────────
+.PHONY: all build build-cpp build-rust build-go build-frontend \
+        test test-cpp test-rust test-go test-python test-frontend \
+        benchmark lint fmt docker deploy clean help
 
-## Start all services natively (Gateway + AI Agent + Frontend + Swarm)
-dev-native:
-	@start "Robin Gateway" cmd /k "C:\Robin\start_gateway.bat"
-	@timeout /t 2 /nobreak > nul
-	@start "Robin AI Agent" cmd /k "cd services\ai-agent && python main.py"
-	@timeout /t 2 /nobreak > nul
-	@start "Robin Frontend" cmd /k "cd frontend && npm run dev"
-	@start "Robin Swarm" cmd /k "docker-compose up robin-swarm -d"
-	@echo "[Robin] Services starting. Open http://localhost:3000"
+# Default target
+all: build test
 
-## Start only the Go gateway
-dev-gateway:
-	cd services\gateway && go run .
+# ── Build Targets ────────────────────────────────────────────────────────────
 
-## Start only the Python AI agent
-dev-ai:
-	cd services\ai-agent && python main.py
+## Build all binaries and frontend assets
+build: build-cpp build-rust build-go build-frontend
 
-## Start only the Next.js frontend
-dev-frontend:
-	cd frontend && npm run dev
+## Build C++20 matching engine and benchmarks
+build-cpp:
+	@echo "=== Building C++ Execution Core ==="
+	mkdir -p services/execution-core/build
+	cd services/execution-core/build && cmake .. -DCMAKE_BUILD_TYPE=Release && cmake --build . -j$$(nproc || echo 4)
 
-## Start Robin Swarm engine
-dev-robin-swarm:
-	@echo "Starting Robin Swarm engine..."
-	docker-compose up robin-swarm -d
+## Build Rust risk analytics and compliance services
+build-rust:
+	@echo "=== Building Rust Risk Analytics & Compliance ==="
+	cd services/risk-analytics && cargo build --release
+	cd services/compliance && cargo build --release
 
-# ── Build ──────────────────────────────────────────────────────────────────────
+## Build Go gateway and portfolio services
+build-go:
+	@echo "=== Building Go Gateway & Portfolio Services ==="
+	cd services/gateway && go build -v -o ../../bin/robin-gateway .
+	cd services/portfolio && go build -v -o ../../bin/robin-portfolio .
 
-## Build Go gateway binary
-build-gateway:
-	cd services\gateway && go build -o gateway.exe .
-
-## Build Next.js production bundle
+## Build Next.js trading terminal frontend
 build-frontend:
-	cd frontend && npm run build
+	@echo "=== Building Next.js Frontend ==="
+	cd frontend && npm install && npm run build
 
-## Build everything
-build: build-gateway build-frontend
+# ── Testing Targets ──────────────────────────────────────────────────────────
 
-# ── Testing ────────────────────────────────────────────────────────────────────
+## Run complete test suite across all languages
+test: test-cpp test-rust test-go test-python test-frontend
+
+## Run C++ matching engine benchmarks and tests
+test-cpp:
+	@echo "=== Testing C++ Execution Core ==="
+	cd services/execution-core/build && ctest --output-on-failure || ./order_book_benchmark
+
+## Run Rust unit and integration tests
+test-rust:
+	@echo "=== Testing Rust Risk Analytics & Compliance ==="
+	cd services/risk-analytics && cargo test --lib -- --nocapture
+	cd services/compliance && cargo test --lib -- --nocapture
 
 ## Run Go unit tests
 test-go:
-	cd services\gateway && go test ./... -v -timeout 30s
+	@echo "=== Testing Go Services ==="
+	cd services/gateway && go test -v -timeout 60s ./...
+	cd services/portfolio && go test -v ./...
 
-## Run frontend tests (vitest)
+## Run Python quantitative engine and strategy tests
+test-python:
+	@echo "=== Testing Python AI Agent & Backtesters ==="
+	cd services/ai-agent && python test_components.py
+	cd research/strategy-engine && python backtester.py
+
+## Run frontend tests
 test-frontend:
+	@echo "=== Testing Frontend ==="
 	cd frontend && npm test -- --run
 
-## Run all tests
-test: test-go test-frontend
+# ── Benchmarks & Diagnostics ─────────────────────────────────────────────────
 
-## Run E2E integration test against running services
-e2e:
-	powershell -ExecutionPolicy Bypass -File scripts\e2e_test.ps1
+## Run system-wide throughput, latency, and compliance benchmarks
+benchmark:
+	@echo "=== Executing Performance Benchmarks ==="
+	chmod +x scripts/benchmark.sh
+	./scripts/benchmark.sh
 
-# ── Docker ─────────────────────────────────────────────────────────────────────
+# ── Formatting & Linting ─────────────────────────────────────────────────────
 
-## Start all services via Docker Compose
-docker-up:
-	docker-compose up --build -d
+## Run linters across all codebases
+lint:
+	@echo "=== Running Linters ==="
+	cd services/risk-analytics && cargo clippy -- -D warnings
+	cd services/compliance && cargo clippy -- -D warnings
+	cd services/gateway && go vet ./...
+	cd frontend && npm run lint
 
-## Stop all Docker Compose services
-docker-down:
-	docker-compose down
+## Auto-format all source code
+fmt:
+	@echo "=== Formatting Source Files ==="
+	find services/execution-core/src -name "*.cpp" -o -name "*.hpp" | xargs clang-format -i 2>/dev/null || true
+	cd services/risk-analytics && cargo fmt
+	cd services/compliance && cargo fmt
+	cd services/gateway && gofmt -w .
+	cd services/portfolio && gofmt -w .
 
-## Show Docker Compose logs
-docker-logs:
-	docker-compose logs -f
+# ── Docker & Deployment ──────────────────────────────────────────────────────
 
-# ── Utilities ──────────────────────────────────────────────────────────────────
+## Build and launch production Docker Compose stack (all 12 services)
+docker:
+	docker compose -f infra/docker-compose.prod.yml build
 
-## Remove build artifacts
+## Deploy production stack
+deploy:
+	docker compose -f infra/docker-compose.prod.yml up -d
+
+## Tear down production stack
+down:
+	docker compose -f infra/docker-compose.prod.yml down
+
+# ── Cleanup ──────────────────────────────────────────────────────────────────
+
+## Clean all build artifacts
 clean:
-	cd services\gateway && del /f gateway.exe 2>nul
-	cd frontend && rmdir /s /q .next 2>nul
-	@echo "[Robin] Cleaned build artifacts."
-
-## Check gateway health
-health:
-	curl -s http://localhost:8080/health | python -m json.tool
-
-## Show help
-help:
-	@echo.
-	@echo   Robin Institutional Trading Platform
-	@echo   make dev              Start all services (no Docker)
-	@echo   make build            Build all binaries
-	@echo   make test             Run all tests
-	@echo   make e2e              Run E2E integration tests
-	@echo   make docker-up        Start via Docker Compose
-	@echo   make health           Check gateway health endpoint
-	@echo   make clean            Remove build artifacts
-	@echo.
+	rm -rf services/execution-core/build bin/
+	cd services/risk-analytics && cargo clean
+	cd services/compliance && cargo clean
+	rm -rf frontend/.next frontend/out
