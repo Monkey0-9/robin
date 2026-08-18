@@ -5,6 +5,7 @@ pub mod cvd;
 pub mod esg_mandate;
 pub mod gate;
 pub mod gpio_kill_switch;
+pub mod greeks_simd;
 pub mod hedging;
 pub mod metrics;
 pub mod order_state;

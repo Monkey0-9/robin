@@ -302,7 +302,8 @@ mod tests {
     fn uncorrelated_returns_sit_near_zero() {
         let mut m = EwmaCorrelationMonitor::new();
         let mut px_a = 100.0_f64;
-        #[allow(unused_assignments)] let mut px_b = 200.0_f64;
+        #[allow(unused_assignments)]
+        let mut px_b = 200.0_f64;
         // b moves with a 2π/4.phase offset -> E[cos rate] ~ 0.
         let mut phase: f64 = 0.0;
         for i in 0..400u64 {
@@ -339,7 +340,8 @@ mod tests {
     #[test]
     fn bounded_memory() {
         let mut m = EwmaCorrelationMonitor::new();
-        #[allow(unused_assignments)] let mut px = 100.0;
+        #[allow(unused_assignments)]
+        let mut px = 100.0;
         for i in 0..200u32 {
             let step = i as u64;
             px = 100.0 + step as f64 * 0.1;

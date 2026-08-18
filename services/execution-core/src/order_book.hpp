@@ -1,6 +1,7 @@
 #pragma once
 
 #include "order_state.hpp"
+#include "memory_pool.hpp"
 #include <cstdint>
 #include <cstring>
 #include <algorithm>
@@ -341,25 +342,49 @@ private:
     
 
     // ------------------------------------------------------------------ //
-    // Level management                                                    //
+    // Sequence verification & Gap Detection                               //
     // ------------------------------------------------------------------ //
+public:
+    [[nodiscard]]
+    bool verify_sequence(uint64_t seq_num) noexcept {
+        if (expected_seq_num_ == 0) {
+            expected_seq_num_ = seq_num + 1;
+            last_seq_num_ = seq_num;
+            return true;
+        }
+        if (seq_num != expected_seq_num_) {
+            gap_count_++;
+            expected_seq_num_ = seq_num + 1;
+            last_seq_num_ = seq_num;
+            return false; // Gap detected in inbound sequence stream
+        }
+        expected_seq_num_++;
+        last_seq_num_ = seq_num;
+        return true;
+    }
 
+    uint64_t expected_seq_num() const noexcept { return expected_seq_num_; }
+    uint64_t last_seq_num() const noexcept { return last_seq_num_; }
+    uint64_t gap_count() const noexcept { return gap_count_; }
+
+private:
     OrderQueue<256>* allocate_queue() {
-        auto* q = new OrderQueue<256>();
+        auto* q = PooledQueue<OrderQueue<256>>::global_pool().acquire();
+        if (!q) q = new OrderQueue<256>(); // Fallback
         allocated_queues_.push_back(q);
         return q;
     }
 
-    // Remove a queue from the tracking vector and release it. Keeps the
-    // destructor (and purge) from double-freeing.
+    // Remove a queue from the tracking vector and release it back to pool.
     void release_queue(OrderQueue<256>* q) noexcept {
+        if (!q) return;
         for (size_t k = 0; k < allocated_queues_.size(); ++k) {
             if (allocated_queues_[k] == q) {
                 allocated_queues_.erase(allocated_queues_.begin() + k);
                 break;
             }
         }
-        delete q;
+        PooledQueue<OrderQueue<256>>::global_pool().release(q);
     }
 
     bool push_bid(const Order& order) noexcept {
@@ -630,6 +655,9 @@ private:
     uint32_t   luld_band_bps_;
     bool       luld_halted_;
     int64_t    luld_ref_price_;
+    uint64_t   expected_seq_num_ = 0;
+    uint64_t   last_seq_num_ = 0;
+    uint64_t   gap_count_ = 0;
 };
 
 } // namespace execution
