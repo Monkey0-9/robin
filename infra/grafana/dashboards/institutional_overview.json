@@ -1,0 +1,99 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": 1,
+  "links": [],
+  "liveNow": true,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "title": "Execution Core & Hot-Path Latency (Sub-Microsecond)",
+      "type": "row"
+    },
+    {
+      "id": 1,
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
+      "title": "Matching Engine p50 / p99 / p999 Latency (ns)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "histogram_quantile(0.50, rate(order_match_duration_ns_bucket[1m]))", "legendFormat": "p50 Latency" },
+        { "expr": "histogram_quantile(0.99, rate(order_match_duration_ns_bucket[1m]))", "legendFormat": "p99 Latency" },
+        { "expr": "histogram_quantile(0.999, rate(order_match_duration_ns_bucket[1m]))", "legendFormat": "p999 Latency" }
+      ]
+    },
+    {
+      "id": 2,
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
+      "title": "Order Ingestion Throughput (Orders/Sec)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "sum(rate(matching_engine_orders_total[1m]))", "legendFormat": "Total Orders/s" },
+        { "expr": "sum(rate(matching_engine_trades_total[1m]))", "legendFormat": "Total Trades/s" }
+      ]
+    },
+    {
+      "id": 3,
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
+      "title": "Pre-Trade Risk Gate Check Latency (ns)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "histogram_quantile(0.99, rate(risk_check_duration_ns_bucket[1m]))", "legendFormat": "Risk Gate p99" }
+      ]
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "id": 200,
+      "title": "Portfolio Risk & Regulatory Compliance (SEC 15c3-5 / MiFID II)",
+      "type": "row"
+    },
+    {
+      "id": 4,
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 10 },
+      "title": "Consolidated Portfolio Value-at-Risk (99% VaR)",
+      "type": "stat",
+      "targets": [
+        { "expr": "robin_portfolio_var_99", "legendFormat": "1-Day 99% VaR ($)" }
+      ]
+    },
+    {
+      "id": 5,
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 10 },
+      "title": "Real-Time Unrealized & Realized P&L",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "robin_portfolio_realized_pnl", "legendFormat": "Realized P&L" },
+        { "expr": "robin_portfolio_unrealized_pnl", "legendFormat": "Unrealized P&L" }
+      ]
+    },
+    {
+      "id": 6,
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 10 },
+      "title": "WORM Audit Trail Records & Blockchain Roots",
+      "type": "stat",
+      "targets": [
+        { "expr": "robin_compliance_audit_records_total", "legendFormat": "Persisted Audit Records" }
+      ]
+    },
+    {
+      "id": 7,
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 10 },
+      "title": "Smart Order Routing Price Improvement (bps)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "rate(robin_sor_price_improvement_bps_sum[1m]) / rate(robin_sor_price_improvement_bps_count[1m])", "legendFormat": "Avg Price Improvement (bps)" }
+      ]
+    }
+  ],
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["hft", "trading", "risk", "compliance", "institutional"],
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": { "refresh_intervals": ["1s", "5s", "10s", "30s", "1m"] },
+  "timezone": "utc",
+  "title": "Robin Institutional Trading & Risk Command Center"
+}

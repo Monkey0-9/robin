@@ -1,0 +1,76 @@
+# ============================================================================
+# Robin Quantitative Trading Platform — Prometheus Alerting Rules
+# infra/prometheus/alerts.yml
+# ============================================================================
+groups:
+  - name: robin_trading_alerts
+    rules:
+      - alert: RobinHighMatchingLatency
+        expr: histogram_quantile(0.99, rate(order_match_duration_ns_bucket[1m])) > 10000
+        for: 30s
+        labels:
+          severity: critical
+          tier: hot-path
+        annotations:
+          summary: "Matching engine p99 latency exceeded 10 microseconds"
+          description: "Matching engine p99 latency is currently {{ $value }}ns, violating the institutional SLA."
+
+      - alert: RobinCircuitBreakerTripped
+        expr: robin_circuit_breaker_state == 1
+        for: 0s
+        labels:
+          severity: page
+          tier: risk
+        annotations:
+          summary: "LULD or Max Drawdown Circuit Breaker TRIPPED"
+          description: "Account or instrument circuit breaker tripped. All outbound quoting suspended."
+
+      - alert: RobinKillSwitchActive
+        expr: robin_kernel_kill_switch_active == 1
+        for: 0s
+        labels:
+          severity: page
+          tier: security
+        annotations:
+          summary: "Hardware / Kernel GPIO Kill Switch Engaged"
+          description: "Emergency netfilter drop rules active across trading interfaces."
+
+      - alert: RobinFeedSequenceGap
+        expr: increase(robin_feed_gap_counter[1m]) > 0
+        for: 10s
+        labels:
+          severity: warning
+          tier: ingestion
+        annotations:
+          summary: "Market data UDP packet loss detected"
+          description: "Gap in ITCH/XDP sequence numbers detected. Triggering exchange gap recovery."
+
+      - alert: RobinRiskEngineDown
+        expr: up{job="robin-risk-analytics"} == 0
+        for: 5s
+        labels:
+          severity: page
+          tier: risk
+        annotations:
+          summary: "Risk Analytics Daemon Unreachable"
+          description: "Pre-trade risk gate down. Gateway is failing closed pursuant to SEC 15c3-5."
+
+      - alert: RobinComplianceSpoofingAlert
+        expr: increase(robin_compliance_spoofing_alerts[1m]) > 0
+        for: 0s
+        labels:
+          severity: high
+          tier: compliance
+        annotations:
+          summary: "Potential Spoofing / Layering Market Abuse Pattern Detected"
+          description: "Surveillance engine flagged abnormal order cancel-to-fill ratio."
+
+      - alert: RobinKdbWalLag
+        expr: robin_kdb_wal_replay_lag_seconds > 1.0
+        for: 1m
+        labels:
+          severity: warning
+          tier: persistence
+        annotations:
+          summary: "KDB+ Tickerplant WAL replay lag > 1.0s"
+          description: "Disk I/O backpressure detected on real-time database partition."
