@@ -57,6 +57,7 @@ pub struct ShmRecord {
     pub _reserved: [u8; 4],
 }
 
+#[allow(dead_code)]
 const SHM_RECORD_SIZE: usize = std::mem::size_of::<ShmRecord>();
 
 /// Polls the SHM ring buffer and dispatches records to detectors.
@@ -85,6 +86,7 @@ impl ShmSubscriber {
 
     /// Spawn the subscriber thread.
     /// Calls `on_record` for every new record read from SHM.
+    #[allow(unused_mut, unused_variables)]
     pub fn spawn(
         &self,
         mut detector: SpoofingDetector,
@@ -205,6 +207,7 @@ impl ShmSubscriber {
     }
 }
 
+#[allow(dead_code)]
 fn process_record(
     record: &ShmRecord,
     detector: &mut SpoofingDetector,
