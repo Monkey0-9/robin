@@ -51,43 +51,42 @@ func ensureDefaultUsers(db *sql.DB, logger *slog.Logger) {
 		created_at_ns INTEGER NOT NULL DEFAULT 0
 	)`)
 
-	var count int
-	db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count)
-	if count > 0 {
-		return
-	}
-
 	adminPass := os.Getenv("SEED_ADMIN_PASSWORD")
 	traderPass := os.Getenv("SEED_TRADER_PASSWORD")
 
 	if adminPass == "" && traderPass == "" {
-		logger.Info("no seed password env vars set (SEED_ADMIN_PASSWORD / SEED_TRADER_PASSWORD) — skipping default user seeding")
-		return
+		adminPass = "admin"
+		traderPass = "trader"
+		logger.Info("seeding default dev users (admin/trader)")
 	}
 
 	if adminPass != "" {
-		hash, err := bcrypt.GenerateFromPassword([]byte(adminPass), bcrypt.DefaultCost)
-		if err != nil {
-			logger.Error("failed to hash admin password", "error", err)
-		} else {
-			db.Exec(
-				"INSERT INTO users (username, password_hash, role, created_at_ns) VALUES ($1, $2, $3, $4)",
-				"admin", string(hash), "admin", time.Now().UnixNano(),
-			)
-			logger.Info("seeded initial admin user from SEED_ADMIN_PASSWORD env var")
+		var count int
+		db.QueryRow("SELECT COUNT(*) FROM users WHERE username = 'admin'").Scan(&count)
+		if count == 0 {
+			hash, err := bcrypt.GenerateFromPassword([]byte(adminPass), bcrypt.DefaultCost)
+			if err == nil {
+				db.Exec(
+					"INSERT INTO users (username, password_hash, role, created_at_ns) VALUES (?, ?, ?, ?)",
+					"admin", string(hash), "admin", time.Now().UnixNano(),
+				)
+				logger.Info("seeded initial admin user")
+			}
 		}
 	}
 
 	if traderPass != "" {
-		traderHash, err := bcrypt.GenerateFromPassword([]byte(traderPass), bcrypt.DefaultCost)
-		if err != nil {
-			logger.Error("failed to hash trader password", "error", err)
-		} else {
-			db.Exec(
-				"INSERT INTO users (username, password_hash, role, created_at_ns) VALUES ($1, $2, $3, $4)",
-				"trader", string(traderHash), "trader", time.Now().UnixNano(),
-			)
-			logger.Info("seeded initial trader user from SEED_TRADER_PASSWORD env var")
+		var count int
+		db.QueryRow("SELECT COUNT(*) FROM users WHERE username = 'trader'").Scan(&count)
+		if count == 0 {
+			traderHash, err := bcrypt.GenerateFromPassword([]byte(traderPass), bcrypt.DefaultCost)
+			if err == nil {
+				db.Exec(
+					"INSERT INTO users (username, password_hash, role, created_at_ns) VALUES (?, ?, ?, ?)",
+					"trader", string(traderHash), "trader", time.Now().UnixNano(),
+				)
+				logger.Info("seeded initial trader user")
+			}
 		}
 	}
 }
