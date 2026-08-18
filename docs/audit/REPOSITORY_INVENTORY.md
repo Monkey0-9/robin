@@ -1,4 +1,5 @@
 # Robin Quantitative Trading Platform — Comprehensive Repository Inventory
+
 **Document ID:** AUDIT-INV-202608-01  
 **Generated:** 2026-08-18  
 **Classification:** Institutional Architecture Audit  
@@ -19,7 +20,7 @@
 
 ## 2. Directory Structure & Component Taxonomy
 
-```
+```text
 c:\Robin\
 ├── .github/workflows/          # CI/CD pipelines (15 jobs: build, test, fuzz, pentest, SBOM)
 ├── config/                     # Configuration templates, SHM layouts, and YAML profiles
@@ -70,7 +71,7 @@ c:\Robin\
 | **KDB+ Tickerplant** | `5000` (QIPC) / `5001` (HTTP) | QIPC / REST JSON | TCP | <1 ms |
 | **Risk Metrics Daemon** | `9090` (Prometheus) | Prometheus Text / OTLP | TCP | <5 ms |
 | **Compliance Daemon** | `9095` (HTTP) | JSON Status / WORM Log | TCP / File WAL | <10 ms |
-| **Next.js Trading Terminal**| `3000` (HTTP) | HTTP / React SSR | TCP | <20 ms |
+| **Next.js Trading Terminal** | `3000` (HTTP) | HTTP / React SSR | TCP | <20 ms |
 | **Kernel Kill Switch** | GPIO Pin / Netfilter Hook | Kernel IRQ / Drop Rule | Hardware PCIe | <100 ns |
 
 ---
