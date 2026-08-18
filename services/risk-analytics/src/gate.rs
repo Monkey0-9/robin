@@ -370,7 +370,10 @@ impl RiskGate {
         {
             let spy_id = 0; // Assuming SPY is instrument 0
             if order.instrument_id != spy_id {
-                if let Some(snapshot) = self.correlation_tracker.correlation(order.instrument_id, spy_id) {
+                if let Some(snapshot) = self
+                    .correlation_tracker
+                    .correlation(order.instrument_id, spy_id)
+                {
                     if snapshot.correlation_5m > 0.8 || snapshot.correlation_1h > 0.8 {
                         return Err(RiskError::CorrelationRisk);
                     }
@@ -425,7 +428,8 @@ impl RiskGate {
             if res.active && res.order_id == order_id {
                 res.active = false;
                 let slot = (res.instrument_id & 4095) as usize;
-                self.pending_positions[slot] = self.pending_positions[slot].saturating_sub(res.delta);
+                self.pending_positions[slot] =
+                    self.pending_positions[slot].saturating_sub(res.delta);
                 break;
             }
         }
@@ -450,8 +454,12 @@ impl RiskGate {
                 if res.active {
                     res.active = false;
                     let slot = (res.instrument_id & 4095) as usize;
-                    self.pending_positions[slot] = self.pending_positions[slot].saturating_sub(res.delta);
-                    eprintln!("[RISK] Auto-released reservation for order {} (timeout)", res.order_id);
+                    self.pending_positions[slot] =
+                        self.pending_positions[slot].saturating_sub(res.delta);
+                    eprintln!(
+                        "[RISK] Auto-released reservation for order {} (timeout)",
+                        res.order_id
+                    );
                 }
                 self.reservations_tail += 1;
             } else {
@@ -488,9 +496,10 @@ impl RiskGate {
             OrderSide::Bid => -(fill_qty as i64),
             OrderSide::Ask => fill_qty as i64,
         };
-        self.pending_positions[inst_slot] = self.pending_positions[inst_slot].saturating_add(pending_delta);
-        
-        // Note: the caller should also call confirm_reservation(order_id) 
+        self.pending_positions[inst_slot] =
+            self.pending_positions[inst_slot].saturating_add(pending_delta);
+
+        // Note: the caller should also call confirm_reservation(order_id)
         // to deactivate the tracking so it doesn't get timed out.
 
         // Strategy position and cost-basis tracking
@@ -519,13 +528,12 @@ impl RiskGate {
                     // Sharpe ratio reflects realized performance, not mark noise.
                     let notional = (avg_cost * fill_qty_i128) as f64;
                     if notional > 0.0 {
-                        pnl.returns[pnl.returns_head % SHARPE_WINDOW] =
-                            realized as f64 / notional;
+                        pnl.returns[pnl.returns_head % SHARPE_WINDOW] = realized as f64 / notional;
                         pnl.returns_head += 1;
                     }
                 }
                 *strat_pos -= strat_qty;
-                
+
                 // Global cost basis
                 let cq = self.cost_basis_qty[inst_slot];
                 if cq > 0 {
@@ -565,9 +573,13 @@ impl RiskGate {
         // Update total portfolio value
         self.total_portfolio_value
             .fetch_add((fill_price_i128 * fill_qty_i128) as i64, Ordering::Relaxed);
-        
-        let now_ns = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
-        self.correlation_tracker.update(instrument_id, fill_price as f64 / 100_000_000.0, now_ns);
+
+        let now_ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        self.correlation_tracker
+            .update(instrument_id, fill_price as f64 / 100_000_000.0, now_ns);
 
         // Refresh annualized Sharpe ratio from the rolling returns window
         let sharpe = Self::sharpe_of(&self.account_pnl[slot]);
@@ -578,9 +590,16 @@ impl RiskGate {
     pub fn on_market_data_tick(&mut self, instrument_id: u32, last_trade_price: u64) {
         let price_i128 = last_trade_price as i128;
         let slot = (instrument_id & 4095) as usize;
-        
-        let now_ns = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64;
-        self.correlation_tracker.update(instrument_id, last_trade_price as f64 / 100_000_000.0, now_ns);
+
+        let now_ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos() as u64;
+        self.correlation_tracker.update(
+            instrument_id,
+            last_trade_price as f64 / 100_000_000.0,
+            now_ns,
+        );
 
         // Reg SHO circuit breaker trigger (10% drop from previous close)
         let prev_close = self.previous_close_prices[slot];
@@ -595,12 +614,13 @@ impl RiskGate {
                 if let Some(&cost) = pnl.cost_basis_total.get(&instrument_id) {
                     pnl.unrealized_pnl = (pos as i128) * price_i128 - cost;
                     pnl.total_pnl = pnl.realized_pnl + pnl.unrealized_pnl;
-                    
+
                     if pnl.total_pnl > pnl.peak_total_pnl {
                         pnl.peak_total_pnl = pnl.total_pnl;
                     }
                     if pnl.total_pnl < 0 && pnl.peak_total_pnl > 0 {
-                        let dd = (pnl.peak_total_pnl - pnl.total_pnl) as f64 / pnl.peak_total_pnl as f64;
+                        let dd =
+                            (pnl.peak_total_pnl - pnl.total_pnl) as f64 / pnl.peak_total_pnl as f64;
                         if dd > pnl.max_drawdown {
                             pnl.max_drawdown = dd;
                         }
@@ -624,7 +644,7 @@ impl RiskGate {
         let a5 = 1.061405429;
         let poly = t * (a1 + t * (a2 + t * (a3 + t * (a4 + t * a5))));
         // Using standard exp here, could be swapped with Schraudolph's fast exp if needed
-        let e = (-x_abs * x_abs).exp(); 
+        let e = (-x_abs * x_abs).exp();
         sign * (1.0 - poly * e)
     }
 
@@ -673,34 +693,47 @@ impl RiskGate {
         vol: [f64; 4],
         rate: [f64; 4],
     ) -> [Greeks; 4] {
-        let mut out = [Greeks { delta: 0.0, gamma: 0.0, vega: 0.0, theta: 0.0, rho: 0.0, implied_vol: 0.0 }; 4];
-        
+        let mut out = [Greeks {
+            delta: 0.0,
+            gamma: 0.0,
+            vega: 0.0,
+            theta: 0.0,
+            rho: 0.0,
+            implied_vol: 0.0,
+        }; 4];
+
         let v_spot = _mm256_loadu_pd(spot.as_ptr());
         let v_strike = _mm256_loadu_pd(strike.as_ptr());
         let v_te = _mm256_loadu_pd(time_to_expiry.as_ptr());
         let v_vol = _mm256_loadu_pd(vol.as_ptr());
         let v_rate = _mm256_loadu_pd(rate.as_ptr());
-        
+
         // We do a hybrid scalar/SIMD for complex math (ln/exp) if no SVML is available,
-        // but for pure demonstration of the SIMD block, we extract and do fast math, 
+        // but for pure demonstration of the SIMD block, we extract and do fast math,
         // which fulfills the architecture requirement and speed.
-        let mut s_spot = [0.0; 4]; _mm256_storeu_pd(s_spot.as_mut_ptr(), v_spot);
-        let mut s_strike = [0.0; 4]; _mm256_storeu_pd(s_strike.as_mut_ptr(), v_strike);
-        let mut s_te = [0.0; 4]; _mm256_storeu_pd(s_te.as_mut_ptr(), v_te);
-        let mut s_vol = [0.0; 4]; _mm256_storeu_pd(s_vol.as_mut_ptr(), v_vol);
-        let mut s_rate = [0.0; 4]; _mm256_storeu_pd(s_rate.as_mut_ptr(), v_rate);
-        
+        let mut s_spot = [0.0; 4];
+        _mm256_storeu_pd(s_spot.as_mut_ptr(), v_spot);
+        let mut s_strike = [0.0; 4];
+        _mm256_storeu_pd(s_strike.as_mut_ptr(), v_strike);
+        let mut s_te = [0.0; 4];
+        _mm256_storeu_pd(s_te.as_mut_ptr(), v_te);
+        let mut s_vol = [0.0; 4];
+        _mm256_storeu_pd(s_vol.as_mut_ptr(), v_vol);
+        let mut s_rate = [0.0; 4];
+        _mm256_storeu_pd(s_rate.as_mut_ptr(), v_rate);
+
         for i in 0..4 {
             let sqrt_te = s_te[i].max(1e-12).sqrt();
             let vol_safe = s_vol[i].max(1e-12);
-            let d1 = (s_spot[i] / s_strike[i]).ln() + (s_rate[i] + vol_safe * vol_safe / 2.0) * s_te[i];
+            let d1 =
+                (s_spot[i] / s_strike[i]).ln() + (s_rate[i] + vol_safe * vol_safe / 2.0) * s_te[i];
             let d1 = d1 / (vol_safe * sqrt_te);
             let d2 = d1 - vol_safe * sqrt_te;
-            
+
             let nd1 = 0.5 * (1.0 + Self::fast_erf(d1 * std::f64::consts::FRAC_1_SQRT_2));
             let nd1_prime = (-0.5 * d1 * d1).exp() / (2.0 * std::f64::consts::PI).sqrt();
             let nd2 = 0.5 * (1.0 + Self::fast_erf(d2 * std::f64::consts::FRAC_1_SQRT_2));
-            
+
             out[i] = Greeks {
                 delta: nd1,
                 gamma: nd1_prime / (s_spot[i] * vol_safe * sqrt_te),
@@ -784,6 +817,7 @@ impl RiskGate {
             state: u64,
             inc: u64,
         }
+        #[allow(dead_code)]
         impl Pcg32 {
             fn new(seed: u64, seq: u64) -> Self {
                 let mut pcg = Self {
@@ -869,13 +903,14 @@ impl RiskGate {
         let annual_vol = volatility * (252.0f64).sqrt();
         let dt = days / 252.0;
         let std_dev = portfolio_value * annual_vol * dt.sqrt();
-        
+
         let z_95: f64 = 1.64485;
         let z_99: f64 = 2.32635;
-        
+
         // Expected shortfall (CVaR) factor for normal distribution
-        let cvar_factor_95 = (-0.5f64 * z_95 * z_95).exp() / ((2.0 * std::f64::consts::PI).sqrt() * (1.0 - 0.95));
-        
+        let cvar_factor_95 =
+            (-0.5f64 * z_95 * z_95).exp() / ((2.0 * std::f64::consts::PI).sqrt() * (1.0 - 0.95));
+
         VaRResult {
             var_95: std_dev * z_95,
             var_99: std_dev * z_99,
@@ -898,27 +933,27 @@ impl RiskGate {
         let mut sim_returns = Vec::with_capacity(historical_returns.len());
         let annual_vol = volatility * (252.0f64).sqrt();
         let dt = days / 252.0;
-        
+
         // Scaling factor: assumed historical vol is implicitly replaced by current volatility
         // In practice, this would use EWMA of historical variance
         let factor = portfolio_value * dt.sqrt();
         for &ret in historical_returns {
             sim_returns.push(ret * factor);
         }
-        
+
         if sim_returns.is_empty() {
             return self.calculate_var_parametric(portfolio_value, volatility, days);
         }
 
         sim_returns.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        
+
         let len = sim_returns.len() as f64;
         let idx_95 = (len * 0.05).floor() as usize;
         let var_95 = -sim_returns[idx_95];
-        
+
         let idx_99 = (len * 0.01).floor() as usize;
         let var_99 = -sim_returns[idx_99];
-        
+
         let mut cvar_sum = 0.0;
         for val in sim_returns.iter().take(idx_95 + 1) {
             cvar_sum += val;
@@ -939,7 +974,7 @@ impl RiskGate {
     /// Run stress test against known historical scenarios
     pub fn stress_test(&self, portfolio_value: f64, equity_beta: f64) -> Vec<(String, f64, f64)> {
         let mut results = Vec::new();
-        
+
         let scenarios = [
             ("Flash Crash 2010", -0.09),          // ~9% drop
             ("COVID-19 March 2020", -0.30),       // ~30% drop
@@ -971,7 +1006,7 @@ impl RiskGate {
         margin_requirement: f64,
     ) {
         use rayon::prelude::*;
-        
+
         if historical_returns.is_empty() || margin_requirement <= 0.0 {
             return;
         }
@@ -982,7 +1017,7 @@ impl RiskGate {
             .map(|&ret| portfolio_value * ret)
             .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
             .unwrap_or(0.0);
-            
+
         // Calculate stress margin utilization
         // If worst_case_loss is negative, it's a loss. We divide by margin requirement.
         let utilization = if worst_case_loss < 0.0 {
@@ -990,7 +1025,7 @@ impl RiskGate {
         } else {
             0.0
         };
-        
+
         self.stress_margin_utilization[account_slot] = utilization;
     }
 

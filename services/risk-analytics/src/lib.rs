@@ -1,6 +1,7 @@
 pub mod circuit_breaker;
 pub mod config;
 pub mod correlation;
+pub mod cvd;
 pub mod esg_mandate;
 pub mod gate;
 pub mod gpio_kill_switch;
@@ -10,8 +11,10 @@ pub mod order_state;
 pub mod pre_trade;
 pub mod raft_consensus;
 pub mod risk_gate_fast;
+pub mod sharded_gate;
 pub mod shm_bridge;
 pub mod supervisory;
+pub mod vwap;
 
 #[path = "TaxEngine.rs"]
 pub mod tax_engine;

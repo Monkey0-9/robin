@@ -168,9 +168,13 @@ mod tests {
 
     fn temp_log_path(tag: &str) -> String {
         let dir = std::env::temp_dir();
-        dir.join(format!("robin_audit_test_{}_{}.log", tag, std::process::id()))
-            .to_string_lossy()
-            .into_owned()
+        dir.join(format!(
+            "robin_audit_test_{}_{}.log",
+            tag,
+            std::process::id()
+        ))
+        .to_string_lossy()
+        .into_owned()
     }
 
     #[test]
@@ -190,8 +194,8 @@ mod tests {
 
         // Appending to the resumed chain must verify cleanly.
         let mut restarted = AuditLogger::new(&path);
-        restarted.
-            log_transaction(&sample_record(3, "CANCEL"))
+        restarted
+            .log_transaction(&sample_record(3, "CANCEL"))
             .unwrap();
 
         assert!(AuditLogger::verify_chain(&path).unwrap());

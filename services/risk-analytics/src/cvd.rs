@@ -6,9 +6,11 @@ pub struct CVDTracker {
 
 impl CVDTracker {
     pub fn new() -> Self {
-        Self { cvd: AtomicI64::new(0) }
+        Self {
+            cvd: AtomicI64::new(0),
+        }
     }
-    
+
     pub fn on_trade(&self, price: u64, volume: u64, best_bid: u64, best_ask: u64) {
         // Aggressive buyer: price >= ask
         // Aggressive seller: price <= bid
@@ -20,11 +22,15 @@ impl CVDTracker {
         } else {
             // At mid — classify by which side of mid
             let mid = (best_bid + best_ask) / 2;
-            if price > mid { volume as i64 } else { -(volume as i64) }
+            if price > mid {
+                volume as i64
+            } else {
+                -(volume as i64)
+            }
         };
         self.cvd.fetch_add(delta, Ordering::Relaxed);
     }
-    
+
     pub fn cvd(&self) -> i64 {
         self.cvd.load(Ordering::Relaxed)
     }

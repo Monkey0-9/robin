@@ -1,0 +1,365 @@
+# ============================================================================
+# Robin Trading Platform — Production Docker Compose
+# ============================================================================
+# Services:
+#   matching-engine   C++20 order book (port 9091)
+#   risk-gate         Rust pre-trade risk (port 9092)
+#   compliance        Rust compliance daemon (port 9095)
+#   gateway           Go OMS/gateway (port 8080)
+#   ai-agent          Python AI signal engine (port 8000)
+#   frontend          Next.js dashboard (port 3000)
+#   postgres          TimescaleDB for tick data
+#   redis             Session cache + pub/sub
+#   vault             HashiCorp Vault (dev → HA in prod)
+#   prometheus        Metrics collection
+#   grafana           Metrics visualization
+#   jaeger            Distributed tracing
+#
+# Usage:
+#   docker compose -f infra/docker-compose.prod.yml up
+# ============================================================================
+
+name: robin-trading
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "100m"
+    max-file: "5"
+
+x-restart: &restart-policy
+  restart: unless-stopped
+
+networks:
+  robin-internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+
+volumes:
+  postgres-data:
+  vault-data:
+  prometheus-data:
+  grafana-data:
+  audit-logs:
+  cat-reports:
+
+services:
+
+  # ── Infrastructure ────────────────────────────────────────────────────────
+
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    <<: *restart-policy
+    environment:
+      POSTGRES_DB:       robin
+      POSTGRES_USER:     robin
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    secrets:
+      - pg_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    ports:
+      - "127.0.0.1:5432:5432"
+    networks:
+      - robin-internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U robin"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    <<: *restart-policy
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-changeme}
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks:
+      - robin-internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  vault:
+    image: hashicorp/vault:1.17
+    <<: *restart-policy
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_TOKEN:-dev-root-token}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      VAULT_ADDR: http://0.0.0.0:8200
+    command: server -dev
+    ports:
+      - "127.0.0.1:8200:8200"
+    volumes:
+      - vault-data:/vault/data
+      - ./infra/vault/init.sh:/docker-entrypoint.d/init.sh:ro
+    networks:
+      - robin-internal
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  # ── Trading Services ──────────────────────────────────────────────────────
+
+  matching-engine:
+    build:
+      context: .
+      dockerfile: services/execution-core/Dockerfile
+    <<: *restart-policy
+    cap_add:
+      - IPC_LOCK
+      - SYS_NICE
+    ulimits:
+      rtprio:
+        soft: 99
+        hard: 99
+      memlock:
+        soft: -1
+        hard: -1
+    environment:
+      MATCHING_ENGINE_PORT: 9091
+      LOG_LEVEL: info
+    ports:
+      - "127.0.0.1:9091:9091"
+    networks:
+      - robin-internal
+    volumes:
+      - /dev/shm:/dev/shm
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/9091'"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+    logging: *default-logging
+
+  risk-gate:
+    build:
+      context: .
+      dockerfile: services/risk-analytics/Dockerfile
+    <<: *restart-policy
+    cap_add:
+      - IPC_LOCK
+      - SYS_NICE
+    ulimits:
+      rtprio:
+        soft: 99
+        hard: 99
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_TOKEN: ${VAULT_DEV_TOKEN:-dev-root-token}
+      RISK_GATE_PORT: 9092
+      LOG_LEVEL: info
+    ports:
+      - "127.0.0.1:9092:9092"
+    networks:
+      - robin-internal
+    volumes:
+      - /dev/shm:/dev/shm
+    depends_on:
+      matching-engine:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9092/metrics | grep -q 'robin_orders_processed'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  compliance:
+    build:
+      context: .
+      dockerfile: services/compliance/Dockerfile
+    <<: *restart-policy
+    environment:
+      VAULT_ADDR:       http://vault:8200
+      VAULT_TOKEN:      ${VAULT_DEV_TOKEN:-dev-root-token}
+      COMPLIANCE_PORT:  9095
+      AUDIT_LOG_PATH:   /data/audit.log
+      CAT_REPORT_DIR:   /data/cat_reports
+      FIRM_MPID:        ${CAT_FIRM_MPID:-ROBN}
+      LOG_LEVEL:        info
+    ports:
+      - "127.0.0.1:9095:9095"
+    networks:
+      - robin-internal
+    volumes:
+      - /dev/shm:/dev/shm
+      - audit-logs:/data
+      - cat-reports:/data/cat_reports
+    depends_on:
+      vault:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9095/health | grep -q 'ok'"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    logging: *default-logging
+
+  gateway:
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    <<: *restart-policy
+    environment:
+      VAULT_ADDR:         http://vault:8200
+      VAULT_ROLE_ID:      ${VAULT_ROLE_ID:-}
+      VAULT_SECRET_ID:    ${VAULT_SECRET_ID:-}
+      VAULT_TOKEN:        ${VAULT_DEV_TOKEN:-dev-root-token}
+      ORCH_PORT:          8080
+      REDIS_ADDR:         redis:6379
+      REDIS_PASSWORD:     ${REDIS_PASSWORD:-changeme}
+      DB_DSN:             postgres://robin:$(cat /run/secrets/pg_password)@postgres:5432/robin?sslmode=disable
+      RISK_GATE_ADDR:     http://risk-gate:9092
+      MATCHING_ENGINE_ADDR: matching-engine:9091
+      COMPLIANCE_ADDR:    http://compliance:9095
+      ORCH_TLS_CERT:      ${ORCH_TLS_CERT:-}
+      ORCH_TLS_KEY:       ${ORCH_TLS_KEY:-}
+      LOG_LEVEL:          info
+      JAEGER_ENDPOINT:    http://jaeger:14268/api/traces
+    secrets:
+      - pg_password
+    ports:
+      - "8080:8080"
+    networks:
+      - robin-internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+      risk-gate:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health | grep -q '\"status\":\"ok\"'"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    logging: *default-logging
+
+  ai-agent:
+    build:
+      context: .
+      dockerfile: services/ai-agent/Dockerfile
+    <<: *restart-policy
+    environment:
+      VAULT_ADDR:     http://vault:8200
+      VAULT_TOKEN:    ${VAULT_DEV_TOKEN:-dev-root-token}
+      AI_AGENT_PORT:  8000
+      GATEWAY_ADDR:   http://gateway:8080
+      LOG_LEVEL:      info
+    ports:
+      - "127.0.0.1:8000:8000"
+    networks:
+      - robin-internal
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health | grep -q 'ok'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    logging: *default-logging
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL:  http://localhost:8080
+        NEXT_PUBLIC_WS_URL:   ws://localhost:8080
+    <<: *restart-policy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+    ports:
+      - "3000:3000"
+    networks:
+      - robin-internal
+    depends_on:
+      gateway:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/ | grep -q 'Robin'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    logging: *default-logging
+
+  # ── Observability ─────────────────────────────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    <<: *restart-policy
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=90d
+      - --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:9090:9090"
+    networks:
+      - robin-internal
+    logging: *default-logging
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    <<: *restart-policy
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: grafana-piechart-panel,grafana-worldmap-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infra/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./infra/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    ports:
+      - "127.0.0.1:3003:3000"
+    networks:
+      - robin-internal
+    depends_on:
+      - prometheus
+    logging: *default-logging
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.60
+    <<: *restart-policy
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "127.0.0.1:16686:16686"   # Jaeger UI
+      - "127.0.0.1:14268:14268"   # HTTP collector
+      - "127.0.0.1:4317:4317"     # OTLP gRPC
+    networks:
+      - robin-internal
+    logging: *default-logging
+
+# ── Secrets ────────────────────────────────────────────────────────────────
+secrets:
+  pg_password:
+    environment: ROBIN_DB_PASSWORD

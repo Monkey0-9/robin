@@ -1,17 +1,42 @@
 [Unit]
-Description=Robin Platform - API Gateway
-After=network.target
+Description=Robin Gateway & OMS (Go HTTP/WebSocket Gateway)
+Documentation=https://github.com/Monkey0-9/robin
+After=network.target robin-risk-gate.service
+Wants=network.target
 
 [Service]
 Type=simple
 User=robin
 Group=robin
-ExecStart=/opt/robin/bin/gateway
+WorkingDirectory=/opt/robin/services/gateway
+
+ExecStart=/opt/robin/services/gateway/robin-gateway
+ExecReload=/bin/kill -HUP $MAINPID
+
+EnvironmentFile=/opt/robin/.env
+Environment=GOMAXPROCS=8
+Environment=GOMEMLIMIT=4GiB
+
+LimitNOFILE=1048576
+
 Restart=on-failure
-RestartSec=5
-Environment=ROBIN_GATEWAY_API_TOKEN=prod-secret
-Environment=ROBIN_JWT_PUBKEY_FILE=/opt/robin/certs/jwt.pub
-LimitNOFILE=65536
+RestartSec=3s
+StartLimitBurst=5
+StartLimitInterval=60s
+
+TimeoutStopSec=30s
+KillMode=mixed
+KillSignal=SIGTERM
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/robin/services/gateway /var/log/robin
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=robin-gateway
 
 [Install]
 WantedBy=multi-user.target

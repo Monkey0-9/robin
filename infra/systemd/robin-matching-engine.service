@@ -1,0 +1,47 @@
+[Unit]
+Description=Robin Matching Engine (C++20 Lock-Free Order Book)
+Documentation=https://github.com/Monkey0-9/robin
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=robin
+Group=robin
+WorkingDirectory=/opt/robin
+
+# Executable
+ExecStart=/opt/robin/services/execution-core/build/matching_engine 9091
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Real-time priority for hot path
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=80
+IOSchedulingClass=realtime
+IOSchedulingPriority=0
+
+# Memory: lock pages into RAM
+LimitMEMLOCK=infinity
+LimitNOFILE=1048576
+LimitRTPRIO=99
+
+# Restart on failure
+Restart=on-failure
+RestartSec=2s
+StartLimitBurst=5
+StartLimitInterval=30s
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/dev/shm /opt/robin/logs
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=robin-matching-engine
+
+[Install]
+WantedBy=multi-user.target

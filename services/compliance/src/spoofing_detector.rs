@@ -38,7 +38,7 @@ impl SpoofingDetector {
         let bucket_size = 50_000 * 100_000_000; // 50,000 shares per bucket
         let mut total_imbalance = 0_f64;
         let mut total_volume_in_buckets = 0_f64;
-        
+
         let mut current_bucket_buy = 0;
         let mut current_bucket_sell = 0;
         let mut current_bucket_vol = 0;
@@ -57,10 +57,11 @@ impl SpoofingDetector {
             current_bucket_vol += vol;
 
             if current_bucket_vol >= bucket_size {
-                let imbalance = (current_bucket_buy as i64 - current_bucket_sell as i64).unsigned_abs();
+                let imbalance =
+                    (current_bucket_buy as i64 - current_bucket_sell as i64).unsigned_abs();
                 total_imbalance += imbalance as f64;
                 total_volume_in_buckets += current_bucket_vol as f64;
-                
+
                 current_bucket_buy = 0;
                 current_bucket_sell = 0;
                 current_bucket_vol = 0;
@@ -70,7 +71,7 @@ impl SpoofingDetector {
         if total_volume_in_buckets > 0.0 {
             let vpin = total_imbalance / total_volume_in_buckets;
 
-            // Flag if VPIN-like imbalance is extremely high (e.g. > 0.8) meaning 
+            // Flag if VPIN-like imbalance is extremely high (e.g. > 0.8) meaning
             // 90% of activity was cancels compared to real orders (spoofing indicator)
             if vpin > 0.8 {
                 self.alert_count += 1;

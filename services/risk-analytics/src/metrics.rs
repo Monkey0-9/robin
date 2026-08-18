@@ -303,7 +303,15 @@ mod tests {
 
     #[test]
     fn test_record_analytics_round_trip() {
-        record_analytics(1_000_000.5, 25_000.25, 40_000.75, 30_000.0, -200_000.0, 1.25, 7);
+        record_analytics(
+            1_000_000.5,
+            25_000.25,
+            40_000.75,
+            30_000.0,
+            -200_000.0,
+            1.25,
+            7,
+        );
         let text = render_text();
         assert!(text.contains("robin_risk_portfolio_value 1000000.5"));
         assert!(text.contains("robin_risk_var_95 25000.25"));

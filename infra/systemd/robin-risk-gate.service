@@ -1,0 +1,50 @@
+[Unit]
+Description=Robin Risk Analytics Engine (Rust Pre-Trade Risk Gate)
+Documentation=https://github.com/Monkey0-9/robin
+After=network.target robin-matching-engine.service
+Wants=network.target
+Requires=robin-matching-engine.service
+
+[Service]
+Type=simple
+User=robin
+Group=robin
+WorkingDirectory=/opt/robin
+
+# Executable
+ExecStart=/opt/robin/target/release/robin-risk-daemon
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Environment
+EnvironmentFile=/opt/robin/.env
+Environment=RUST_LOG=info
+Environment=RUST_BACKTRACE=1
+
+# Real-time priority
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=70
+IOSchedulingClass=realtime
+IOSchedulingPriority=1
+
+LimitMEMLOCK=infinity
+LimitNOFILE=1048576
+LimitRTPRIO=99
+
+Restart=on-failure
+RestartSec=2s
+StartLimitBurst=5
+StartLimitInterval=30s
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/dev/shm /opt/robin/logs
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=robin-risk-gate
+
+[Install]
+WantedBy=multi-user.target

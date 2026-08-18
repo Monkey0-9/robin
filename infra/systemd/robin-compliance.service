@@ -1,0 +1,42 @@
+[Unit]
+Description=Robin Compliance Daemon (Spoofing Detector + WORM Audit Logger)
+Documentation=https://github.com/Monkey0-9/robin
+After=network.target robin-risk-gate.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=robin
+Group=robin
+WorkingDirectory=/opt/robin
+
+ExecStart=/opt/robin/target/release/compliance-daemon \
+    --port 9095 \
+    --audit-log /var/log/robin/audit.log \
+    --cat-report-dir /var/log/robin/cat_reports \
+    --firm-mpid ROBN
+
+EnvironmentFile=/opt/robin/.env
+Environment=RUST_LOG=info
+Environment=RUST_BACKTRACE=1
+
+LimitNOFILE=1048576
+LimitMEMLOCK=infinity
+
+Restart=on-failure
+RestartSec=5s
+StartLimitBurst=3
+StartLimitInterval=60s
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/dev/shm /var/log/robin /opt/robin/logs
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=robin-compliance
+
+[Install]
+WantedBy=multi-user.target
