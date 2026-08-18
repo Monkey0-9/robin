@@ -187,6 +187,23 @@ static irqreturn_t gpio_irq_handler_thread(int irq, void *dev_id)
     return IRQ_NONE;
 }
 
+static unsigned long last_heartbeat = 0;
+static int watchdog_timeout_ms = 1000;
+module_param(watchdog_timeout_ms, int, 0644);
+MODULE_PARM_DESC(watchdog_timeout_ms, "Watchdog timeout in ms (0 to disable)");
+
+static int param_set_heartbeat(const char *val, const struct kernel_param *kp)
+{
+    last_heartbeat = jiffies;
+    return 0;
+}
+static const struct kernel_param_ops heartbeat_ops = {
+    .set = param_set_heartbeat,
+};
+static int heartbeat_trigger = 0;
+module_param_cb(heartbeat, &heartbeat_ops, &heartbeat_trigger, 0200);
+MODULE_PARM_DESC(heartbeat, "Write any value to reset the watchdog timer");
+
 static int monitor_kill_switch(void *data)
 {
     int last_val = 0;
@@ -201,6 +218,17 @@ static int monitor_kill_switch(void *data)
                 last_val = cur_val;
             }
         }
+        
+        /* Watchdog check */
+        if (watchdog_timeout_ms > 0 && last_heartbeat != 0) {
+            if (time_after(jiffies, last_heartbeat + msecs_to_jiffies(watchdog_timeout_ms))) {
+                if (atomic_read(&kill_switch_active) == 0) {
+                    pr_alert("[KILL_SWITCH] Watchdog timeout! No heartbeat for %d ms. Activating kill switch.\n", watchdog_timeout_ms);
+                    kill_switch_activate();
+                }
+            }
+        }
+        
         schedule_timeout_interruptible(HZ / 100); /* Poll at 100 Hz */
     }
     return 0;

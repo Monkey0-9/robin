@@ -407,10 +407,8 @@ private:
             if (active_bids_[i] == price) return;
             if (active_bids_[i] < price) {
                 if (active_bids_.full()) return;
+                std::memmove(&active_bids_[i + 1], &active_bids_[i], (active_bids_.size() - i) * sizeof(int64_t));
                 active_bids_.sz++;
-                for (size_t k = active_bids_.sz - 1; k > i; --k) {
-                    active_bids_[k] = active_bids_[k - 1];
-                }
                 active_bids_[i] = price;
                 return;
             }
@@ -422,10 +420,8 @@ private:
             if (active_asks_[i] == price) return;
             if (active_asks_[i] > price) {
                 if (active_asks_.full()) return;
+                std::memmove(&active_asks_[i + 1], &active_asks_[i], (active_asks_.size() - i) * sizeof(int64_t));
                 active_asks_.sz++;
-                for (size_t k = active_asks_.sz - 1; k > i; --k) {
-                    active_asks_[k] = active_asks_[k - 1];
-                }
                 active_asks_[i] = price;
                 return;
             }

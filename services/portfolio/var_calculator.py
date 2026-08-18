@@ -37,8 +37,8 @@ def calculate_var(portfolio: Portfolio):
         val = p.size * p.current_price
         weights.append(val / total_value)
 
-    # In a production system, we'd fetch actual historical returns.
-    # For prototype, simulate 10,000 scenarios using a simple random walk with drift
+    # In a production system, we'd fetch actual historical returns and compute the covariance matrix.
+    # For prototype, simulate 10,000 scenarios using a Cholesky decomposition of a synthetic correlation matrix.
     num_assets = len(portfolio.positions)
     num_simulations = 10000
     
@@ -46,8 +46,26 @@ def calculate_var(portfolio: Portfolio):
     mu = 0.0
     sigma = 0.40 / np.sqrt(365) # daily volatility
     
-    # Generate random returns
-    simulated_returns = np.random.normal(mu, sigma, (num_simulations, num_assets))
+    # Create a synthetic correlation matrix (0.5 correlation between all assets)
+    correlation_matrix = np.full((num_assets, num_assets), 0.5)
+    np.fill_diagonal(correlation_matrix, 1.0)
+    
+    # Compute the Cholesky decomposition of the correlation matrix
+    # L * L^T = correlation_matrix
+    try:
+        L = np.linalg.cholesky(correlation_matrix)
+    except np.linalg.LinAlgError:
+        # Fallback to identity if not positive definite (e.g. numerical issues)
+        L = np.eye(num_assets)
+        
+    # Generate independent standard normal variables
+    independent_normals = np.random.normal(0, 1, (num_simulations, num_assets))
+    
+    # Apply Cholesky matrix to get correlated standard normal variables
+    correlated_normals = independent_normals @ L.T
+    
+    # Scale by volatility and add drift
+    simulated_returns = mu + correlated_normals * sigma
     
     # Calculate portfolio returns for each simulation
     weights_array = np.array(weights)
