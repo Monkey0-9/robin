@@ -206,9 +206,10 @@ impl RiskGate {
     pub fn new(shm_path: &str) -> Self {
         let mut account_pnl = Vec::with_capacity(4096);
         for _ in 0..4096 {
-            let mut pnl = RealTimePnL::default();
-            pnl.returns = vec![0.0; SHARPE_WINDOW];
-            account_pnl.push(pnl);
+            account_pnl.push(RealTimePnL {
+                returns: vec![0.0; SHARPE_WINDOW],
+                ..Default::default()
+            });
         }
 
         Self {
@@ -684,6 +685,10 @@ impl RiskGate {
 
     /// Calculate Greeks for 4 options using AVX2 SIMD (std::arch::x86_64)
     /// Target latency: < 50ns per batch
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that the CPU supports AVX2 instructions before calling this function.
     #[cfg(target_arch = "x86_64")]
     #[target_feature(enable = "avx2")]
     pub unsafe fn calculate_greeks_simd_4x(

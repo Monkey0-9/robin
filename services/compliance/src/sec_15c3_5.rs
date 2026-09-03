@@ -76,34 +76,30 @@ impl Sec15c35Auditor {
         ));
 
         let mut report = String::new();
-        let _ = write!(report, "{{\n");
-        let _ = write!(report, "  \"rule\": \"SEC Rule 15c3-5 (Market Access)\",\n");
-        let _ = write!(report, "  \"firm_crd\": {},\n", cert.firm_crd);
-        let _ = write!(report, "  \"firm_name\": \"{}\",\n", cert.firm_name);
-        let _ = write!(report, "  \"year\": {},\n", cert.certification_year);
-        let _ = write!(report, "  \"ceo\": \"{}\",\n", cert.ceo_name);
-        let _ = write!(
+        let _ = writeln!(report, "{{");
+        let _ = writeln!(report, "  \"rule\": \"SEC Rule 15c3-5 (Market Access)\",");
+        let _ = writeln!(report, "  \"firm_crd\": {},", cert.firm_crd);
+        let _ = writeln!(report, "  \"firm_name\": \"{}\",", cert.firm_name);
+        let _ = writeln!(report, "  \"year\": {},", cert.certification_year);
+        let _ = writeln!(report, "  \"ceo\": \"{}\",", cert.ceo_name);
+        let _ = writeln!(report, "  \"cco\": \"{}\",", cert.chief_compliance_officer);
+        let _ = writeln!(
             report,
-            "  \"cco\": \"{}\",\n",
-            cert.chief_compliance_officer
-        );
-        let _ = write!(
-            report,
-            "  \"certified_at_ns\": {},\n",
+            "  \"certified_at_ns\": {},",
             cert.certification_timestamp_ns
         );
-        let _ = write!(
+        let _ = writeln!(
             report,
-            "  \"total_pre_trade_checks_audited\": {},\n",
+            "  \"total_pre_trade_checks_audited\": {},",
             self.evidence_records.len()
         );
-        let _ = write!(report, "  \"status\": \"CERTIFIED_COMPLIANT\",\n");
-        let _ = write!(
+        let _ = writeln!(report, "  \"status\": \"CERTIFIED_COMPLIANT\",");
+        let _ = writeln!(
             report,
-            "  \"digital_signature\": \"{}\"\n",
+            "  \"digital_signature\": \"{}\"",
             cert.signature_sha256
         );
-        let _ = write!(report, "}}\n");
+        let _ = writeln!(report, "}}");
 
         let mut file = fs::File::create(&path)?;
         file.write_all(report.as_bytes())?;

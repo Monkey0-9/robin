@@ -99,7 +99,7 @@ pub fn simulate_gbm_paths(
 
     let mut outcomes = Vec::with_capacity(num_simulations);
 
-    let pairs = (num_simulations + 1) / 2;
+    let pairs = num_simulations.div_ceil(2);
     for _ in 0..pairs {
         let (z1, z2) = rng.next_normal_pair();
 

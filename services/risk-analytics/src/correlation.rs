@@ -101,6 +101,12 @@ pub struct EwmaCorrelationMonitor {
     pairs: HashMap<(u32, u32), PairState>,
 }
 
+impl Default for EwmaCorrelationMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EwmaCorrelationMonitor {
     pub fn new() -> Self {
         Self::with_params(EwmaParams::default())
@@ -160,40 +166,33 @@ impl EwmaCorrelationMonitor {
             }
 
             let key = pair_key(instrument_id, other);
-            if !self.pairs.contains_key(&key) {
-                self.pairs.insert(
-                    key,
-                    PairState {
-                        a: key.0,
-                        b: key.1,
-                        h5m: EwmaHorizon::default(),
-                        h1h: EwmaHorizon::default(),
-                        h1d: EwmaHorizon::default(),
-                        updated_at_ns: now_ns,
-                    },
-                );
-            }
+            let p = self.pairs.entry(key).or_insert_with(|| PairState {
+                a: key.0,
+                b: key.1,
+                h5m: EwmaHorizon::default(),
+                h1h: EwmaHorizon::default(),
+                h1d: EwmaHorizon::default(),
+                updated_at_ns: now_ns,
+            });
 
-            if let Some(p) = self.pairs.get_mut(&key) {
-                update_horizon(&mut p.h5m, ret_inst, ret_other, lam5);
-                update_horizon(&mut p.h1h, ret_inst, ret_other, lam1);
-                update_horizon(&mut p.h1d, ret_inst, ret_other, lamd);
-                p.updated_at_ns = now_ns;
-            }
+            update_horizon(&mut p.h5m, ret_inst, ret_other, lam5);
+            update_horizon(&mut p.h1h, ret_inst, ret_other, lam1);
+            update_horizon(&mut p.h1d, ret_inst, ret_other, lamd);
+            p.updated_at_ns = now_ns;
+        }
 
-            // Bound the table: evict the least-recently-written pair.
-            while self.pairs.len() > MAX_TRACKED_PAIRS {
-                let victim = self
-                    .pairs
-                    .iter()
-                    .min_by(|x, y| x.1.updated_at_ns.cmp(&y.1.updated_at_ns))
-                    .map(|(k, _)| *k);
-                match victim {
-                    Some(v) => {
-                        self.pairs.remove(&v);
-                    }
-                    None => break,
+        // Bound the table: evict the least-recently-written pair.
+        while self.pairs.len() > MAX_TRACKED_PAIRS {
+            let victim = self
+                .pairs
+                .iter()
+                .min_by(|x, y| x.1.updated_at_ns.cmp(&y.1.updated_at_ns))
+                .map(|(k, _)| *k);
+            match victim {
+                Some(v) => {
+                    self.pairs.remove(&v);
                 }
+                None => break,
             }
         }
     }

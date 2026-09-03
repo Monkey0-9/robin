@@ -144,6 +144,7 @@ func TestRiskMarketFeed_seedsPreviousClose(t *testing.T) {
 
 	// Replicate the feed's push cycle against the fake daemon.
 	rw := NewRiskFeedWriter(f.ln.Addr().String())
+	sentCount := 0
 	cycle := func(seeded map[uint32]bool) {
 		for symbol, price := range globalMarketData.GetAllPrices() {
 			inst, ok := RiskInstrumentID(symbol)
@@ -154,8 +155,11 @@ func TestRiskMarketFeed_seedsPreviousClose(t *testing.T) {
 			seed := `{"cmd":"previous_close","instrument_id":` + strconv.FormatUint(uint64(inst), 10) + `,"price":` + strconv.FormatUint(ticks, 10) + `}`
 			if err := rw.Send(seed); err == nil {
 				seeded[inst] = true
+				sentCount++
 			}
-			if err := rw.Send(`{"cmd":"quote","instrument_id":` + strconv.FormatUint(uint64(inst), 10) + `,"price":` + strconv.FormatUint(ticks, 10) + `}`); err != nil {
+			if err := rw.Send(`{"cmd":"quote","instrument_id":` + strconv.FormatUint(uint64(inst), 10) + `,"price":` + strconv.FormatUint(ticks, 10) + `}`); err == nil {
+				sentCount++
+			} else {
 				return
 			}
 		}
@@ -164,7 +168,7 @@ func TestRiskMarketFeed_seedsPreviousClose(t *testing.T) {
 	seeded := make(map[uint32]bool)
 	cycle(seeded)
 
-	lines := waitLines(t, f, 2)
+	lines := waitLines(t, f, sentCount)
 	var hasSeed, hasQuote bool
 	for _, line := range lines {
 		if strings.Contains(line, `"cmd":"previous_close"`) && strings.Contains(line, `"instrument_id":1`) {

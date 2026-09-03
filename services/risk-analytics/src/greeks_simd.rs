@@ -255,9 +255,9 @@ pub fn american_option_binomial(
     let mut values = vec![0.0; n + 1];
 
     // Terminal payoffs at maturity
-    for i in 0..=n {
+    for (i, val) in values.iter_mut().enumerate() {
         let s_t = spot * u.powi(2 * (i as i32) - (n as i32));
-        values[i] = match opt_type {
+        *val = match opt_type {
             OptionType::Call => (s_t - strike).max(0.0),
             OptionType::Put => (strike - s_t).max(0.0),
         };

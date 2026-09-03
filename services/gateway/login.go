@@ -158,7 +158,7 @@ func handleLogin(db *sql.DB, logger *slog.Logger) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(LoginResponse{
-			Token:     "SECURE_HTTP_ONLY_COOKIE",
+			Token:     token,
 			ExpiresAt: time.Now().Add(expiry).Unix(),
 			Role:      role,
 			Sub:       req.Username,

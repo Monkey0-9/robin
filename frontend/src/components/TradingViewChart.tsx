@@ -13,6 +13,7 @@ import {
 } from 'lightweight-charts';
 import { LineChart, Activity } from 'lucide-react';
 import { useTerminalStore } from '../store/useTerminalStore';
+import { useAuthStore } from '../store/useAuthStore';
 
 type ChartType = 'candle' | 'line' | 'area';
 type TimeframeKey = '1m' | '5m' | '15m' | '1H' | '4H' | '1D';
@@ -30,9 +31,14 @@ const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || 'http://localhost:808
 
 async function fetchCandles(symbol: string, resolution: string, count = 200): Promise<OHLCVBar[]> {
   try {
+    const token = useAuthStore.getState().getToken();
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
     const res = await fetch(
       `${GATEWAY_URL}/api/candles?symbol=${encodeURIComponent(symbol)}&resolution=${resolution}&count=${count}`,
-      { signal: AbortSignal.timeout(3000) }
+      { headers, signal: AbortSignal.timeout(3000) }
     );
     if (!res.ok) return [];
     const data = await res.json();

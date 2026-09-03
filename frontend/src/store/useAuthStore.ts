@@ -54,11 +54,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
 
       const data = await res.json();
+      const expMs = typeof data.expires_at === 'number'
+        ? (data.expires_at > 1e11 ? data.expires_at : data.expires_at * 1000)
+        : Date.now() + 8 * 3600 * 1000;
+
       set({
         token: data.token,
         role: data.role,
         username: data.sub,
-        expiresAt: data.expires_at,
+        expiresAt: expMs,
         isLoading: false,
         error: null,
       });

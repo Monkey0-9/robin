@@ -56,8 +56,8 @@ type VaultClient struct {
 }
 
 type cacheEntry struct {
-	value   string
-	expiry  time.Time
+	value  string
+	expiry time.Time
 }
 
 type vaultAuthResponse struct {
@@ -84,8 +84,8 @@ type vaultTransitRequest struct {
 
 type vaultTransitResponse struct {
 	Data struct {
-		Hmac    string `json:"hmac"`
-		Valid   bool   `json:"valid"`
+		Hmac       string `json:"hmac"`
+		Valid      bool   `json:"valid"`
 		Ciphertext string `json:"ciphertext"`
 		Plaintext  string `json:"plaintext"`
 	} `json:"data"`

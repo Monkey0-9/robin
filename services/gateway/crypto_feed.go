@@ -14,12 +14,14 @@ import (
 
 // MarketDataCache holds the latest L1/L2 data for symbol tracking
 type MarketDataCache struct {
-	mu     sync.RWMutex
-	prices map[string]float64
+	mu      sync.RWMutex
+	prices  map[string]float64
+	open24h map[string]float64 // Coinbase open_24h: price 24 hours ago
 }
 
 var globalMarketData = &MarketDataCache{
-	prices: make(map[string]float64),
+	prices:  make(map[string]float64),
+	open24h: make(map[string]float64),
 }
 
 func (m *MarketDataCache) UpdatePrice(symbol string, price float64) {
@@ -28,10 +30,34 @@ func (m *MarketDataCache) UpdatePrice(symbol string, price float64) {
 	m.prices[symbol] = price
 }
 
+// UpdatePriceWithOpen24h updates the current price and the 24h-ago open price
+// from the Coinbase ticker "open_24h" field, enabling real daily change %.
+func (m *MarketDataCache) UpdatePriceWithOpen24h(symbol string, price, open24h float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.prices[symbol] = price
+	if open24h > 0 {
+		m.open24h[symbol] = open24h
+	}
+}
+
 func (m *MarketDataCache) GetPrice(symbol string) float64 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.prices[symbol]
+}
+
+// GetChange24h returns the live daily change percentage for a symbol.
+// Returns 0 if not enough data is available yet.
+func (m *MarketDataCache) GetChange24h(symbol string) float64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	current := m.prices[symbol]
+	open := m.open24h[symbol]
+	if open <= 0 || current <= 0 {
+		return 0
+	}
+	return ((current - open) / open) * 100
 }
 
 func (m *MarketDataCache) GetAllPrices() map[string]float64 {
@@ -114,9 +140,11 @@ func (c *CoinbaseFeed) connectAndListen() {
 
 			if msgType == "ticker" {
 				priceStr, _ := msg["price"].(string)
+				open24hStr, _ := msg["open_24h"].(string)
 				price, err := strconv.ParseFloat(priceStr, 64)
 				if err == nil {
-					globalMarketData.UpdatePrice(normalizedID, price)
+					open24h, _ := strconv.ParseFloat(open24hStr, 64)
+					globalMarketData.UpdatePriceWithOpen24h(normalizedID, price, open24h)
 
 					// Calculate Indicators
 					inds := globalIndicators.AddPrice(normalizedID, price)

@@ -160,14 +160,18 @@ fn process_loop(shm_path: &str, audit_log_path: &str) {
     // Shared memory buffer for reading OrderMessages
     let mut shm_reader: Option<ShmBridge> = None;
 
-    let require_shm = std::env::var("ROBIN_REQUIRE_SHM").map(|v| v == "1" || v == "true").unwrap_or(false)
+    let require_shm = std::env::var("ROBIN_REQUIRE_SHM")
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(false)
         || std::env::args().any(|arg| arg == "--require-shm");
 
     // Synthetic/demo order generation is opt-in only (ROBIN_ALLOW_DEMO_MODE=1
     // or --allow-demo). By default the daemon runs fail-closed: without a real
     // shared-memory feed it records heartbeats but never fabricates orders or
     // spoofing alerts, so demo data cannot pollute the tamper-evident chain.
-    let allow_demo = std::env::var("ROBIN_ALLOW_DEMO_MODE").map(|v| v == "1" || v == "true").unwrap_or(false)
+    let allow_demo = std::env::var("ROBIN_ALLOW_DEMO_MODE")
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(false)
         || std::env::args().any(|arg| arg == "--allow-demo");
 
     match ShmBridge::new(shm_path, false) {

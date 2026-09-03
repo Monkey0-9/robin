@@ -4,6 +4,12 @@ pub struct CVDTracker {
     cvd: AtomicI64,
 }
 
+impl Default for CVDTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CVDTracker {
     pub fn new() -> Self {
         Self {

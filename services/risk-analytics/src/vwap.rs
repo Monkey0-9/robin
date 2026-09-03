@@ -5,6 +5,12 @@ pub struct VWAPCalculator {
     cumulative_v: AtomicU64,  // Σ(volume)
 }
 
+impl Default for VWAPCalculator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VWAPCalculator {
     pub fn new() -> Self {
         Self {

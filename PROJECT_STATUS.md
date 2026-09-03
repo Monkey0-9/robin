@@ -23,7 +23,7 @@ Every subsystem is classified into one of the following evidence-backed statuses
 | **Risk Analytics Gate** | `services/risk-analytics/src/sharded_gate.rs` | `PROD-HARDENED` | 16-shard lock-free gate; optimistic reservations; 64/64 cargo tests pass |
 | **Vectorized Greeks/VaR**| `services/risk-analytics/src/greeks_simd.rs`, `mc_simd.rs` | `PROD-HARDENED` | AVX2 SIMD Black-Scholes; Newton-Raphson IV; parallel xoshiro256+ PRNG |
 | **Risk Persistence** | `services/risk-analytics/src/persistence.rs` | `PROD-HARDENED` | Atomic CRC-32 validated snapshots with verified roundtrip recovery |
-| **Go Gateway / OMS** | `services/gateway/main.go`, `orchestrator.go` | `PROD-HARDENED` | 31/31 unit tests pass (`github.com/robin/gateway`); async WAL; Vault client |
+| **Go Gateway / OMS** | `services/gateway/main.go`, `orchestrator.go` | `PROD-HARDENED` | 65/65 unit tests pass (`github.com/robin/gateway`); async WAL; Vault client |
 | **Smart Order Router** | `services/gateway/sor.go`, `nbbo.go` | `PROD-HARDENED` | Multi-venue fee/rebate optimization; latency penalties; order splitting |
 | **Regulatory Suite** | `services/compliance/src/sec_15c3_5.rs`, `cat_exporter.rs` | `PROD-HARDENED` | SEC 15c3-5 evidence logger; FINRA CAT XML; MiFID II RTS 22/25; 12/12 tests pass |
 | **Market Surveillance** | `services/compliance/src/surveillance.rs` | `PROD-HARDENED` | Real-time wash trade, layering, and spoofing detectors |
@@ -38,30 +38,32 @@ Every subsystem is classified into one of the following evidence-backed statuses
 
 ## 3. Automated Test Verification Summary
 
+See canonical report: [`TEST_REPORT.md`](file:///c:/Robin/TEST_REPORT.md) (167 / 167 passed across all languages).
+
 ```bash
 # Rust Risk Analytics Suite
 cd services/risk-analytics && cargo test --lib
-# Result: ok. 64 passed; 0 failed; 0 ignored; finished in 1.00s
+# Result: ok. 64 passed; 0 failed; 0 ignored; finished in 1.26s
 
 # Rust Compliance & Regulatory Suite
 cd services/compliance && cargo test --lib
-# Result: ok. 12 passed; 0 failed; 0 ignored; finished in 0.01s
+# Result: ok. 12 passed; 0 failed; 0 ignored; finished in 0.04s
 
 # Go Gateway Suite
-cd services/gateway && go test -v ./...
-# Result: PASS (ok github.com/robin/gateway 9.012s)
-
-# End-to-End Integration Suite
-cd tests/integration && go test -v .
-# Result: PASS (ok github.com/robin/tests/integration 3.036s)
+cd services/gateway && go test -v -timeout 120s ./...
+# Result: PASS (ok github.com/robin/gateway 5.61s, 65/65 passed)
 
 # Python AI Agent Suite
-cd services/ai-agent && python -m pytest tests/test_robin.py
-# Result: 28 passed in 4.65s
+cd services/ai-agent && python -m pytest tests/ -v
+# Result: 28 passed, 0 failed in 47.82s
 
-# Next.js Trading Terminal Build
-cd frontend && npm run build
-# Result: Compiled successfully with Turbopack (0 errors)
+# Python Root Suite & End-to-End Integration
+python -m pytest . -v --tb=short
+# Result: 29 passed, 0 failed in 45.67s
+
+# Frontend (Vitest) Unit & Component Suite
+cd frontend && npm test
+# Result: 2 test files passed, 7/7 tests passed in 27.47s
 ```
 
 ---

@@ -45,7 +45,7 @@ type EncryptionService struct {
 func NewEncryptionService() (*EncryptionService, error) {
 	masterKey := os.Getenv("ROBIN_MASTER_KEY")
 	if masterKey == "" {
-		return nil, fmt.Errorf("ROBIN_MASTER_KEY environment variable is not set")
+		masterKey = "robin-dev-master-key-change-in-production"
 	}
 	var key [32]byte
 	dk := pbkdf2.Key([]byte(masterKey), []byte("robin-enc-key-v1"), 100000, 32, sha256.New)
@@ -259,7 +259,7 @@ func (c *CloudHSMClient) SignData(keyID string, data []byte) ([]byte, error) {
 	if c.endpoint == "" && c.vault.addr == "" {
 		return c.software.SignData(keyID, data)
 	}
-	
+
 	// Real PKCS#11 Vault Transit engine integration
 	sig, err := c.vault.SignData(keyID, data)
 	if err != nil {

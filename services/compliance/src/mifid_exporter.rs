@@ -36,44 +36,40 @@ pub struct MifidTransaction {
 impl MifidTransaction {
     pub fn to_xml(&self) -> String {
         let mut xml = String::new();
-        let _ = write!(xml, "  <TxReport>\n");
-        let _ = write!(
+        let _ = writeln!(xml, "  <TxReport>");
+        let _ = writeln!(xml, "    <TxRefNum>{}</TxRefNum>", self.transaction_ref_num);
+        let _ = writeln!(xml, "    <VenueMIC>{}</VenueMIC>", self.trading_venue_mic);
+        let _ = writeln!(xml, "    <BuyerLEI>{}</BuyerLEI>", self.buyer_lei);
+        let _ = writeln!(xml, "    <SellerLEI>{}</SellerLEI>", self.seller_lei);
+        let _ = writeln!(xml, "    <ISIN>{}</ISIN>", self.isin);
+        let _ = writeln!(xml, "    <Qty>{:.4}</Qty>", self.quantity);
+        let _ = writeln!(xml, "    <Price>{:.6}</Price>", self.price);
+        let _ = writeln!(xml, "    <Ccy>{}</Ccy>", self.currency);
+        let _ = writeln!(
             xml,
-            "    <TxRefNum>{}</TxRefNum>\n",
-            self.transaction_ref_num
-        );
-        let _ = write!(xml, "    <VenueMIC>{}</VenueMIC>\n", self.trading_venue_mic);
-        let _ = write!(xml, "    <BuyerLEI>{}</BuyerLEI>\n", self.buyer_lei);
-        let _ = write!(xml, "    <SellerLEI>{}</SellerLEI>\n", self.seller_lei);
-        let _ = write!(xml, "    <ISIN>{}</ISIN>\n", self.isin);
-        let _ = write!(xml, "    <Qty>{:.4}</Qty>\n", self.quantity);
-        let _ = write!(xml, "    <Price>{:.6}</Price>\n", self.price);
-        let _ = write!(xml, "    <Ccy>{}</Ccy>\n", self.currency);
-        let _ = write!(
-            xml,
-            "    <TimestampNS>{}</TimestampNS>\n",
+            "    <TimestampNS>{}</TimestampNS>",
             self.trade_timestamp_ns
         );
-        let _ = write!(
+        let _ = writeln!(
             xml,
-            "    <DEA>{}</DEA>\n",
+            "    <DEA>{}</DEA>",
             if self.direct_electronic_access {
                 "true"
             } else {
                 "false"
             }
         );
-        let _ = write!(
+        let _ = writeln!(
             xml,
-            "    <AlgoInvestDecision>{}</AlgoInvestDecision>\n",
+            "    <AlgoInvestDecision>{}</AlgoInvestDecision>",
             self.algo_investment_decision
         );
-        let _ = write!(
+        let _ = writeln!(
             xml,
-            "    <AlgoExecution>{}</AlgoExecution>\n",
+            "    <AlgoExecution>{}</AlgoExecution>",
             self.algo_execution
         );
-        let _ = write!(xml, "  </TxReport>\n");
+        let _ = writeln!(xml, "  </TxReport>");
         xml
     }
 }
@@ -132,9 +128,9 @@ impl MifidReport {
         let mut xml = String::with_capacity(1024 + self.transactions.len() * 384);
         xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         xml.push_str("<MifidRTS22Package xmlns=\"urn:esma:mifid:rts22:v1.0\">\n");
-        let _ = write!(
+        let _ = writeln!(
             xml,
-            "  <Header>\n    <FirmLEI>{}</FirmLEI>\n    <TxCount>{}</TxCount>\n  </Header>\n",
+            "  <Header>\n    <FirmLEI>{}</FirmLEI>\n    <TxCount>{}</TxCount>\n  </Header>",
             self.firm_lei,
             self.transactions.len()
         );

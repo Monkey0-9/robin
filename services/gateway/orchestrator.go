@@ -492,7 +492,7 @@ func NewOrchestrator() *Orchestrator {
 			engineHost(),
 			enginePort(),
 		),
-		encryption: enc,
+		encryption:      enc,
 		pendingApproval: make(map[int64]heldApproval),
 	}
 	orch.loadConfig()
@@ -1015,7 +1015,12 @@ func rateLimitMiddleware(ratePerSec float64, next http.Handler) http.Handler {
 	bucket := newTokenBucket(ratePerSec)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !bucket.Allow() {
-			http.Error(w, `{"error":"rate limit exceeded"}`, http.StatusTooManyRequests)
+			if r.Body != nil {
+				io.Copy(io.Discard, r.Body)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error":"rate limit exceeded"}`))
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -1167,7 +1172,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 		raw, _ := json.Marshal(body)
 		if err := o.HotReloadConfig(raw); err != nil {
 			o.logger.Error("config reload failed", "error", err)
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -1269,7 +1274,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 
 	// POST /api/order/cancel — cancel order via REST POST.
 	// Rate-limited by the configured MaxCancelRate (0 = unlimited).
-	r.Handle("/api/order/cancel", o.cancelRateLimit(jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/api/order/cancel", o.cancelRateLimit(jwtAuthMiddleware(rbacMiddleware("trader", "admin")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		var reqBody struct {
 			ClOrdID string `json:"cl_ord_id"`
 		}
@@ -1318,7 +1323,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 	// POST /api/order/modify — modify order price/quantity via REST POST.
 	// Phase 3: a REPLACE is forwarded to the matching engine and only confirmed
 	// once the engine acknowledges, mirroring the cancel path.
-	r.Handle("/api/order/modify", jwtAuthMiddleware(rbacMiddleware("trader")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+	r.Handle("/api/order/modify", jwtAuthMiddleware(rbacMiddleware("trader", "admin")(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		var reqBody struct {
 			ClOrdID string  `json:"cl_ord_id"`
 			Price   float64 `json:"price"`
@@ -1513,7 +1518,7 @@ func (o *Orchestrator) setupHTTPServer(port int) *http.Server {
 				Price:          float64(orderReq.Price) / 100000000.0,
 				RoutedExchange: routedExchange,
 			}
-if regErr := globalOrderSM.Register(managed); regErr == nil {
+			if regErr := globalOrderSM.Register(managed); regErr == nil {
 				globalOrderSM.Transition(orderReq.ClientOrdID, OrderStatePending, "submitted_to_gateway")
 				globalOrderSM.Transition(orderReq.ClientOrdID, OrderStateWorking, "acked_by_gateway")
 			}
@@ -2552,8 +2557,8 @@ if regErr := globalOrderSM.Register(managed); regErr == nil {
 	}))).Methods("GET", "OPTIONS")
 
 	// ── Auth: Login & Refresh ────────────────────────────────────────────────────
-	// POST /api/auth/login — username + password → JWT (no prior auth needed)
-	r.HandleFunc("/api/auth/login", handleLogin(o.db, o.logger)).Methods("POST", "OPTIONS")
+	// POST /api/auth/login — username + password → JWT (rate limited to prevent brute force)
+	r.Handle("/api/auth/login", rateLimitMiddleware(10, handleLogin(o.db, o.logger))).Methods("POST", "OPTIONS")
 	// POST /api/auth/refresh — re-issue token (requires valid JWT)
 	r.Handle("/api/auth/refresh", jwtAuthMiddleware(handleRefreshToken())).Methods("POST", "OPTIONS")
 

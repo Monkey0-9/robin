@@ -13,8 +13,8 @@ func TestAddTick_GapFill(t *testing.T) {
 	}
 
 	base := time.Unix(1000, 0)
-	a.AddTick("BTC/USD", 100.0, 1.0, base)                     // 1m bar at 960
-	a.AddTick("BTC/USD", 101.0, 2.0, base.Add(15*time.Second)) // same bar (1015)
+	a.AddTick("BTC/USD", 100.0, 1.0, base)                      // 1m bar at 960
+	a.AddTick("BTC/USD", 101.0, 2.0, base.Add(15*time.Second))  // same bar (1015)
 	a.AddTick("BTC/USD", 105.0, 1.0, base.Add(150*time.Second)) // jumps to bar 1140
 
 	candles := a.GetCandles("BTC/USD", "1m", 0)

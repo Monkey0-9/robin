@@ -125,67 +125,63 @@ impl CatEvent {
     /// Render this event as an XML `<OrderEvent>` element.
     pub fn to_xml(&self) -> String {
         let mut s = String::new();
-        let _ = write!(s, "  <OrderEvent>\n");
-        let _ = write!(
+        let _ = writeln!(s, "  <OrderEvent>");
+        let _ = writeln!(
             s,
-            "    <EventType>{}</EventType>\n",
+            "    <EventType>{}</EventType>",
             escape_xml(self.event_type.code())
         );
-        let _ = write!(s, "    <OrderID>{}</OrderID>\n", escape_xml(&self.order_id));
-        let _ = write!(
+        let _ = writeln!(s, "    <OrderID>{}</OrderID>", escape_xml(&self.order_id));
+        let _ = writeln!(
             s,
-            "    <ClOrderID>{}</ClOrderID>\n",
+            "    <ClOrderID>{}</ClOrderID>",
             escape_xml(&self.cl_order_id)
         );
-        let _ = write!(
+        let _ = writeln!(
             s,
-            "    <AccountID>{}</AccountID>\n",
+            "    <AccountID>{}</AccountID>",
             escape_xml(&self.account_id)
         );
-        let _ = write!(
+        let _ = writeln!(
             s,
-            "    <FirmMPID>{}</FirmMPID>\n",
+            "    <FirmMPID>{}</FirmMPID>",
             escape_xml(&self.firm_mpid)
         );
-        let _ = write!(s, "    <Symbol>{}</Symbol>\n", escape_xml(&self.symbol));
-        let _ = write!(
+        let _ = writeln!(s, "    <Symbol>{}</Symbol>", escape_xml(&self.symbol));
+        let _ = writeln!(
             s,
-            "    <MarketCenter>{}</MarketCenter>\n",
+            "    <MarketCenter>{}</MarketCenter>",
             escape_xml(&self.market_center)
         );
-        let _ = write!(s, "    <Side>{}</Side>\n", escape_xml(self.side.code()));
-        let _ = write!(s, "    <Quantity>{}</Quantity>\n", self.qty);
+        let _ = writeln!(s, "    <Side>{}</Side>", escape_xml(self.side.code()));
+        let _ = writeln!(s, "    <Quantity>{}</Quantity>", self.qty);
         if let Some(p) = self.price {
-            let _ = write!(s, "    <LimitPrice>{}</LimitPrice>\n", Self::fmt_price(p));
+            let _ = writeln!(s, "    <LimitPrice>{}</LimitPrice>", Self::fmt_price(p));
         }
         if let Some(ep) = self.exec_price {
-            let _ = write!(
+            let _ = writeln!(
                 s,
-                "    <ExecutionPrice>{}</ExecutionPrice>\n",
+                "    <ExecutionPrice>{}</ExecutionPrice>",
                 Self::fmt_price(ep)
             );
         }
         if let Some(eq) = self.exec_qty {
-            let _ = write!(s, "    <ExecutionQty>{}</ExecutionQty>\n", eq);
+            let _ = writeln!(s, "    <ExecutionQty>{}</ExecutionQty>", eq);
         }
-        let _ = write!(
+        let _ = writeln!(
             s,
-            "    <EventTimestamp>{}</EventTimestamp>\n",
+            "    <EventTimestamp>{}</EventTimestamp>",
             self.timestamp_iso()
         );
-        let _ = write!(
+        let _ = writeln!(
             s,
-            "    <AlgoIndicator>{}</AlgoIndicator>\n",
+            "    <AlgoIndicator>{}</AlgoIndicator>",
             if self.algo_indicator { "Y" } else { "N" }
         );
         if let Some(ref reason) = self.reject_reason {
-            let _ = write!(
-                s,
-                "    <RejectReason>{}</RejectReason>\n",
-                escape_xml(reason)
-            );
+            let _ = writeln!(s, "    <RejectReason>{}</RejectReason>", escape_xml(reason));
         }
-        let _ = write!(s, "  </OrderEvent>\n");
+        let _ = writeln!(s, "  </OrderEvent>");
         s
     }
 }
@@ -233,29 +229,22 @@ impl CatReport {
         xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         xml.push_str("<CATReport xmlns=\"urn:cat:report:v2.2\"\n");
         xml.push_str("           xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n");
-        let _ = write!(xml, "  <ReportHeader>\n");
-        let _ = write!(
+        let _ = writeln!(xml, "  <ReportHeader>");
+        let _ = writeln!(
             xml,
-            "    <FirmMPID>{}</FirmMPID>\n",
+            "    <FirmMPID>{}</FirmMPID>",
             escape_xml(&self.firm_mpid)
         );
-        let _ = write!(xml, "    <ReportDate>{}</ReportDate>\n", self.report_date);
-        let _ = write!(
-            xml,
-            "    <ReportTimestamp>{}</ReportTimestamp>\n",
-            now_iso()
-        );
-        let _ = write!(xml, "    <EventCount>{}</EventCount>\n", self.events.len());
-        let _ = write!(
-            xml,
-            "    <SpecificationVersion>2.2</SpecificationVersion>\n"
-        );
-        let _ = write!(xml, "  </ReportHeader>\n");
-        let _ = write!(xml, "  <OrderEvents>\n");
+        let _ = writeln!(xml, "    <ReportDate>{}</ReportDate>", self.report_date);
+        let _ = writeln!(xml, "    <ReportTimestamp>{}</ReportTimestamp>", now_iso());
+        let _ = writeln!(xml, "    <EventCount>{}</EventCount>", self.events.len());
+        let _ = writeln!(xml, "    <SpecificationVersion>2.2</SpecificationVersion>");
+        let _ = writeln!(xml, "  </ReportHeader>");
+        let _ = writeln!(xml, "  <OrderEvents>");
         for event in &self.events {
             xml.push_str(&event.to_xml());
         }
-        let _ = write!(xml, "  </OrderEvents>\n");
+        let _ = writeln!(xml, "  </OrderEvents>");
         xml.push_str("</CATReport>\n");
 
         let mut file = fs::File::create(&path)?;
